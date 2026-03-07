@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Copilot Chat</title>
+  <title>Copilot Agent Orchestrator</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -102,6 +102,16 @@
 
     .btn-primary:hover { background: #388bfd; }
     .btn-primary:disabled { opacity: 0.5; cursor: default; }
+
+    .btn-danger {
+      background: var(--color-danger);
+      border-color: var(--color-danger);
+      color: #fff;
+      padding: 5px 12px;
+      font-weight: 500;
+    }
+
+    .btn-danger:hover { background: #da3633; }
 
     /* Messages area */
     #messages {
@@ -385,7 +395,7 @@
       <svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
         <path d="M8 0c4.42 0 8 3.58 8 8a8.013 8.013 0 0 1-5.45 7.59c-.4.08-.55-.17-.55-.38 0-.27.01-1.13.01-2.2 0-.75-.25-1.23-.54-1.48 1.78-.2 3.65-.88 3.65-3.95 0-.88-.31-1.59-.82-2.15.08-.2.36-1.02-.08-2.12 0 0-.67-.22-2.2.82-.64-.18-1.32-.27-2-.27-.68 0-1.36.09-2 .27-1.53-1.03-2.2-.82-2.2-.82-.44 1.1-.16 1.92-.08 2.12-.51.56-.82 1.28-.82 2.15 0 3.06 1.86 3.75 3.64 3.95-.23.2-.44.55-.51 1.07-.46.21-1.61.55-2.33-.66-.15-.24-.6-.83-1.23-.82-.67.01-.27.38.01.53.34.19.73.9.82 1.13.16.45.68 1.31 2.69.94 0 .67.01 1.3.01 1.49 0 .21-.15.45-.55.38A7.995 7.995 0 0 1 0 8c0-4.42 3.58-8 8-8Z"/>
       </svg>
-      Copilot Chat
+      Copilot Agent Orchestrator
     </div>
     <div class="controls">
       <button class="btn-icon" id="toggle-sidebar-btn" title="Toggle sessions sidebar" aria-label="Toggle sessions sidebar">☰</button>
@@ -416,14 +426,15 @@
           <svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
             <path d="M8 0c4.42 0 8 3.58 8 8a8.013 8.013 0 0 1-5.45 7.59c-.4.08-.55-.17-.55-.38 0-.27.01-1.13.01-2.2 0-.75-.25-1.23-.54-1.48 1.78-.2 3.65-.88 3.65-3.95 0-.88-.31-1.59-.82-2.15.08-.2.36-1.02-.08-2.12 0 0-.67-.22-2.2.82-.64-.18-1.32-.27-2-.27-.68 0-1.36.09-2 .27-1.53-1.03-2.2-.82-2.2-.82-.44 1.1-.16 1.92-.08 2.12-.51.56-.82 1.28-.82 2.15 0 3.06 1.86 3.75 3.64 3.95-.23.2-.44.55-.51 1.07-.46.21-1.61.55-2.33-.66-.15-.24-.6-.83-1.23-.82-.67.01-.27.38.01.53.34.19.73.9.82 1.13.16.45.68 1.31 2.69.94 0 .67.01 1.3.01 1.49 0 .21-.15.45-.55.38A7.995 7.995 0 0 1 0 8c0-4.42 3.58-8 8-8Z"/>
           </svg>
-          <h2>GitHub Copilot Chat</h2>
-          <p>Send a message to start a conversation</p>
+          <h2>Copilot Agent Orchestrator</h2>
+          <p>Research codebases, plan coding tasks, and orchestrate agents</p>
         </div>
       </div>
 
       <div id="input-area">
-        <textarea id="message-input" placeholder="Ask Copilot a question..." rows="1"></textarea>
+        <textarea id="message-input" placeholder="Ask Copilot to research a repo, plan tasks, or explore code..." rows="1"></textarea>
         <button class="btn btn-primary" id="send-btn">Send</button>
+        <button class="btn btn-danger" id="stop-btn" style="display: none;" title="Stop the current response">Stop</button>
       </div>
     </div>
   </div>
@@ -431,6 +442,12 @@
   <div id="status-bar">
     <span class="status-dot" id="status-dot"></span>
     <span id="status-text">Checking connection...</span>
+    <span id="tool-activity" style="display: none; margin-left: auto; color: var(--color-accent);">
+      <span id="tool-activity-text"></span>
+    </span>
+    <span id="usage-display" style="display: none; margin-left: 12px; color: var(--color-text-muted); font-size: 11px;">
+      <span id="usage-text"></span>
+    </span>
   </div>
 
   <script src="app.js"></script>

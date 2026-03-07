@@ -272,7 +272,15 @@ The backend translates SDK events into Server-Sent Events:
 1. Frontend sends `POST /api/chat` with `Accept: text/event-stream`
 2. Backend creates/retrieves session, calls `session.send({ prompt })`
 3. SDK fires `assistant.message_delta` events → backend writes `data: {"type":"delta","content":"..."}` lines
-4. SDK fires `session.idle` → backend writes `data: {"type":"done","sessionId":"..."}` and closes stream
+4. SDK fires `tool.execution_start` events → backend writes `data: {"type":"tool_start","tool":"..."}` lines
+5. SDK fires `tool.execution_complete` events → backend writes `data: {"type":"tool_complete"}` lines
+6. SDK fires `session.title_changed` events → backend writes `data: {"type":"title","title":"..."}` lines
+7. SDK fires `assistant.usage` events → backend writes `data: {"type":"usage","usage":{...}}` lines
+8. SDK fires `session.idle` → backend writes `data: {"type":"done","sessionId":"..."}` and closes stream
+
+### Aborting a Response
+
+Send `POST /api/chat/abort` with `{ "sessionId": "..." }` to cancel a streaming response mid-stream.
 
 ### Frontend Streaming
 

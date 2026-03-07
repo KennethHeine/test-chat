@@ -7,6 +7,7 @@ const messagesEl = document.getElementById("messages");
 const welcomeEl = document.getElementById("welcome");
 const inputEl = document.getElementById("message-input");
 const sendBtn = document.getElementById("send-btn");
+const stopBtn = document.getElementById("stop-btn");
 const newChatBtn = document.getElementById("new-chat-btn");
 const modelSelect = document.getElementById("model-select");
 const statusDot = document.getElementById("status-dot");
@@ -16,6 +17,10 @@ const saveTokenBtn = document.getElementById("save-token-btn");
 const sessionListEl = document.getElementById("session-list");
 const toggleSidebarBtn = document.getElementById("toggle-sidebar-btn");
 const sessionSidebar = document.getElementById("session-sidebar");
+const toolActivityEl = document.getElementById("tool-activity");
+const toolActivityText = document.getElementById("tool-activity-text");
+const usageDisplay = document.getElementById("usage-display");
+const usageText = document.getElementById("usage-text");
 
 // --- Token Management ---
 function getToken() {
@@ -184,6 +189,17 @@ function switchToSession(sid) {
 
   renderSessionList();
   inputEl.focus();
+}
+
+function updateSessionTitle(sid, title) {
+  if (!sid || !title) return;
+  const sessions = loadSavedSessions();
+  const target = sessions.find((s) => s.id === sid);
+  if (target) {
+    target.title = title;
+    saveSessions(sessions);
+    renderSessionList();
+  }
 }
 
 function clearChatUI() {
@@ -355,6 +371,57 @@ if (getToken()) {
 
 toggleSidebarBtn.addEventListener("click", toggleSidebar);
 
+// --- Stop Button ---
+stopBtn.addEventListener("click", async () => {
+  if (!isStreaming || !sessionId) return;
+  try {
+    await fetch("/api/chat/abort", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify({ sessionId }),
+    });
+  } catch (err) {
+    console.warn("Failed to abort:", err);
+  }
+});
+
+// --- Tool Activity Helpers ---
+const TOOL_DISPLAY_NAMES = {
+  "read_file": "📄 Reading file",
+  "edit_file": "✏️ Editing file",
+  "write_file": "✏️ Writing file",
+  "shell": "🐚 Running command",
+  "search": "🔍 Searching",
+  "web_search": "🌐 Searching web",
+  "list_files": "📁 Listing files",
+};
+
+function formatToolName(toolName) {
+  return TOOL_DISPLAY_NAMES[toolName] || `⚙️ ${toolName}`;
+}
+
+function showToolActivity(toolName) {
+  toolActivityText.textContent = formatToolName(toolName) + "...";
+  toolActivityEl.style.display = "inline";
+}
+
+function hideToolActivity() {
+  toolActivityEl.style.display = "none";
+  toolActivityText.textContent = "";
+}
+
+function showUsage(usage) {
+  if (!usage) return;
+  const parts = [];
+  if (usage.inputTokens) parts.push(`In: ${usage.inputTokens}`);
+  if (usage.outputTokens) parts.push(`Out: ${usage.outputTokens}`);
+  if (usage.totalTokens) parts.push(`Total: ${usage.totalTokens}`);
+  if (parts.length > 0) {
+    usageText.textContent = "Tokens — " + parts.join(" · ");
+    usageDisplay.style.display = "inline";
+  }
+}
+
 saveTokenBtn.addEventListener("click", () => {
   const current = getToken();
   if (current) {
@@ -470,6 +537,8 @@ async function sendMessage() {
 
   isStreaming = true;
   sendBtn.disabled = true;
+  sendBtn.style.display = "none";
+  stopBtn.style.display = "inline-block";
 
   try {
     const body = JSON.stringify({
@@ -515,6 +584,15 @@ async function sendMessage() {
             const contentEl = assistantEl.querySelector(".content");
             contentEl.textContent = fullContent;
             messagesEl.scrollTop = messagesEl.scrollHeight;
+          } else if (event.type === "tool_start") {
+            showToolActivity(event.tool);
+          } else if (event.type === "tool_complete") {
+            hideToolActivity();
+          } else if (event.type === "title" && event.title) {
+            // Update session title with AI-generated title
+            updateSessionTitle(sessionId, event.title);
+          } else if (event.type === "usage") {
+            showUsage(event.usage);
           } else if (event.type === "done") {
             sessionId = event.sessionId;
             // Persist session state
@@ -539,6 +617,9 @@ async function sendMessage() {
   } finally {
     isStreaming = false;
     sendBtn.disabled = false;
+    sendBtn.style.display = "inline-block";
+    stopBtn.style.display = "none";
+    hideToolActivity();
     inputEl.focus();
   }
 }
