@@ -203,6 +203,7 @@ export function createGitHubTools(token: string): Tool[] {
       const result = (await githubFetch(token, `/search/code?${params}`)) as any;
       return {
         total_count: result.total_count,
+        // Cap at 20 results to keep tool output concise for the LLM context window
         items: result.items?.slice(0, 20).map((item: any) => ({
           name: item.name,
           path: item.path,

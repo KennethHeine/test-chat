@@ -92,8 +92,9 @@ async function resolveSession(
       });
       sessions.set(sessionKey(token, sid), resumed);
       return resumed;
-    } catch {
+    } catch (err: any) {
       // Resume failed — create new session below
+      console.warn(`[resumeSession] Failed to resume SDK session ${existingMeta.sdkSessionId}: ${err.message || err}`);
     }
   }
 
