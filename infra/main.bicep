@@ -9,6 +9,9 @@ param appName string = 'test-chat'
 @description('Container image to deploy (e.g. ghcr.io/KennethHeine/test-chat:latest)')
 param containerImage string
 
+@description('Region for Static Web App (limited availability — norwayeast not supported)')
+param swaLocation string = 'westeurope'
+
 // ---------- Log Analytics (required by Container Apps Environment) ----------
 
 resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
@@ -90,7 +93,7 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
 
 resource staticWebApp 'Microsoft.Web/staticSites@2023-12-01' = {
   name: '${appName}-web'
-  location: location
+  location: swaLocation
   sku: {
     name: 'Free'
     tier: 'Free'
