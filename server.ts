@@ -15,23 +15,34 @@ app.use(express.static(path.join(__dirname, "public")));
 
 const PORT = parseInt(process.env.PORT || "3000", 10);
 
-// --- Copilot Client ---
+// --- Per-user Copilot Clients ---
 
-let client: CopilotClient | null = null;
+// Key: github token → CopilotClient (one client per user token)
+const clients = new Map<string, CopilotClient>();
+// Key: "token:sessionId" → CopilotSession
 const sessions = new Map<string, CopilotSession>();
 
-function buildClientOptions() {
-  const token = process.env.GITHUB_TOKEN;
-  if (token) return { githubToken: token };
-  return { useLoggedInUser: true };
+function extractToken(req: Request): string | undefined {
+  const authHeader = req.headers.authorization;
+  if (authHeader?.startsWith("Bearer ")) {
+    return authHeader.slice(7);
+  }
+  // Fallback to env var for testing/CI
+  return process.env.COPILOT_GITHUB_TOKEN || undefined;
 }
 
-async function getClient(): Promise<CopilotClient> {
-  if (!client) {
-    client = new CopilotClient(buildClientOptions());
-    await client.start();
+async function getClientForToken(token: string): Promise<CopilotClient> {
+  if (clients.has(token)) {
+    return clients.get(token)!;
   }
+  const client = new CopilotClient({ githubToken: token });
+  await client.start();
+  clients.set(token, client);
   return client;
+}
+
+function sessionKey(token: string, sessionId: string): string {
+  return `${token}:${sessionId}`;
 }
 
 // --- Helpers ---
@@ -45,36 +56,29 @@ function isCopilotCliAvailable(): boolean {
   }
 }
 
-function isAuthenticated(): boolean {
-  // True if PAT is set or gh CLI is available
-  if (process.env.GITHUB_TOKEN) return true;
-  try {
-    execSync("gh auth status", { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 function generateSessionId(): string {
   return crypto.randomUUID();
 }
 
 // --- Routes ---
 
-// Health check
+// Health check (no auth required)
 app.get("/api/health", (_req: Request, res: Response) => {
   res.json({
     status: "ok",
     copilotCli: isCopilotCliAvailable(),
-    authenticated: isAuthenticated(),
   });
 });
 
 // List available models
-app.get("/api/models", async (_req: Request, res: Response) => {
+app.get("/api/models", async (req: Request, res: Response) => {
+  const token = extractToken(req);
+  if (!token) {
+    res.status(401).json({ error: "Missing token. Provide Authorization: Bearer <token> header." });
+    return;
+  }
   try {
-    const c = await getClient();
+    const c = await getClientForToken(token);
     const models = await c.listModels();
     res.json({ models });
   } catch (err: any) {
@@ -84,6 +88,12 @@ app.get("/api/models", async (_req: Request, res: Response) => {
 
 // Chat endpoint (SSE streaming)
 app.post("/api/chat", async (req: Request, res: Response) => {
+  const token = extractToken(req);
+  if (!token) {
+    res.status(401).json({ error: "Missing token. Provide Authorization: Bearer <token> header." });
+    return;
+  }
+
   const { message, sessionId, model } = req.body;
 
   if (!message || typeof message !== "string") {
@@ -98,13 +108,14 @@ app.post("/api/chat", async (req: Request, res: Response) => {
   res.flushHeaders();
 
   try {
-    const c = await getClient();
+    const c = await getClientForToken(token);
 
     let session: CopilotSession;
     let sid = sessionId;
+    const key = sid ? sessionKey(token, sid) : "";
 
-    if (sid && sessions.has(sid)) {
-      session = sessions.get(sid)!;
+    if (sid && sessions.has(key)) {
+      session = sessions.get(key)!;
     } else {
       sid = sid || generateSessionId();
       session = await c.createSession({
@@ -112,7 +123,7 @@ app.post("/api/chat", async (req: Request, res: Response) => {
         streaming: true,
         onPermissionRequest: approveAll,
       });
-      sessions.set(sid, session);
+      sessions.set(sessionKey(token, sid), session);
     }
 
     // Collect unsubscribe functions
@@ -170,13 +181,10 @@ const server = app.listen(PORT, () => {
 // Graceful shutdown
 async function shutdown() {
   console.log("\nShutting down...");
-  if (client) {
-    try {
-      await client.stop();
-    } catch {
-      // ignore errors during shutdown
-    }
-  }
+  const stopPromises = [...clients.values()].map((c) =>
+    c.stop().catch(() => {})
+  );
+  await Promise.all(stopPromises);
   server.close();
   process.exit(0);
 }
