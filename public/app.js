@@ -77,11 +77,15 @@ function saveCurrentSessionMessages() {
   const existing = sessions.find((s) => s.id === sessionId);
   const messages = getMessagesFromDOM();
 
+  // Don't create new entries for empty sessions
+  if (!existing && messages.length === 0) return;
+
   if (existing) {
     existing.messages = messages;
     existing.updatedAt = new Date().toISOString();
   } else {
-    const title = messages.length > 0 ? messages[0].text : "New conversation";
+    const firstUserMsg = messages.find((m) => m.role === "user");
+    const title = firstUserMsg ? firstUserMsg.text : "New conversation";
     const displayTitle = title.length > 50 ? title.slice(0, 50) + "…" : title;
     sessions.unshift({
       id: sessionId,
@@ -120,7 +124,9 @@ function deleteSavedSession(sid) {
   fetch(`/api/sessions/${encodeURIComponent(sid)}`, {
     method: "DELETE",
     headers: authHeaders(),
-  }).catch(() => {});
+  }).catch((err) => {
+    console.warn("Failed to delete session on backend:", err);
+  });
 
   if (sessionId === sid) {
     sessionId = null;

@@ -28,6 +28,7 @@ interface SessionMeta {
   title: string;
   model: string;
   createdAt: string;
+  updatedAt: string;
 }
 // Key: "token:sessionId" → SessionMeta
 const sessionMeta = new Map<string, SessionMeta>();
@@ -112,8 +113,8 @@ app.get("/api/sessions", (req: Request, res: Response) => {
     }
   }
 
-  // Sort by creation time, newest first
-  userSessions.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  // Sort by last update time, newest first
+  userSessions.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
   res.json({ sessions: userSessions });
 });
 
@@ -179,12 +180,21 @@ app.post("/api/chat", async (req: Request, res: Response) => {
 
       // Store session metadata
       const title = message.length > 50 ? message.slice(0, 50) + "…" : message;
+      const now = new Date().toISOString();
       sessionMeta.set(sessionKey(token, sid), {
         id: sid,
         title,
         model: model || "gpt-4.1",
-        createdAt: new Date().toISOString(),
+        createdAt: now,
+        updatedAt: now,
       });
+    }
+
+    // Update session last-used time
+    const metaKey = sessionKey(token, sid);
+    const meta = sessionMeta.get(metaKey);
+    if (meta) {
+      meta.updatedAt = new Date().toISOString();
     }
 
     // Collect unsubscribe functions
