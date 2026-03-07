@@ -52,7 +52,7 @@ test("save token and load models", async ({ page }) => {
   await expect(modelSelect).not.toHaveText("Loading models...", { timeout: 20_000 });
   await expect(modelSelect).not.toHaveText("Enter token to load models");
 
-  // Should have multiple model options including gpt-4.1
+  // Should have multiple model options including a GPT model
   const options = modelSelect.locator("option");
   await expect(options).not.toHaveCount(0);
   const optionTexts = await options.allTextContents();
