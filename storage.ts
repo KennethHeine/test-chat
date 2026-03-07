@@ -170,8 +170,10 @@ export class AzureSessionStore implements SessionStore {
   }
 
   async deleteSession(tokenHash: string, sessionId: string): Promise<boolean> {
+    let entityDeleted = false;
     try {
       await this.tableClient.deleteEntity(tokenHash, sessionId);
+      entityDeleted = true;
     } catch (err: any) {
       if (err?.statusCode !== 404) throw err;
     }
@@ -179,8 +181,9 @@ export class AzureSessionStore implements SessionStore {
     // Delete blob
     const blobName = `${tokenHash}/${sessionId}.json`;
     const blobClient = this.containerClient.getBlockBlobClient(blobName);
-    await blobClient.deleteIfExists();
-    return true;
+    const blobResult = await blobClient.deleteIfExists();
+
+    return entityDeleted || blobResult.succeeded;
   }
 
   async getMessages(tokenHash: string, sessionId: string): Promise<ChatMessage[]> {

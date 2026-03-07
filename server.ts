@@ -4,7 +4,7 @@ import { execSync } from "child_process";
 import { fileURLToPath } from "url";
 import { config } from "dotenv";
 import path from "path";
-import { createSessionStore, hashToken, AzureSessionStore, type SessionStore } from "./storage.js";
+import { createSessionStore, hashToken, AzureSessionStore, InMemorySessionStore, type SessionStore } from "./storage.js";
 
 config(); // load .env
 
@@ -19,7 +19,7 @@ const PORT = parseInt(process.env.PORT || "3000", 10);
 // --- Storage ---
 
 const storageAccountName = process.env.AZURE_STORAGE_ACCOUNT_NAME || "";
-const sessionStore: SessionStore = createSessionStore(storageAccountName || undefined);
+let sessionStore: SessionStore = createSessionStore(storageAccountName || undefined);
 
 // --- Per-user Copilot Clients ---
 
@@ -73,7 +73,7 @@ app.get("/api/health", (_req: Request, res: Response) => {
   res.json({
     status: "ok",
     copilotCli: isCopilotCliAvailable(),
-    storage: storageAccountName ? "azure" : "memory",
+    storage: sessionStore instanceof AzureSessionStore ? "azure" : "memory",
   });
 });
 
@@ -123,7 +123,11 @@ app.delete("/api/sessions/:id", async (req: Request, res: Response) => {
   try {
     const tHash = await hashToken(token);
     const existing = await sessionStore.getSession(tHash, sid);
-    if (!existing && !sessions.has(sessionKey(token, sid))) {
+    const inMemory = sessions.has(sessionKey(token, sid));
+    const messages = await sessionStore.getMessages(tHash, sid);
+    const hasMessages = Array.isArray(messages) && messages.length > 0;
+
+    if (!existing && !inMemory && !hasMessages) {
       res.status(404).json({ error: "Session not found" });
       return;
     }
@@ -297,6 +301,7 @@ async function startServer() {
     } catch (err: any) {
       console.error("Failed to initialize Azure Storage:", err.message);
       console.log("Falling back to in-memory storage");
+      sessionStore = new InMemorySessionStore();
     }
   } else {
     console.log("Using in-memory session storage (set AZURE_STORAGE_ACCOUNT_NAME for persistence)");

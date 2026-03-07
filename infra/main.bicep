@@ -29,7 +29,9 @@ resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
 // ---------- Storage Account (persistent session data) ----------
 
 // Storage account name must be 3-24 chars, lowercase + numbers only
-var storageAccountName = replace('${appName}stor', '-', '')
+var storageAccountBase = toLower(replace(appName, '-', ''))
+var storageAccountFull = '${storageAccountBase}stor'
+var storageAccountName = substring(storageAccountFull, 0, min(length(storageAccountFull), 24))
 
 resource storageAccount 'Microsoft.Storage/storageAccounts@2023-05-01' = {
   name: storageAccountName

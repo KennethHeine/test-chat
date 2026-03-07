@@ -99,6 +99,28 @@ function saveCurrentSessionMessages() {
 
   saveSessions(sessions);
   renderSessionList();
+
+  // Persist messages to backend (fire-and-forget), keeping localStorage as a fast cache
+  (async () => {
+    try {
+      const response = await fetch(
+        "/api/sessions/" + encodeURIComponent(sessionId) + "/messages",
+        {
+          method: "PUT",
+          headers: {
+            ...authHeaders(),
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ messages }),
+        }
+      );
+      if (!response.ok) {
+        console.error("Failed to persist session messages to server:", response.status);
+      }
+    } catch (err) {
+      console.error("Error persisting session messages to server:", err);
+    }
+  })();
 }
 
 function getMessagesFromDOM() {
@@ -204,6 +226,7 @@ function renderSessionList() {
     deleteBtn.className = "session-item-delete";
     deleteBtn.textContent = "✕";
     deleteBtn.title = "Delete session";
+    deleteBtn.setAttribute("aria-label", `Delete session: ${s.title || "New conversation"}`);
     deleteBtn.addEventListener("click", (e) => {
       e.stopPropagation();
       deleteSavedSession(s.id);
@@ -265,13 +288,68 @@ function restoreLastSession() {
   renderSessionList();
 }
 
+// --- Backend Session Loading ---
+
+async function loadSessionsFromBackend() {
+  try {
+    const res = await fetch("/api/sessions", { headers: authHeaders() });
+    if (!res.ok) return;
+    const data = await res.json();
+    if (!Array.isArray(data.sessions)) return;
+
+    const localSessions = loadSavedSessions();
+    const localMap = new Map(localSessions.map((s) => [s.id, s]));
+
+    // Merge backend sessions into local cache
+    let changed = false;
+    for (const remote of data.sessions) {
+      const local = localMap.get(remote.id);
+      if (!local) {
+        // Session exists on backend but not locally — fetch its messages
+        const msgRes = await fetch(
+          "/api/sessions/" + encodeURIComponent(remote.id) + "/messages",
+          { headers: authHeaders() }
+        );
+        const msgData = msgRes.ok ? await msgRes.json() : { messages: [] };
+        localMap.set(remote.id, {
+          id: remote.id,
+          title: remote.title,
+          model: remote.model,
+          messages: msgData.messages || [],
+          createdAt: remote.createdAt,
+          updatedAt: remote.updatedAt,
+        });
+        changed = true;
+      } else if (remote.updatedAt > (local.updatedAt || "")) {
+        // Backend is newer — update local metadata
+        local.title = remote.title;
+        local.model = remote.model;
+        local.updatedAt = remote.updatedAt;
+        changed = true;
+      }
+    }
+
+    if (changed) {
+      const merged = Array.from(localMap.values());
+      merged.sort((a, b) => new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0));
+      saveSessions(merged);
+      renderSessionList();
+    }
+  } catch (err) {
+    console.warn("Failed to load sessions from backend:", err);
+  }
+}
+
 // --- Init ---
 updateTokenUI();
 checkHealth();
 restoreSidebarState();
 renderSessionList();
 restoreLastSession();
-if (getToken()) loadModels();
+if (getToken()) {
+  loadModels();
+  loadSessionsFromBackend();
+}
 
 toggleSidebarBtn.addEventListener("click", toggleSidebar);
 
@@ -287,6 +365,7 @@ saveTokenBtn.addEventListener("click", () => {
     if (!val) return;
     saveToken(val);
     loadModels();
+    loadSessionsFromBackend();
   }
 });
 
