@@ -122,94 +122,54 @@ data: {"type":"done","sessionId":"abc-123"}
 
 ## Testing
 
-### Overview
+Tests use `gpt-4.1` which costs **0 premium requests** on paid plans, so they are safe to run repeatedly.
 
-The test suite (`test.ts`) runs real integration tests against the live Copilot API. Tests use `gpt-4.1` which costs **0 premium requests** on paid plans, so they're safe to run repeatedly.
+### Integration Tests (`npm test`)
+
+SDK-level and HTTP API tests against the Copilot API. Requires `COPILOT_GITHUB_TOKEN`.
 
 ```bash
 npm test
 ```
 
-### Test Structure
+### E2E Tests (`npm run test:e2e`)
 
-The suite has two layers:
+Playwright browser tests that run against the live production site. They enter the token via the UI, load models, send chat messages, and verify streamed responses — exactly like a real user.
 
-#### SDK Direct Tests (no server needed)
-
-These tests create a `CopilotClient` directly and talk to Copilot:
+```bash
+COPILOT_GITHUB_TOKEN=github_pat_... npm run test:e2e
+```
 
 | Test | What it verifies |
 |------|------------------|
-| **SDK connect & ping** | Client connects to Copilot CLI subprocess, gets a timestamped ping response |
-| **SDK list models** | `listModels()` returns a non-empty array containing GPT models |
-| **SDK chat (single turn)** | Creates a session, sends a prompt, verifies streaming `assistant.message_delta` events arrive and contain the expected response |
-| **SDK chat (multi-turn recall)** | Turn 1: tells Copilot to remember a code. Turn 2: asks it to recall. Verifies session memory works across turns. |
+| **page loads and shows connected status** | Site is up, status dot is green |
+| **save token and load models** | Token input works, model dropdown populates with GPT models |
+| **send message and receive streamed response** | Full chat round-trip with SSE streaming |
+| **multi-turn conversation retains context** | Session memory works across turns |
+| **new chat button clears conversation** | UI resets correctly |
 
-#### Server API Tests (full HTTP stack)
-
-These tests spawn the Express server on port 3099 and hit the HTTP API:
-
-| Test | What it verifies |
-|------|------------------|
-| **Server health check** | `GET /api/health` returns `{ status: "ok" }` |
-| **Server models endpoint** | `GET /api/models` with auth header returns a non-empty model list |
-| **Server chat (SSE streaming)** | `POST /api/chat` with auth header → parses SSE stream → verifies delta events, done event with session ID, and correct response content |
-
-### Test Output
-
-```
-═══════════════════════════════════════════════
-  Copilot Chat — Integration Tests
-  Model: gpt-4.1 (0x premium requests)
-═══════════════════════════════════════════════
-
-── SDK Direct Tests ──
-
-✓ SDK connect & ping (641ms)
-  Found 17 models: claude-sonnet-4.6, gpt-4.1, ...
-✓ SDK list models (1535ms)
-  Response: "COPILOT_TEST_OK"
-✓ SDK chat (single turn) (3829ms)
-  Recall: "ALPHA_7749"
-✓ SDK chat (multi-turn recall) (5016ms)
-
-── Server API Tests ──
-
-✓ Server health check (966ms)
-  Server returned 17 models
-✓ Server models endpoint (1531ms)
-  Server response: "SERVER_TEST_OK" (session: a7fec105...)
-✓ Server chat (SSE streaming) (2352ms)
-
-═══════════════════════════════════════════════
-  7 tests: 7 passed, 0 failed
-═══════════════════════════════════════════════
-```
-
-### Test Configuration
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `TEST_PORT` | `3099` | Port for the test server (avoids conflict with dev server on 3000) |
-
-Tests use the same auth method: `COPILOT_GITHUB_TOKEN` from `.env` if set, otherwise `gh` CLI credentials. Server API tests send the token via `Authorization` header.
+See **[TESTING.md](TESTING.md)** for full details on prerequisites, CI setup, configuration, and debugging.
 
 ## File Structure
 
 ```
 test-chat/
-├── server.ts          # Express backend — CopilotClient, session management, SSE streaming
-├── test.ts            # Integration tests — SDK direct + server HTTP tests
+├── server.ts              # Express backend — CopilotClient, session management, SSE streaming
+├── test.ts                # Integration tests — SDK direct + server HTTP tests
+├── e2e/
+│   └── chat.spec.ts       # Playwright E2E tests — browser tests against live site
+├── playwright.config.ts   # Playwright configuration (base URL, timeouts, browser)
 ├── public/
-│   ├── index.html     # Chat UI — GitHub dark theme, model selector, message area
-│   └── app.js         # Frontend logic — fetch, SSE parsing, streaming render
-├── package.json       # Dependencies & scripts
-├── tsconfig.json      # TypeScript config (ES2022, bundler resolution)
-├── .env.example       # Environment variable template
-├── .env               # Local config (gitignored)
-├── .gitignore         # node_modules, .env, dist
-├── docs.md            # Detailed project documentation
-└── README.md          # This file
+│   ├── index.html         # Chat UI — GitHub dark theme, model selector, message area
+│   └── app.js             # Frontend logic — fetch, SSE parsing, streaming render
+├── package.json           # Dependencies & scripts
+├── tsconfig.json          # TypeScript config (ES2022, bundler resolution)
+├── .env.example           # Environment variable template
+├── .env                   # Local config (gitignored)
+├── .gitignore             # node_modules, .env, dist
+├── docs.md                # Detailed project documentation
+├── TESTING.md             # E2E and integration test documentation
+└── README.md              # This file
 ```
 
 ## Available Models
