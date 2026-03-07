@@ -79,15 +79,17 @@ Transform from a **simple chat interface** into an **agent orchestration dashboa
 | Capability | Current | Target |
 |-----------|---------|--------|
 | Chat | Simple text chat | Context-aware agent conversations |
-| System prompt | Default Copilot persona | Custom orchestrator persona |
-| Tools | None (built-in only) | GitHub API tools + MCP servers |
-| Agent visibility | No tool execution feedback | Real-time tool activity streaming |
+| System prompt | ✅ Custom orchestrator persona | Custom orchestrator persona |
+| Tools | ✅ 5 GitHub API tools (list_repos, get_repo_structure, read_repo_file, list_issues, search_code) | GitHub API tools + MCP servers |
+| Agent visibility | ✅ Real-time tool activity streaming (tool_start/tool_complete SSE events) | Real-time tool activity streaming |
 | Task management | None | Task planning, dispatch, and tracking |
 | Multi-agent | Single session | Fleet mode for parallel tasks |
-| Session persistence | Basic (lost on restart) | Full context with `resumeSession()` |
-| Response control | None | Abort, reasoning effort, model switching |
+| Session persistence | ✅ Full context with `resumeSession()` + `sdkSessionId` | Full context with `resumeSession()` |
+| Response control | ✅ Abort, model switching mid-conversation | Abort, reasoning effort, model switching |
 | File context | None | File/image attachments |
 | Agent input | One-way | Bidirectional (agent can ask questions) |
+| Quota monitoring | ✅ `GET /api/quota` with frontend display | Quota management |
+| Token usage | ✅ Per-message usage tracking via SSE | Cost tracking |
 
 ---
 
@@ -98,8 +100,10 @@ Transform from a **simple chat interface** into an **agent orchestration dashboa
 > **Timeline:** Immediate
 >
 > **Effort:** Low (each feature takes 1-3 hours)
+>
+> **Status:** ✅ COMPLETE
 
-### 1.1 System Message Customization
+### 1.1 System Message Customization ✅ COMPLETE
 
 **SDK Feature:** `systemMessage` option in `createSession()` ([BACKEND_AND_SDK.md §8.4](./BACKEND_AND_SDK.md#84-system-message-customization))
 
@@ -125,60 +129,55 @@ When asked to explore a repo, use available tools to read files and understand t
 });
 ```
 
-### 1.2 Session Abort — Stop Button
+### 1.2 Session Abort — Stop Button ✅ COMPLETE
 
 **SDK Feature:** `session.abort()` ([BACKEND_AND_SDK.md §8.2](./BACKEND_AND_SDK.md#82-session-level-features))
 
 **What:** Allow users to cancel long-running agent responses. Essential for orchestration where agents may be performing lengthy operations.
 
 **Implementation:**
-- Add `POST /api/chat/abort` endpoint that calls `session.abort()`
-- Add a "Stop" button in the UI that appears during streaming
-- Wire the button to call the abort endpoint
+- `POST /api/chat/abort` endpoint calls `session.abort()`
+- "Stop" button appears in the UI during streaming
+- Wired to call the abort endpoint
 
-### 1.3 Tool Execution Events — Agent Activity
+### 1.3 Tool Execution Events — Agent Activity ✅ COMPLETE
 
 **SDK Feature:** `tool.execution_start`, `tool.execution_complete`, `tool.execution_progress` events ([BACKEND_AND_SDK.md §8.13](./BACKEND_AND_SDK.md#813-additional-unused-events))
 
 **What:** Show users what the agent is doing in real-time. When the agent reads a file, runs a command, or searches code — the user sees it.
 
 **Implementation:**
-- Listen to tool execution events in the chat endpoint
-- Stream them as SSE events to the frontend
-- Display tool activity indicators in the UI (e.g., "🔍 Searching files...", "📄 Reading server.ts...", "🐚 Running tests...")
+- Tool execution events streamed as SSE `tool_start` and `tool_complete` events
+- Frontend displays tool activity indicators in the chat
 
-### 1.4 AI-Generated Session Titles
+### 1.4 AI-Generated Session Titles ✅ COMPLETE
 
 **SDK Feature:** `session.title_changed` event ([BACKEND_AND_SDK.md §8.13](./BACKEND_AND_SDK.md#813-additional-unused-events))
 
 **What:** Replace the current "first 50 chars of message" title with AI-generated conversation titles.
 
 **Implementation:**
-- Listen to `session.title_changed` event
-- Stream title updates to the frontend
-- Update session sidebar with AI-generated titles
+- `session.title_changed` event streamed as SSE `title` event
+- Frontend updates session sidebar with AI-generated titles
 
-### 1.5 Token Usage Tracking
+### 1.5 Token Usage Tracking ✅ COMPLETE
 
 **SDK Feature:** `assistant.usage` event ([BACKEND_AND_SDK.md §8.13](./BACKEND_AND_SDK.md#813-additional-unused-events))
 
 **What:** Show users token consumption per message. Important for orchestration where tasks may consume significant tokens.
 
 **Implementation:**
-- Listen to `assistant.usage` event
-- Stream usage data to the frontend
-- Display token count in the status bar or per-message
+- `assistant.usage` event streamed as SSE `usage` event
+- Frontend displays token count in the status bar
 
-### 1.6 Better Health Monitoring
+### 1.6 Better Health Monitoring ✅ COMPLETE
 
 **SDK Feature:** `client.ping()`, `client.getState()` ([BACKEND_AND_SDK.md §8.1](./BACKEND_AND_SDK.md#81-client-level-features))
 
 **What:** Replace the current CLI binary check with actual RPC connection health monitoring.
 
 **Implementation:**
-- Use `client.ping()` for health checks
-- Use `client.getState()` for connection status
-- Expose richer health data in the `/api/health` endpoint
+- `/api/health` now returns `{ status, storage, clients: { total, connected }, activeSessions }` using `client.getState()` to count connected clients
 
 ---
 
@@ -189,8 +188,10 @@ When asked to explore a repo, use available tools to read files and understand t
 > **Timeline:** After Phase 1
 >
 > **Effort:** Medium (each feature takes 3-8 hours)
+>
+> **Status:** ✅ COMPLETE (except 2.2 MCP — deferred)
 
-### 2.1 Custom Tools — GitHub API Integration
+### 2.1 Custom Tools — GitHub API Integration ✅ COMPLETE
 
 **SDK Feature:** Tool System with `defineTool()` ([BACKEND_AND_SDK.md §8.3](./BACKEND_AND_SDK.md#83-tool-system))
 
@@ -198,78 +199,83 @@ When asked to explore a repo, use available tools to read files and understand t
 
 **Proposed Tools:**
 
-| Tool Name | Description | Priority |
-|-----------|-------------|----------|
-| `list_repos` | List repositories for a user/org | High |
-| `get_repo_structure` | Get file tree of a repository | High |
-| `read_repo_file` | Read a specific file from a repo | High |
-| `list_issues` | List issues in a repository | High |
-| `create_issue` | Create an issue for a coding task | High |
-| `create_branch` | Create a branch for agent work | Medium |
-| `trigger_workflow` | Trigger a GitHub Actions workflow | Medium |
-| `list_pull_requests` | List PRs in a repository | Medium |
-| `search_code` | Search code across repos | Medium |
+| Tool Name | Description | Priority | Status |
+|-----------|-------------|----------|--------|
+| `list_repos` | List repositories for a user/org | High | ✅ Implemented |
+| `get_repo_structure` | Get file tree of a repository | High | ✅ Implemented |
+| `read_repo_file` | Read a specific file from a repo | High | ✅ Implemented |
+| `list_issues` | List issues in a repository | High | ✅ Implemented |
+| `create_issue` | Create an issue for a coding task | High | Planned |
+| `create_branch` | Create a branch for agent work | Medium | Planned |
+| `trigger_workflow` | Trigger a GitHub Actions workflow | Medium | Planned |
+| `list_pull_requests` | List PRs in a repository | Medium | Planned |
+| `search_code` | Search code across repos | Medium | ✅ Implemented |
 
 **Implementation:**
-- Define tools using `defineTool()` from the SDK
-- Tools use the user's GitHub token to make GitHub API calls
-- Tools are registered when creating sessions
+- 5 tools defined in `tools.ts` using `defineTool()` pattern
+- `createGitHubTools(token)` factory creates tools bound to the user's GitHub token
+- Tools are passed to `createSession()` configuration
+- Each tool calls the GitHub REST API with the user's token for authentication
 
-### 2.2 MCP Server Integration — Repository Context
+### 2.2 MCP Server Integration — Repository Context ⏸️ DEFERRED
 
 **SDK Feature:** MCP Server Integration ([BACKEND_AND_SDK.md §8.9](./BACKEND_AND_SDK.md#89-mcp-server-integration))
 
 **What:** Connect to GitHub's MCP server to give the agent rich repository context.
+
+**Status:** Deferred — requires an external MCP server binary that is not yet available for this deployment.
 
 **Implementation:**
 - Configure MCP servers in `createSession()`
 - Start with GitHub's official MCP server for repo access
 - This provides the agent with deep code understanding beyond simple file reads
 
-### 2.3 Session Resumption — Persistent Tasks
+### 2.3 Session Resumption — Persistent Tasks ✅ COMPLETE
 
 **SDK Feature:** `client.resumeSession()` ([BACKEND_AND_SDK.md §8.1](./BACKEND_AND_SDK.md#81-client-level-features))
 
 **What:** Preserve full conversation context across server restarts. Critical for long-running orchestration tasks.
 
 **Implementation:**
-- Store the SDK session ID alongside our session metadata
-- On server restart, use `resumeSession()` instead of `createSession()` for existing sessions
-- This solves the "context discontinuity" problem described in BACKEND_AND_SDK.md §7.6
+- `sdkSessionId` (the SDK's internal session ID from `session.sessionId`) is stored in session metadata
+- `resolveSession()` function checks for an existing `sdkSessionId` and tries `client.resumeSession()` before falling back to `createSession()`
+- 3 new storage tests verify `sdkSessionId` persistence, optionality, and updates
 
-### 2.4 Session Hooks — Task Tracking
+### 2.4 Session Hooks — Task Tracking ✅ COMPLETE
 
 **SDK Feature:** Session Hooks ([BACKEND_AND_SDK.md §8.6](./BACKEND_AND_SDK.md#86-session-hooks))
 
 **What:** Track agent activity for audit trails and task management.
 
 **Hooks to implement:**
-- `onPreToolUse` — Log what the agent is about to do
-- `onPostToolUse` — Log what the agent did and results
-- `onSessionStart/End` — Track session lifecycle
-- `onErrorOccurred` — Handle errors with retry/skip/abort strategy
+- `onPreToolUse` — Log what the agent is about to do ✅
+- `onPostToolUse` — Log what the agent did and results ✅
+- `onSessionStart/End` — Track session lifecycle ✅
+- `onErrorOccurred` — Handle errors with retry/skip/abort strategy ✅
 
-### 2.5 Model Switching Mid-Conversation
+**Implementation:** All 5 hooks are passed to `createSession()` in the `hooks` configuration object. Currently log to console; can be extended for audit trails.
+
+### 2.5 Model Switching Mid-Conversation ✅ COMPLETE
 
 **SDK Feature:** `session.setModel()` ([BACKEND_AND_SDK.md §8.2](./BACKEND_AND_SDK.md#82-session-level-features))
 
 **What:** Allow switching between models during a conversation. Useful for using cheaper models for research and premium models for complex tasks.
 
 **Implementation:**
-- Add `POST /api/chat/model` endpoint
-- Add model switcher in the UI that works mid-conversation
-- No need to create a new session — the SDK handles it
+- `POST /api/chat/model` endpoint accepts `{ sessionId, model }` and calls `session.setModel(model)`
+- Session metadata is updated with the new model name
+- Frontend fires model switch automatically when the dropdown changes during an active session
 
-### 2.6 Quota Monitoring
+### 2.6 Quota Monitoring ✅ COMPLETE
 
 **SDK Feature:** `account.getQuota()` ([BACKEND_AND_SDK.md §8.14](./BACKEND_AND_SDK.md#814-rpc-methods))
 
 **What:** Show users their remaining premium request quota. Important when orchestrating multiple agent tasks.
 
 **Implementation:**
-- Call `account.getQuota()` via RPC
-- Display quota in the UI header
-- Warn users before dispatching expensive tasks
+- `GET /api/quota` endpoint calls `client.rpc.account.getQuota()` and returns the result
+- Frontend displays quota information in the status bar
+- Integration tests verify the endpoint returns data and rejects unauthenticated requests
 
 ---
 

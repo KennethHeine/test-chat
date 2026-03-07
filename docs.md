@@ -154,27 +154,34 @@ data: {"type":"done","sessionId":"abc123"}
 | Event Type | Fields | Description |
 |------------|--------|-------------|
 | `delta` | `content` | Incremental text chunk from the assistant |
+| `tool_start` | `tool` | Agent started executing a tool (e.g., `read_file`, `list_repos`) |
+| `tool_complete` | — | Tool execution finished |
+| `title` | `title` | AI-generated session title |
+| `usage` | `usage` (object with `model`, `inputTokens`, `outputTokens`) | Token usage for the response |
 | `done` | `sessionId` | Stream complete; includes the session ID for follow-up messages |
 | `error` | `message` | Error occurred |
 
 ### `GET /api/health`
 
-Health check endpoint.
+Health check endpoint. Returns server status, connected client info, and active session count.
 
 **Response:**
 ```json
 {
   "status": "ok",
-  "copilotCli": true,
-  "storage": "memory"
+  "storage": "memory",
+  "clients": { "total": 2, "connected": 2 },
+  "activeSessions": 3
 }
 ```
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `status` | string | `"ok"` if server is running |
-| `copilotCli` | boolean | Whether `copilot` CLI is found on PATH |
 | `storage` | string | `"memory"` or `"azure"` — which storage backend is active |
+| `clients.total` | number | Total number of active `CopilotClient` instances |
+| `clients.connected` | number | Number of clients in `"connected"` state |
+| `activeSessions` | number | Number of active in-memory SDK sessions |
 
 ### `GET /api/models`
 
@@ -196,6 +203,38 @@ Gets chat messages for a session.
 
 Saves chat messages for a session.
 
+### `POST /api/chat/abort`
+
+Abort a streaming response. Requires `Authorization: Bearer <token>` header.
+
+**Request:**
+```json
+{ "sessionId": "abc-123" }
+```
+
+### `POST /api/chat/model`
+
+Switch the model for an active session mid-conversation. Calls `session.setModel()` under the hood — no new session is created.
+
+**Request:**
+```json
+{ "sessionId": "abc-123", "model": "claude-sonnet-4" }
+```
+
+**Response:**
+```json
+{ "switched": true, "sessionId": "abc-123", "model": "claude-sonnet-4" }
+```
+
+### `GET /api/quota`
+
+Get the user's premium request quota via `client.rpc.account.getQuota()`. Requires `Authorization: Bearer <token>` header.
+
+**Response:**
+```json
+{ "quota": { ... } }
+```
+
 ---
 
 ## File Structure
@@ -203,13 +242,14 @@ Saves chat messages for a session.
 ```
 test-chat/
 ├── server.ts              # Express backend — API routes, SDK integration, SSE streaming
+├── tools.ts               # GitHub API tools factory — 5 tools using defineTool() pattern
 ├── storage.ts             # Storage abstraction — Azure Table/Blob + in-memory fallback
-├── storage.test.ts        # Unit tests for storage module
+├── storage.test.ts        # Unit tests for storage module (15 tests)
 ├── public/
 │   ├── index.html         # Chat UI — GitHub dark theme, model selector, session sidebar
 │   ├── app.js             # Frontend logic — token management, SSE parsing, session management
 │   └── staticwebapp.config.json  # Azure SWA routing config
-├── test.ts                # Integration tests — SDK direct + server HTTP tests
+├── test.ts                # Integration tests — SDK direct + server HTTP tests (16 tests)
 ├── e2e/
 │   └── chat.spec.ts       # Playwright E2E tests
 ├── infra/
@@ -232,7 +272,7 @@ test-chat/
 
 ### SDK Usage (server.ts)
 
-The backend creates a per-user `CopilotClient` instance. Each conversation is a `CopilotSession`:
+The backend creates a per-user `CopilotClient` instance. Each conversation is a `CopilotSession` with custom tools, hooks, and session resumption support:
 
 ```typescript
 // Per-user clients (one per unique token)
@@ -240,25 +280,73 @@ const clients = new Map<string, CopilotClient>();
 const client = new CopilotClient({ githubToken: token });
 await client.start();
 
-// Per conversation
-const session = await client.createSession({ model: "gpt-4.1", streaming: true });
+// Per conversation — with tools (Phase 2.1), hooks (Phase 2.4), system message (Phase 1.1)
+import { createGitHubTools } from "./tools.ts";
+
+const session = await client.createSession({
+  model: "gpt-4.1",
+  streaming: true,
+  onPermissionRequest: approveAll,
+  systemMessage: { content: "You are a coding task orchestrator..." },
+  tools: createGitHubTools(token),  // 5 GitHub API tools bound to user's token
+  hooks: {
+    onPreToolUse: async (input) => { /* log tool start */ },
+    onPostToolUse: async (input) => { /* log tool result */ },
+    onSessionStart: async (input) => { /* log session start */ },
+    onSessionEnd: async (input) => { /* log session end */ },
+    onErrorOccurred: async (input) => { /* log errors */ },
+  },
+});
+
+// Session resumption (Phase 2.3) — try resumeSession() before createSession()
+const resumed = await client.resumeSession(sdkSessionId, { ...config });
 
 // Streaming events
 session.on("assistant.message_delta", (event) => {
   // event.data.deltaContent — incremental text
 });
+session.on("tool.execution_start", (event) => {
+  // event.data.name — tool being executed
+});
+session.on("session.title_changed", (event) => {
+  // event.data.title — AI-generated title
+});
+session.on("assistant.usage", (event) => {
+  // event.data — { model, inputTokens, outputTokens }
+});
 session.on("session.idle", () => {
   // Response complete
 });
+
+// Model switching mid-conversation (Phase 2.5)
+await session.setModel("claude-sonnet-4");
+
+// Quota monitoring (Phase 2.6)
+const quota = await client.rpc.account.getQuota();
 
 // Send message
 await session.send({ prompt: "Hello!" });
 ```
 
+### Custom Tools (tools.ts)
+
+Five GitHub API tools are defined in `tools.ts` using the SDK's `defineTool()` pattern. Each tool is bound to the user's GitHub token for API authentication:
+
+| Tool | Description |
+|------|-------------|
+| `list_repos` | List repositories for a user or organization |
+| `get_repo_structure` | Get the file tree of a repository |
+| `read_repo_file` | Read a specific file from a repository |
+| `list_issues` | List issues in a repository |
+| `search_code` | Search code across repositories |
+
+Tools are created per-session via `createGitHubTools(token)` and passed to `createSession()`.
+
 ### Session Management
 
 - Sessions are stored in a `Map<string, CopilotSession>` in server memory (for active SDK sessions)
 - Session metadata and chat messages are persisted via the `SessionStore` interface (`storage.ts`)
+- **SDK session ID persistence** — The SDK's internal session ID (`session.sessionId`) is stored in session metadata as `sdkSessionId`. On reconnect, `resolveSession()` tries `client.resumeSession(sdkSessionId)` before falling back to `createSession()`.
 - **Azure mode**: Uses Table Storage for metadata and Blob Storage for messages (when `AZURE_STORAGE_ACCOUNT_NAME` is set, authenticates via managed identity / `DefaultAzureCredential`)
 - **Memory mode**: Falls back to in-memory Maps (data lost on restart). If Azure init fails at startup, the server automatically falls back to memory mode.
 - The frontend caches sessions in `localStorage` for instant UI rendering, and syncs with the backend on load
@@ -281,6 +369,10 @@ The backend translates SDK events into Server-Sent Events:
 ### Aborting a Response
 
 Send `POST /api/chat/abort` with `{ "sessionId": "..." }` to cancel a streaming response mid-stream.
+
+### Model Switching Mid-Conversation
+
+Send `POST /api/chat/model` with `{ "sessionId": "...", "model": "..." }` to switch models without creating a new session. The frontend fires this automatically when the user changes the model dropdown during an active session.
 
 ### Frontend Streaming
 

@@ -26,6 +26,7 @@ The application follows a layered architecture with four main tiers:
 ```
 test-chat/
 ├── server.ts              # Express backend — API routes, SDK integration, SSE streaming
+├── tools.ts               # GitHub API tools factory — 5 tools bound to user's token
 ├── storage.ts             # Storage abstraction — Azure Table/Blob + in-memory fallback
 ├── storage.test.ts        # Unit tests for storage module
 ├── public/                # Frontend (served as static files)
@@ -66,13 +67,16 @@ Request → express.json() → express.static('public') → Route Handler
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| `GET` | `/api/health` | None | Health check — returns server status, Copilot CLI availability, storage backend |
+| `GET` | `/api/health` | None | Health check — returns server status, connected clients, active sessions, storage backend |
 | `GET` | `/api/models` | Bearer token | Lists available AI models from the Copilot SDK |
 | `GET` | `/api/sessions` | Bearer token | Lists all sessions for the authenticated user |
 | `DELETE` | `/api/sessions/:id` | Bearer token | Deletes a session and its messages |
 | `GET` | `/api/sessions/:id/messages` | Bearer token | Gets chat messages for a session |
 | `PUT` | `/api/sessions/:id/messages` | Bearer token | Saves chat messages for a session |
 | `POST` | `/api/chat` | Bearer token | Sends a chat message and streams the response via SSE |
+| `POST` | `/api/chat/abort` | Bearer token | Aborts a streaming response mid-stream |
+| `POST` | `/api/chat/model` | Bearer token | Switches the model for an active session via `session.setModel()` |
+| `GET` | `/api/quota` | Bearer token | Returns the user's premium request quota via `client.rpc.account.getQuota()` |
 
 ### Per-User Client Management
 
@@ -102,6 +106,9 @@ Chat sessions maintain conversation context across multiple turns. Sessions are 
 - **New chat** → server creates a new session with `crypto.randomUUID()` as the session ID
 - **Follow-up message** → client sends the existing `sessionId`, server reuses that session
 - **New Chat button** → frontend resets `sessionId` to `null`, forcing a new session on next message
+- **Session resumption** → `resolveSession()` checks for a stored `sdkSessionId` and attempts `client.resumeSession()` before falling back to `createSession()`. The SDK session ID is persisted in session metadata for cross-restart continuity.
+- **Custom tools** → Each session is created with 5 GitHub API tools (from `tools.ts`) bound to the user's token
+- **Session hooks** → `onPreToolUse`, `onPostToolUse`, `onSessionStart`, `onSessionEnd`, `onErrorOccurred` hooks are registered on every session for task tracking
 
 ### Persistent Storage
 
@@ -141,11 +148,15 @@ Client                          Server                          Copilot SDK
   │◄──────────────────────────────│                                 │
 ```
 
-The server sets standard SSE headers (`Content-Type: text/event-stream`, `Cache-Control: no-cache`, `Connection: keep-alive`) and registers three event listeners on the SDK session:
+The server sets standard SSE headers (`Content-Type: text/event-stream`, `Cache-Control: no-cache`, `Connection: keep-alive`) and registers event listeners on the SDK session:
 
 | SDK Event | SSE Event Sent | Purpose |
 |-----------|---------------|---------|
 | `assistant.message_delta` | `{"type":"delta","content":"..."}` | Each token chunk from the model |
+| `tool.execution_start` | `{"type":"tool_start","tool":"..."}` | Agent started executing a tool |
+| `tool.execution_complete` | `{"type":"tool_complete"}` | Tool execution finished |
+| `session.title_changed` | `{"type":"title","title":"..."}` | AI-generated session title |
+| `assistant.usage` | `{"type":"usage","usage":{...}}` | Token usage (model, inputTokens, outputTokens) |
 | `session.idle` | `{"type":"done","sessionId":"..."}` | Streaming complete — includes session ID for follow-ups |
 | `session.error` | `{"type":"error","message":"..."}` | Error during generation |
 
@@ -266,7 +277,7 @@ FROM node:22-alpine
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci
-COPY tsconfig.json server.ts ./
+COPY tsconfig.json server.ts storage.ts tools.ts ./
 COPY public ./public
 EXPOSE 3000
 ENV NODE_ENV=production
