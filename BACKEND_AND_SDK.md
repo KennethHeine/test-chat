@@ -18,7 +18,7 @@ This document provides a comprehensive, detailed reference for how the backend w
   - [2.8 Graceful Shutdown](#28-graceful-shutdown)
 - [3. Storage Architecture (storage.ts)](#3-storage-architecture-storagets)
   - [3.1 SessionStore Interface](#31-sessionstore-interface)
-  - [3.2 InMemorySessionStore](#32-inmemoryessionstore)
+  - [3.2 InMemorySessionStore](#32-inmemorysessionstore)
   - [3.3 AzureSessionStore](#33-azuresessionstore)
   - [3.4 Token Hashing and User Isolation](#34-token-hashing-and-user-isolation)
 - [4. How the Copilot SDK Works](#4-how-the-copilot-sdk-works)
