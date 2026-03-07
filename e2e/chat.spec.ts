@@ -44,7 +44,7 @@ test("page loads and shows connected status", async ({ page }) => {
   await expect(statusDot).not.toHaveClass(/disconnected/, { timeout: 15_000 });
 
   const statusText = page.locator("#status-text");
-  await expect(statusText).toHaveText(/Connected|CLI ready/, { timeout: 15_000 });
+  await expect(statusText).toHaveText(/Connected|client/, { timeout: 15_000 });
 });
 
 test("health API reports storage backend", async ({ request }) => {

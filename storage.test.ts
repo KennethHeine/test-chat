@@ -222,6 +222,68 @@ async function testOverwriteMessages(): Promise<void> {
   assert(messages.length === 2, "Should overwrite, not append");
 }
 
+async function testSdkSessionIdPersistence(): Promise<void> {
+  const store = new InMemorySessionStore();
+  const meta: SessionMetadata = {
+    id: "session-sdk-1",
+    title: "SDK session test",
+    model: "gpt-4.1",
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    sdkSessionId: "sdk-abc-123",
+  };
+
+  await store.saveSession("user1", meta);
+  const retrieved = await store.getSession("user1", "session-sdk-1");
+
+  assert(retrieved !== null, "Should find the session");
+  assert(retrieved!.sdkSessionId === "sdk-abc-123", "SDK session ID should persist");
+}
+
+async function testSdkSessionIdOptional(): Promise<void> {
+  const store = new InMemorySessionStore();
+  const meta: SessionMetadata = {
+    id: "session-no-sdk",
+    title: "No SDK ID",
+    model: "gpt-4.1",
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+
+  await store.saveSession("user1", meta);
+  const retrieved = await store.getSession("user1", "session-no-sdk");
+
+  assert(retrieved !== null, "Should find the session");
+  assert(retrieved!.sdkSessionId === undefined, "SDK session ID should be undefined when not set");
+}
+
+async function testSdkSessionIdUpdate(): Promise<void> {
+  const store = new InMemorySessionStore();
+
+  // Create without SDK session ID
+  await store.saveSession("user1", {
+    id: "s-update",
+    title: "Update test",
+    model: "gpt-4.1",
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  });
+
+  // Update with SDK session ID
+  await store.saveSession("user1", {
+    id: "s-update",
+    title: "Update test",
+    model: "gpt-4.1",
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    sdkSessionId: "sdk-new-id",
+  });
+
+  const session = await store.getSession("user1", "s-update");
+  assert(session !== null, "Session should exist");
+  assert(session!.sdkSessionId === "sdk-new-id", "SDK session ID should be updated");
+}
+
 // ============================================================
 // Main
 // ============================================================
@@ -246,6 +308,11 @@ async function main() {
   await run("getMessages returns empty for non-existent", testGetMessagesEmpty);
   await run("saveSession updates existing session", testUpdateSession);
   await run("saveMessages overwrites existing messages", testOverwriteMessages);
+
+  console.log("\n── SDK Session ID (Phase 2.3) ──\n");
+  await run("sdkSessionId persists in session metadata", testSdkSessionIdPersistence);
+  await run("sdkSessionId is optional", testSdkSessionIdOptional);
+  await run("sdkSessionId can be updated", testSdkSessionIdUpdate);
 
   console.log("\n═══════════════════════════════════════════════");
   console.log(`  ${passed + failed} tests: ${passed} passed, ${failed} failed`);
