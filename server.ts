@@ -1,10 +1,11 @@
 import express, { Request, Response } from "express";
 import { CopilotClient, CopilotSession, approveAll } from "@github/copilot-sdk";
-import { execSync } from "child_process";
+import type { SessionConfig } from "@github/copilot-sdk";
 import { fileURLToPath } from "url";
 import { config } from "dotenv";
 import path from "path";
 import { createSessionStore, hashToken, AzureSessionStore, InMemorySessionStore, type SessionStore } from "./storage.js";
+import { createGitHubTools } from "./tools.js";
 
 // --- System Message for Agent Orchestration ---
 const ORCHESTRATOR_SYSTEM_MESSAGE = `You are a coding task orchestrator. Your role is to help users research codebases, plan coding tasks, and coordinate work across repositories.
@@ -69,27 +70,103 @@ function sessionKey(token: string, sessionId: string): string {
 
 // --- Helpers ---
 
-function isCopilotCliAvailable(): boolean {
-  try {
-    execSync("copilot --version", { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 function generateSessionId(): string {
   return crypto.randomUUID();
 }
 
+// Resolve or create a CopilotSession — handles resumption (Phase 2.3), tools (2.1), and hooks (2.4)
+async function resolveSession(
+  client: CopilotClient,
+  token: string,
+  sid: string,
+  model: string,
+  message: string
+): Promise<CopilotSession> {
+  // Phase 2.3: Try to resume an existing SDK session
+  const tHash = await hashToken(token);
+  const existingMeta = await sessionStore.getSession(tHash, sid);
+  if (existingMeta?.sdkSessionId) {
+    try {
+      const resumed = await client.resumeSession(existingMeta.sdkSessionId, {
+        onPermissionRequest: approveAll,
+      });
+      sessions.set(sessionKey(token, sid), resumed);
+      return resumed;
+    } catch {
+      // Resume failed — create new session below
+    }
+  }
+
+  // Phase 2.1: Create session with GitHub API tools
+  // Phase 2.4: Create session with hooks for task tracking
+  const sessionConfig: SessionConfig = {
+    model,
+    streaming: true,
+    onPermissionRequest: approveAll,
+    systemMessage: {
+      content: ORCHESTRATOR_SYSTEM_MESSAGE,
+    },
+    tools: createGitHubTools(token),
+    hooks: {
+      onPreToolUse: async (input) => {
+        console.log(`[hook] pre-tool: ${input.toolName}`);
+        return { permissionDecision: "allow" as const };
+      },
+      onPostToolUse: async (input) => {
+        console.log(`[hook] post-tool: ${input.toolName}`);
+        return {};
+      },
+      onSessionStart: async (input) => {
+        console.log(`[hook] session-start: ${input.source}`);
+        return {};
+      },
+      onSessionEnd: async (input) => {
+        console.log(`[hook] session-end: ${input.reason}`);
+      },
+      onErrorOccurred: async (input) => {
+        console.error(`[hook] error: ${input.error} (${input.errorContext})`);
+        return { errorHandling: input.recoverable ? "retry" as const : "abort" as const };
+      },
+    },
+  };
+
+  const session = await client.createSession(sessionConfig);
+  sessions.set(sessionKey(token, sid), session);
+
+  // Store session metadata with SDK session ID for resumption
+  const title = message.length > 50 ? message.slice(0, 50) + "…" : message;
+  const now = new Date().toISOString();
+  await sessionStore.saveSession(tHash, {
+    id: sid,
+    title,
+    model,
+    createdAt: now,
+    updatedAt: now,
+    sdkSessionId: session.sessionId,
+  });
+
+  return session;
+}
+
 // --- Routes ---
 
-// Health check (no auth required)
+// Health check (no auth required) — Phase 1.6: Enhanced health monitoring
 app.get("/api/health", (_req: Request, res: Response) => {
+  // Aggregate connection state from active clients
+  const clientCount = clients.size;
+  const sessionCount = sessions.size;
+  const connectedClients = [...clients.values()].filter(
+    (c) => c.getState() === "connected"
+  ).length;
+
   res.json({
     status: "ok",
-    copilotCli: isCopilotCliAvailable(),
     storage: sessionStore instanceof AzureSessionStore ? "azure" : "memory",
+    clients: {
+      total: clientCount,
+      connected: connectedClients,
+    },
+    activeSessions: sessionCount,
   });
 });
 
@@ -224,35 +301,15 @@ app.post("/api/chat", async (req: Request, res: Response) => {
   try {
     const c = await getClientForToken(token);
 
-    let session: CopilotSession;
     let sid = sessionId;
     const key = sid ? sessionKey(token, sid) : "";
+    let session: CopilotSession;
 
     if (sid && sessions.has(key)) {
       session = sessions.get(key)!;
     } else {
       sid = sid || generateSessionId();
-      session = await c.createSession({
-        model: model || "gpt-4.1",
-        streaming: true,
-        onPermissionRequest: approveAll,
-        systemMessage: {
-          content: ORCHESTRATOR_SYSTEM_MESSAGE,
-        },
-      });
-      sessions.set(sessionKey(token, sid), session);
-
-      // Store session metadata
-      const title = message.length > 50 ? message.slice(0, 50) + "…" : message;
-      const now = new Date().toISOString();
-      const tHash = await hashToken(token);
-      await sessionStore.saveSession(tHash, {
-        id: sid,
-        title,
-        model: model || "gpt-4.1",
-        createdAt: now,
-        updatedAt: now,
-      });
+      session = await resolveSession(c, token, sid, model || "gpt-4.1", message);
     }
 
     // Update session last-used time
@@ -375,6 +432,66 @@ app.post("/api/chat/abort", async (req: Request, res: Response) => {
     res.json({ aborted: true, sessionId: sid });
   } catch (err: any) {
     res.status(500).json({ error: err.message || "Failed to abort" });
+  }
+});
+
+// Phase 2.5: Switch model mid-conversation
+app.post("/api/chat/model", async (req: Request, res: Response) => {
+  const token = extractToken(req);
+  if (!token) {
+    res.status(401).json({ error: "Missing token." });
+    return;
+  }
+
+  const { sessionId: sid, model } = req.body;
+  if (!sid) {
+    res.status(400).json({ error: "Missing sessionId" });
+    return;
+  }
+  if (!model || typeof model !== "string") {
+    res.status(400).json({ error: "Missing or invalid 'model' field" });
+    return;
+  }
+
+  const key = sessionKey(token, sid);
+  const session = sessions.get(key);
+  if (!session) {
+    res.status(404).json({ error: "Session not found" });
+    return;
+  }
+
+  try {
+    await session.setModel(model);
+
+    // Update stored session metadata
+    const tHash = await hashToken(token);
+    const meta = await sessionStore.getSession(tHash, sid);
+    if (meta) {
+      meta.model = model;
+      meta.updatedAt = new Date().toISOString();
+      await sessionStore.saveSession(tHash, meta);
+    }
+
+    res.json({ switched: true, sessionId: sid, model });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Failed to switch model" });
+  }
+});
+
+// Phase 2.6: Quota monitoring
+app.get("/api/quota", async (req: Request, res: Response) => {
+  const token = extractToken(req);
+  if (!token) {
+    res.status(401).json({ error: "Missing token. Provide Authorization: Bearer <token> header." });
+    return;
+  }
+
+  try {
+    const c = await getClientForToken(token);
+    const quota = await c.rpc.account.getQuota();
+    res.json({ quota });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Failed to fetch quota" });
   }
 });
 

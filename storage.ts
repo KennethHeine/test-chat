@@ -10,6 +10,7 @@ export interface SessionMetadata {
   model: string;
   createdAt: string;
   updatedAt: string;
+  sdkSessionId?: string;
 }
 
 export interface ChatMessage {
