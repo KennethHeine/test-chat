@@ -164,20 +164,20 @@ The frontend is vanilla HTML, CSS, and JavaScript — no frameworks, no build st
 ```
 ┌─────────────────────────────────────────────────────────┐
 │  Header                                                 │
-│  [Token input] [Save Token]  [Model ▾]  [New Chat]     │
-├─────────────────────────────────────────────────────────┤
-│                                                         │
-│  Messages Area                                          │
-│  ┌─────────────────────────────────────────────┐        │
-│  │ You: What is TypeScript?            (blue) ──┤       │
-│  │                                              │       │
-│  │ ├── Copilot: TypeScript is...       (dark)   │       │
-│  │ │   ▌ (typing indicator while streaming)     │       │
-│  └─────────────────────────────────────────────┘        │
-│                                                         │
-├─────────────────────────────────────────────────────────┤
-│  [Message input textarea              ] [Send]          │
-├─────────────────────────────────────────────────────────┤
+│  [☰] [Token input] [Save Token]  [Model ▾]  [New Chat] │
+├───────────┬─────────────────────────────────────────────┤
+│ SESSIONS  │                                             │
+│           │  Messages Area                              │
+│ ▪ Chat 1  │  ┌─────────────────────────────────┐        │
+│   2m ago  │  │ You: What is TypeScript? (blue)──┤       │
+│           │  │                                  │       │
+│ ▪ Chat 2  │  │ ├── Copilot: TypeScript   (dark) │       │
+│   1h ago  │  │ │   is... ▌ (typing indicator)   │       │
+│           │  └─────────────────────────────────┘        │
+│           │                                             │
+│           ├─────────────────────────────────────────────┤
+│           │  [Message input textarea        ] [Send]    │
+├───────────┴─────────────────────────────────────────────┤
 │  ● Connected                                            │
 └─────────────────────────────────────────────────────────┘
 ```
@@ -192,6 +192,25 @@ The frontend manages minimal state in two variables:
 |----------|------|---------|
 | `sessionId` | `string \| null` | Current session ID for multi-turn conversations. Reset to `null` on "New Chat". |
 | `isStreaming` | `boolean` | Prevents double-sending while a response is being streamed. |
+
+### Session Persistence (Frontend)
+
+Sessions are persisted through a dual-layer caching strategy:
+
+1. **`localStorage`** — fast cache for instant UI rendering on page load
+2. **Backend API** (`/api/sessions`, `/api/sessions/:id/messages`) — persistent source of truth
+
+On page load or token save:
+1. Render session sidebar from `localStorage` immediately
+2. Fetch sessions from `/api/sessions` in the background
+3. Merge backend sessions into `localStorage` (backend wins on conflicts)
+4. Re-render the sidebar if any changes were found
+
+When saving messages:
+1. Save to `localStorage` immediately (fast, synchronous)
+2. Fire-and-forget `PUT /api/sessions/:id/messages` to persist to backend
+
+This ensures the UI is always responsive while the backend provides cross-device persistence.
 
 ### Token Management
 
@@ -299,6 +318,7 @@ Internet
 | [`express`](https://expressjs.com/) | Web server framework |
 | [`@azure/data-tables`](https://github.com/Azure/azure-sdk-for-js) | Azure Table Storage client for session metadata |
 | [`@azure/storage-blob`](https://github.com/Azure/azure-sdk-for-js) | Azure Blob Storage client for chat message history |
+| [`@azure/identity`](https://github.com/Azure/azure-sdk-for-js) | DefaultAzureCredential for managed identity auth to Storage |
 | [`dotenv`](https://github.com/motdotla/dotenv) | Loads environment variables from `.env` |
 | [`tsx`](https://github.com/privatenumber/tsx) | Runs TypeScript directly without a compile step |
 | [`typescript`](https://www.typescriptlang.org/) | Type checking (`npx tsc --noEmit`) |

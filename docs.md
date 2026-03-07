@@ -101,15 +101,20 @@ npm start
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `GITHUB_TOKEN` | Yes* | — | GitHub PAT with Copilot access. *Not required if you used `copilot auth login` |
+| `COPILOT_GITHUB_TOKEN` | No | — | Server-side fallback token for testing/CI. In normal use, each user provides their own token via the web UI. |
 | `PORT` | No | `3000` | Server port |
+| `AZURE_STORAGE_ACCOUNT_NAME` | No | — | Azure Storage account name for persistent sessions. Uses managed identity (DefaultAzureCredential). When empty, uses in-memory storage. |
 
 ### npm Scripts
 
 | Script | Command | Description |
 |--------|---------|-------------|
 | `npm start` | `npx tsx server.ts` | Start the web server |
-| `npm test` | `npx tsx test.ts` | Run automated smoke tests |
+| `npm test` | `npx tsx test.ts` | Run integration tests (requires `COPILOT_GITHUB_TOKEN`) |
+| `npm run test:storage` | `npx tsx storage.test.ts` | Run storage unit tests (offline, no token needed) |
+| `npm run test:e2e` | `npx playwright test` | Run Playwright E2E tests |
+| `npm run test:e2e:local` | `npx playwright test --project=local` | E2E tests against local server |
+| `npm run test:e2e:prod` | `npx playwright test --project=prod` | E2E tests against production |
 
 ---
 
@@ -161,7 +166,7 @@ Health check endpoint.
 {
   "status": "ok",
   "copilotCli": true,
-  "authenticated": true
+  "storage": "memory"
 }
 ```
 
@@ -169,7 +174,27 @@ Health check endpoint.
 |-------|------|-------------|
 | `status` | string | `"ok"` if server is running |
 | `copilotCli` | boolean | Whether `copilot` CLI is found on PATH |
-| `authenticated` | boolean | Whether a GitHub token is configured |
+| `storage` | string | `"memory"` or `"azure"` — which storage backend is active |
+
+### `GET /api/models`
+
+Lists available AI models. Requires `Authorization: Bearer <token>` header.
+
+### `GET /api/sessions`
+
+Lists all sessions for the authenticated user. Requires `Authorization: Bearer <token>` header.
+
+### `DELETE /api/sessions/:id`
+
+Deletes a session and its messages. Returns 404 if the session doesn't exist.
+
+### `GET /api/sessions/:id/messages`
+
+Gets chat messages for a session.
+
+### `PUT /api/sessions/:id/messages`
+
+Saves chat messages for a session.
 
 ---
 
@@ -177,16 +202,28 @@ Health check endpoint.
 
 ```
 test-chat/
-├── server.ts          # Express backend — CopilotClient, session management, SSE streaming
+├── server.ts              # Express backend — API routes, SDK integration, SSE streaming
+├── storage.ts             # Storage abstraction — Azure Table/Blob + in-memory fallback
+├── storage.test.ts        # Unit tests for storage module
 ├── public/
-│   ├── index.html     # Chat UI — messages, input, model selector (inline CSS)
-│   └── app.js         # Frontend logic — send messages, parse SSE, render streaming
-├── test.ts            # Automated smoke tests (health check + optional chat test)
-├── package.json       # Dependencies & scripts
-├── tsconfig.json      # TypeScript configuration
-├── .env.example       # Environment variable template
-├── .gitignore         # node_modules, .env
-└── README.md          # Setup instructions (summary of this doc)
+│   ├── index.html         # Chat UI — GitHub dark theme, model selector, session sidebar
+│   ├── app.js             # Frontend logic — token management, SSE parsing, session management
+│   └── staticwebapp.config.json  # Azure SWA routing config
+├── test.ts                # Integration tests — SDK direct + server HTTP tests
+├── e2e/
+│   └── chat.spec.ts       # Playwright E2E tests
+├── infra/
+│   └── main.bicep         # Azure infrastructure (Container Apps + SWA + Storage Account)
+├── package.json           # Dependencies & scripts
+├── tsconfig.json          # TypeScript config (ES2022, strict, bundler resolution)
+├── Dockerfile             # Production container (node:22-alpine)
+├── .env.example           # Environment variable template
+├── .gitignore             # node_modules, .env
+├── ARCHITECTURE.md        # Application architecture overview
+├── TESTING.md             # Test documentation
+├── AZURE_DEPLOYMENT.md    # Azure deployment guide
+├── SCALING.md             # Container App scaling guide
+└── README.md              # Setup instructions
 ```
 
 ---
@@ -195,12 +232,12 @@ test-chat/
 
 ### SDK Usage (server.ts)
 
-The backend creates a single `CopilotClient` instance on startup. Each conversation is a `CopilotSession`:
+The backend creates a per-user `CopilotClient` instance. Each conversation is a `CopilotSession`:
 
 ```typescript
-// Initialization (once)
-import { CopilotClient } from "@github/copilot-sdk";
-const client = new CopilotClient({ githubToken: process.env.GITHUB_TOKEN });
+// Per-user clients (one per unique token)
+const clients = new Map<string, CopilotClient>();
+const client = new CopilotClient({ githubToken: token });
 await client.start();
 
 // Per conversation
@@ -222,8 +259,9 @@ await session.send({ prompt: "Hello!" });
 
 - Sessions are stored in a `Map<string, CopilotSession>` in server memory (for active SDK sessions)
 - Session metadata and chat messages are persisted via the `SessionStore` interface (`storage.ts`)
-- **Azure mode**: Uses Table Storage for metadata and Blob Storage for messages (when `AZURE_STORAGE_ACCOUNT_NAME` is set, authenticates via managed identity)
-- **Memory mode**: Falls back to in-memory Maps (data lost on restart)
+- **Azure mode**: Uses Table Storage for metadata and Blob Storage for messages (when `AZURE_STORAGE_ACCOUNT_NAME` is set, authenticates via managed identity / `DefaultAzureCredential`)
+- **Memory mode**: Falls back to in-memory Maps (data lost on restart). If Azure init fails at startup, the server automatically falls back to memory mode.
+- The frontend caches sessions in `localStorage` for instant UI rendering, and syncs with the backend on load
 - Creating a new chat = creating a new session
 - Sessions are cleaned up when the server stops (`client.stop()`)
 
@@ -312,17 +350,18 @@ All tests passed!
 
 For AI agents running this app autonomously:
 
-1. **Install**: `npm install` in the project root
-2. **Configure**: Ensure `GITHUB_TOKEN` is set in `.env` (or as env var)
+1. **Install**: `npm ci` in the project root
+2. **Configure**: Ensure `COPILOT_GITHUB_TOKEN` is set in `.env` (or as env var)
 3. **Verify prerequisites**: Run `copilot --version` to check CLI
-4. **Test**: Run `npm test` — check exit code 0
+4. **Test**: Run `npm run test:storage` (offline), or `npm test` (requires token) — check exit code 0
 5. **Start**: Run `npm start` — server listens on port 3000
-6. **Interact**: Send POST to `http://localhost:3000/api/chat` with JSON body
+6. **Interact**: Send POST to `http://localhost:3000/api/chat` with JSON body and `Authorization: Bearer <token>` header
 7. **Stop**: Ctrl+C or kill the process
 
 **Minimal API test (curl):**
 ```bash
 curl -N -X POST http://localhost:3000/api/chat \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <your-github-token>" \
   -d '{"message":"Say hello in one word","model":"gpt-4.1"}'
 ```

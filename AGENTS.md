@@ -75,8 +75,12 @@
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| GET | `/api/health` | None | Server status |
+| GET | `/api/health` | None | Server status + storage backend type |
 | GET | `/api/models` | Bearer token | List available Copilot models |
+| GET | `/api/sessions` | Bearer token | List all sessions for the user |
+| DELETE | `/api/sessions/:id` | Bearer token | Delete a session and its messages |
+| GET | `/api/sessions/:id/messages` | Bearer token | Get chat messages for a session |
+| PUT | `/api/sessions/:id/messages` | Bearer token | Save chat messages for a session |
 | POST | `/api/chat` | Bearer token | SSE streaming chat |
 
 ## Guardrails & Safety

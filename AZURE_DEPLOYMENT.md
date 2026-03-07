@@ -24,7 +24,7 @@ Deploy the chat app on Azure using **Static Web Apps** (frontend) and **Containe
                                     └──────────────────────────────┘
 ```
 
-**How it works:** Static Web Apps serves the frontend. Requests to `/api/*` are proxied to the Container App backend via a [linked backend](https://learn.microsoft.com/azure/static-web-apps/apis-container-apps). The Container App persists session data to Azure Storage (Table Storage for metadata, Blob Storage for chat messages). Users never talk directly to the Container App or Storage Account.
+**How it works:** Static Web Apps serves the frontend. Requests to `/api/*` are proxied to the Container App backend via a [linked backend](https://learn.microsoft.com/azure/static-web-apps/apis-container-apps). The Container App authenticates to Azure Storage via **managed identity** (system-assigned identity with Storage Blob Data Contributor and Storage Table Data Contributor RBAC roles). Users never talk directly to the Container App or Storage Account.
 
 ## Estimated Monthly Cost
 

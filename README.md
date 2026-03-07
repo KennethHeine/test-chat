@@ -53,7 +53,9 @@ Session metadata and chat messages can optionally be persisted to **Azure Storag
 | **Table Storage** | Session metadata (id, title, model, timestamps) | Fast key-value lookups per user |
 | **Blob Storage** | Chat message history (JSON per session) | Stores full conversation text |
 
-When `AZURE_STORAGE_ACCOUNT_NAME` is set, the server uses Azure Storage with managed identity (DefaultAzureCredential). Otherwise, it falls back to **in-memory storage** (data lost on restart). The frontend also caches sessions in `localStorage` for instant UI rendering.
+When `AZURE_STORAGE_ACCOUNT_NAME` is set, the server uses Azure Storage with managed identity (DefaultAzureCredential). Otherwise, it falls back to **in-memory storage** (data lost on restart). If Azure Storage initialization fails at startup, the server automatically falls back to in-memory storage.
+
+The frontend caches sessions in `localStorage` for instant rendering and syncs with the backend on load and after saving a token. Messages are persisted to the backend asynchronously after each chat response.
 
 ## Prerequisites
 
