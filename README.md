@@ -168,6 +168,7 @@ test-chat/
 ├── .env                   # Local config (gitignored)
 ├── .gitignore             # node_modules, .env, dist
 ├── docs.md                # Detailed project documentation
+├── ARCHITECTURE.md        # Application architecture overview
 ├── TESTING.md             # E2E and integration test documentation
 └── README.md              # This file
 ```
