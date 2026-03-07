@@ -3,6 +3,7 @@ import { CopilotClient, CopilotSession, approveAll } from "@github/copilot-sdk";
 import { execSync } from "child_process";
 import { fileURLToPath } from "url";
 import { config } from "dotenv";
+import { randomBytes } from "crypto";
 import path from "path";
 
 config(); // load .env
@@ -194,7 +195,7 @@ app.get("/api/auth/github", (_req: Request, res: Response) => {
     return;
   }
 
-  const state = crypto.randomUUID();
+  const state = randomBytes(32).toString("hex");
   oauthStates.set(state, Date.now() + OAUTH_STATE_TTL_MS);
 
   const params = new URLSearchParams({
@@ -244,6 +245,11 @@ app.get("/api/auth/github/callback", async (req: Request, res: Response) => {
       return;
     }
 
+    // Safely encode the token for embedding in HTML script
+    const safeToken = JSON.stringify(tokenData.access_token)
+      .replace(/</g, "\\u003c")
+      .replace(/>/g, "\\u003e");
+
     // Return a small HTML page that stores the token and redirects
     res.setHeader("Content-Type", "text/html");
     res.send(`<!DOCTYPE html>
@@ -251,7 +257,7 @@ app.get("/api/auth/github/callback", async (req: Request, res: Response) => {
 <body>
 <p>Signing in...</p>
 <script>
-  localStorage.setItem("copilot_github_token", ${JSON.stringify(tokenData.access_token)});
+  localStorage.setItem("copilot_github_token", ${safeToken});
   localStorage.setItem("copilot_auth_method", "oauth");
   window.location.href = "/";
 </script>
