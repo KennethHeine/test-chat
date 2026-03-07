@@ -247,6 +247,10 @@
       Copilot Chat
     </div>
     <div class="controls">
+      <input type="password" id="token-input" placeholder="GitHub token (ghp_... or github_pat_...)" spellcheck="false" autocomplete="off"
+        style="width: 260px; background: var(--color-bg-tertiary); color: var(--color-text); border: 1px solid var(--color-border);
+        border-radius: var(--radius); padding: 5px 8px; font-family: var(--font-sans); font-size: 13px; outline: none;" />
+      <button class="btn" id="save-token-btn" title="Save token to browser">Save Token</button>
       <select id="model-select" title="Select model">
         <option value="gpt-4.1">Loading models...</option>
       </select>

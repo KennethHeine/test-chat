@@ -9,7 +9,7 @@ const BASE = `http://localhost:${PORT}`;
 const FREE_MODEL = "gpt-4.1"; // 0x premium requests on paid plans
 
 function buildClientOptions() {
-  const token = process.env.GITHUB_TOKEN;
+  const token = process.env.COPILOT_GITHUB_TOKEN;
   if (token) return { githubToken: token };
   return { useLoggedInUser: true };
 }
@@ -152,6 +152,12 @@ async function testSdkMultiTurn(): Promise<void> {
 
 let serverProcess: ChildProcess | null = null;
 
+function testAuthHeaders(): Record<string, string> {
+  const token = process.env.COPILOT_GITHUB_TOKEN;
+  if (token) return { Authorization: `Bearer ${token}` };
+  return {};
+}
+
 async function waitForServer(maxMs = 15000): Promise<boolean> {
   const start = Date.now();
   while (Date.now() - start < maxMs) {
@@ -170,11 +176,10 @@ async function testServerHealth(): Promise<void> {
   const res = await fetch(`${BASE}/api/health`);
   const data = await res.json();
   if (data.status !== "ok") throw new Error(`Expected "ok", got "${data.status}"`);
-  if (!data.authenticated) throw new Error("Server reports not authenticated");
 }
 
 async function testServerModels(): Promise<void> {
-  const res = await fetch(`${BASE}/api/models`);
+  const res = await fetch(`${BASE}/api/models`, { headers: testAuthHeaders() });
   const data = await res.json();
   if (!data.models || !Array.isArray(data.models) || data.models.length === 0) {
     throw new Error("No models returned from /api/models");
@@ -185,7 +190,7 @@ async function testServerModels(): Promise<void> {
 async function testServerChat(): Promise<void> {
   const res = await fetch(`${BASE}/api/chat`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
     body: JSON.stringify({
       message: "Reply with exactly: SERVER_TEST_OK",
       model: FREE_MODEL,
@@ -225,7 +230,7 @@ async function testServerChat(): Promise<void> {
 // ============================================================
 
 async function main() {
-  // Auth: uses GITHUB_TOKEN from .env if set, otherwise falls back to gh CLI auth
+  // Auth: uses COPILOT_GITHUB_TOKEN from .env if set, otherwise falls back to gh CLI auth
 
   console.log("═══════════════════════════════════════════════");
   console.log("  Copilot Chat — Integration Tests");

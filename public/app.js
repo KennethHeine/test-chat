@@ -11,10 +11,63 @@ const newChatBtn = document.getElementById("new-chat-btn");
 const modelSelect = document.getElementById("model-select");
 const statusDot = document.getElementById("status-dot");
 const statusText = document.getElementById("status-text");
+const tokenInput = document.getElementById("token-input");
+const saveTokenBtn = document.getElementById("save-token-btn");
+
+// --- Token Management ---
+function getToken() {
+  return localStorage.getItem("copilot_github_token") || "";
+}
+
+function saveToken(token) {
+  if (token) {
+    localStorage.setItem("copilot_github_token", token);
+  } else {
+    localStorage.removeItem("copilot_github_token");
+  }
+  updateTokenUI();
+}
+
+function updateTokenUI() {
+  const token = getToken();
+  if (token) {
+    tokenInput.value = "";
+    tokenInput.placeholder = "Token saved ✓  (click Save to clear)";
+    saveTokenBtn.textContent = "Clear Token";
+  } else {
+    tokenInput.placeholder = "GitHub token (ghp_... or github_pat_...)";
+    saveTokenBtn.textContent = "Save Token";
+  }
+}
+
+function authHeaders() {
+  const token = getToken();
+  const headers = {};
+  if (token) {
+    headers["Authorization"] = "Bearer " + token;
+  }
+  return headers;
+}
 
 // --- Init ---
+updateTokenUI();
 checkHealth();
-loadModels();
+if (getToken()) loadModels();
+
+saveTokenBtn.addEventListener("click", () => {
+  const current = getToken();
+  if (current) {
+    // Clear token
+    saveToken("");
+    modelSelect.innerHTML = '<option value="gpt-4.1">Enter token to load models</option>';
+  } else {
+    // Save new token
+    const val = tokenInput.value.trim();
+    if (!val) return;
+    saveToken(val);
+    loadModels();
+  }
+});
 
 inputEl.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey) {
@@ -47,7 +100,7 @@ async function checkHealth() {
       statusDot.classList.remove("disconnected");
       const parts = [];
       if (data.copilotCli) parts.push("CLI ready");
-      if (data.authenticated) parts.push("Authenticated");
+      if (getToken()) parts.push("Token set");
       statusText.textContent = parts.length ? parts.join(" · ") : "Connected";
     } else {
       setDisconnected("Server error");
@@ -65,7 +118,11 @@ function setDisconnected(msg) {
 // --- Load Models ---
 async function loadModels() {
   try {
-    const res = await fetch("/api/models");
+    const res = await fetch("/api/models", { headers: authHeaders() });
+    if (res.status === 401) {
+      modelSelect.innerHTML = '<option value="gpt-4.1">Enter token to load models</option>';
+      return;
+    }
     const data = await res.json();
     if (data.models && Array.isArray(data.models)) {
       modelSelect.innerHTML = "";
@@ -83,7 +140,7 @@ async function loadModels() {
       }
     }
   } catch {
-    modelSelect.innerHTML = '<option value="gpt-4.1">gpt-4.1</option>';
+    modelSelect.innerHTML = '<option value="gpt-4.1">Enter token to load models</option>';
   }
 }
 
@@ -116,7 +173,7 @@ async function sendMessage() {
 
     const response = await fetch("/api/chat", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...authHeaders() },
       body,
     });
 

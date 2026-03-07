@@ -2,12 +2,17 @@
 
 A minimal web application that provides a chat interface to **GitHub Copilot**, using the official [`@github/copilot-sdk`](https://github.com/github/copilot-sdk). Every message uses the same Copilot engine as github.com and counts toward your premium request quota.
 
+**Multi-user support:** Each user provides their own GitHub token via the web UI. Tokens are stored in the browser's localStorage and sent to the server per-request — the server never stores tokens globally.
+
 ## Architecture
 
 ```
 ┌─────────────┐     HTTP/SSE      ┌──────────────────┐    JSON-RPC     ┌─────────────┐        ┌─────────────────┐
 │   Browser    │  ◄──────────►    │  Express Server   │  ◄──────────►  │ Copilot CLI  │  ◄──►  │ GitHub Copilot  │
-│  (HTML/JS)   │   /api/chat      │  (server.ts)      │   via SDK      │ (server mode)│        │ Backend (cloud) │
+│  (HTML/JS)   │   /api/chat      │  (server.ts)      │   via SDK      │ (per-token)  │        │ Backend (cloud) │
+│  Token in    │  Authorization:  │  Per-user clients  │                │              │        │                 │
+│  localStorage│  Bearer <token>  │  in Map<token,     │                │              │        │                 │
+│              │                  │  CopilotClient>   │                │              │        │                 │
 └─────────────┘                   └──────────────────┘                 └─────────────┘        └─────────────────┘
 ```
 
@@ -15,34 +20,35 @@ A minimal web application that provides a chat interface to **GitHub Copilot**, 
 
 | Component | File(s) | Role |
 |-----------|---------|------|
-| **Frontend** | `public/index.html`, `public/app.js` | GitHub dark-themed chat UI. Sends messages via fetch, reads streaming responses via SSE, renders tokens incrementally. |
-| **Express Server** | `server.ts` | Hosts static files, manages Copilot sessions, proxies chat through SDK, streams responses as Server-Sent Events. |
+| **Frontend** | `public/index.html`, `public/app.js` | GitHub dark-themed chat UI. Users enter their token in the header, which is saved to localStorage and sent as `Authorization: Bearer <token>` on every API request. |
+| **Express Server** | `server.ts` | Hosts static files, creates a separate `CopilotClient` per user token, manages sessions keyed by `token:sessionId`, streams responses as SSE. |
 | **Copilot SDK** | `@github/copilot-sdk` | Official TypeScript SDK. Communicates with the Copilot CLI process over JSON-RPC. |
-| **Copilot CLI** | System binary | Headless server mode. Managed automatically by the SDK — spawned on first use, stopped on shutdown. |
+| **Copilot CLI** | System binary | Headless server mode. Managed automatically by the SDK — one instance per user token. |
 
 ### Data Flow
 
-1. User types a message in the browser
-2. Frontend sends `POST /api/chat` with `{ message, sessionId, model }`
-3. Server creates or retrieves a `CopilotSession` from the in-memory session map
-4. SDK fires `assistant.message_delta` events → server writes SSE `delta` events
-5. SDK fires `session.idle` → server writes SSE `done` event with session ID
-6. Frontend parses SSE stream, appends tokens to the chat bubble in real time
+1. User enters their GitHub token in the web UI header and clicks "Save Token"
+2. Token is stored in `localStorage` — never sent to the server except as an auth header
+3. User types a message; frontend sends `POST /api/chat` with `Authorization: Bearer <token>` header
+4. Server extracts the token, gets or creates a `CopilotClient` for that token
+5. Server creates or retrieves a `CopilotSession` from the session map (keyed by `token:sessionId`)
+6. SDK fires `assistant.message_delta` events → server writes SSE `delta` events
+7. SDK fires `session.idle` → server writes SSE `done` event with session ID
+8. Frontend parses SSE stream, appends tokens to the chat bubble in real time
 
 ### Session Management
 
-- Sessions stored in a `Map<string, CopilotSession>` in server memory
+- Clients stored in a `Map<string, CopilotClient>` — one per unique user token
+- Sessions stored in a `Map<string, CopilotSession>` — keyed by `token:sessionId`
 - Each session maintains full conversation history (managed by SDK/CLI)
 - New chat = new session; follow-up messages reuse the same session ID
-- Sessions cleaned up on server shutdown via `client.stop()`
+- All clients cleaned up on server shutdown
 
 ## Prerequisites
 
 - **Node.js 18+** — `node --version`
 - **GitHub Copilot subscription** (Free, Pro, or Pro+)
-- **Authentication** — one of:
-  - `gh` CLI logged in (`gh auth login`) — **recommended**
-  - GitHub fine-grained PAT with Copilot scope in `.env`
+- **GitHub token** — each user needs their own fine-grained PAT with Copilot scope
 
 ## Setup
 
@@ -50,43 +56,49 @@ A minimal web application that provides a chat interface to **GitHub Copilot**, 
 # Install dependencies
 npm install
 
-# Configure (optional — skip if using gh CLI auth)
+# (Optional) Set a fallback token for testing/CI
 cp .env.example .env
-# Edit .env and add GITHUB_TOKEN if not using gh CLI
+# Edit .env and add COPILOT_GITHUB_TOKEN
 
 # Start the server
 npm start
 
-# Open http://localhost:3000
+# Open http://localhost:3000 and enter your token in the header
 ```
 
 ### Environment Variables
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `GITHUB_TOKEN` | No | — | GitHub fine-grained PAT with Copilot scope. If empty, falls back to `gh` CLI auth. |
+| `COPILOT_GITHUB_TOKEN` | No | — | Server-side fallback token for testing/CI. In normal use, each user provides their own token via the web UI. |
 | `PORT` | No | `3000` | Server port |
 
 ### Authentication
 
-The app supports two authentication methods:
+Each user provides their own GitHub token through the web UI:
 
-1. **`gh` CLI auth (recommended)** — Run `gh auth login` once. The SDK detects stored credentials automatically. No token needed in `.env`.
-2. **Fine-grained PAT** — Create a token at https://github.com/settings/tokens with the `copilot` scope. Set it as `GITHUB_TOKEN` in `.env`. Classic PATs (`ghp_`) may not have the required scope — use fine-grained tokens (`github_pat_`).
+1. Create a **fine-grained PAT** at https://github.com/settings/tokens with the `copilot` scope
+2. Open the app in your browser
+3. Paste the token in the input field and click **Save Token**
+4. The token is stored in your browser's `localStorage` and sent as `Authorization: Bearer <token>` on each API request
+
+> **Note:** Classic PATs (`ghp_`) may not have the required Copilot scope — use fine-grained tokens (`github_pat_`).
+
+The server also accepts `COPILOT_GITHUB_TOKEN` in `.env` as a fallback (used when no `Authorization` header is present). This is useful for automated testing and CI.
 
 ## API Endpoints
 
 ### `GET /api/health`
 
-Returns server status, CLI availability, and auth state.
+Returns server status and CLI availability. No auth required.
 
 ```json
-{ "status": "ok", "copilotCli": true, "authenticated": true }
+{ "status": "ok", "copilotCli": true }
 ```
 
 ### `GET /api/models`
 
-Returns available models fetched from `client.listModels()`.
+Returns available models. Requires `Authorization: Bearer <token>` header.
 
 ```json
 { "models": [{ "id": "gpt-4.1", ... }, ...] }
@@ -94,7 +106,7 @@ Returns available models fetched from `client.listModels()`.
 
 ### `POST /api/chat`
 
-Send a message and receive a streaming SSE response.
+Send a message and receive a streaming SSE response. Requires `Authorization: Bearer <token>` header.
 
 **Request:**
 ```json
@@ -127,7 +139,7 @@ The suite has two layers:
 These tests create a `CopilotClient` directly and talk to Copilot:
 
 | Test | What it verifies |
-|------|-----------------|
+|------|------------------|
 | **SDK connect & ping** | Client connects to Copilot CLI subprocess, gets a timestamped ping response |
 | **SDK list models** | `listModels()` returns a non-empty array containing GPT models |
 | **SDK chat (single turn)** | Creates a session, sends a prompt, verifies streaming `assistant.message_delta` events arrive and contain the expected response |
@@ -138,10 +150,10 @@ These tests create a `CopilotClient` directly and talk to Copilot:
 These tests spawn the Express server on port 3099 and hit the HTTP API:
 
 | Test | What it verifies |
-|------|-----------------|
-| **Server health check** | `GET /api/health` returns `{ status: "ok", authenticated: true }` |
-| **Server models endpoint** | `GET /api/models` returns a non-empty model list from the Copilot API |
-| **Server chat (SSE streaming)** | `POST /api/chat` → parses SSE stream → verifies delta events, done event with session ID, and correct response content |
+|------|------------------|
+| **Server health check** | `GET /api/health` returns `{ status: "ok" }` |
+| **Server models endpoint** | `GET /api/models` with auth header returns a non-empty model list |
+| **Server chat (SSE streaming)** | `POST /api/chat` with auth header → parses SSE stream → verifies delta events, done event with session ID, and correct response content |
 
 ### Test Output
 
@@ -180,7 +192,7 @@ These tests spawn the Express server on port 3099 and hit the HTTP API:
 |----------|---------|-------------|
 | `TEST_PORT` | `3099` | Port for the test server (avoids conflict with dev server on 3000) |
 
-Tests use the same auth method as the app: `GITHUB_TOKEN` from `.env` if set, otherwise `gh` CLI credentials.
+Tests use the same auth method: `COPILOT_GITHUB_TOKEN` from `.env` if set, otherwise `gh` CLI credentials. Server API tests send the token via `Authorization` header.
 
 ## File Structure
 
@@ -217,8 +229,8 @@ Models are fetched dynamically from the Copilot API. Pricing depends on your pla
 
 | Issue | Fix |
 |-------|-----|
-| `Failed to list models: 400` | Token lacks Copilot scope. Use a fine-grained PAT (`github_pat_`) with Copilot permission, or switch to `gh` CLI auth. |
-| `Not authenticated` | Set `GITHUB_TOKEN` in `.env` or run `gh auth login`. |
+| `Failed to list models: 400` | Token lacks Copilot scope. Use a fine-grained PAT (`github_pat_`) with Copilot permission. |
+| `401 Missing token` | Enter your GitHub token in the web UI header and click "Save Token", or set `COPILOT_GITHUB_TOKEN` in `.env`. |
 | `EADDRINUSE` | Kill leftover node processes: `Stop-Process -Name node -Force` (Windows) or `pkill node` (macOS/Linux). |
-| Server starts but chat fails | Check `GET /api/health` — verify `authenticated: true` and `copilotCli: true`. |
+| Server starts but chat fails | Check `GET /api/health` — verify `copilotCli: true`. Ensure your token is valid. |
 | Streaming stops mid-response | Network or token issue. Refresh the page and try again. |
