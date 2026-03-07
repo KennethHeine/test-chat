@@ -82,6 +82,9 @@ resource containerAppsEnv 'Microsoft.App/managedEnvironments@2024-03-01' = {
 
 // ---------- Container App (backend API) ----------
 
+var storageKey = storageAccount.listKeys().keys[0].value
+var storageConnectionString = 'DefaultEndpointsProtocol=https;AccountName=${storageAccount.name};AccountKey=${storageKey};EndpointSuffix=core.windows.net'
+
 resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
   name: '${appName}-api'
   location: location
@@ -91,7 +94,7 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
       secrets: [
         {
           name: 'storage-connection'
-          value: storageAccount.listKeys().keys[0].value != '' ? 'DefaultEndpointsProtocol=https;AccountName=${storageAccount.name};AccountKey=${storageAccount.listKeys().keys[0].value};EndpointSuffix=core.windows.net' : ''
+          value: storageConnectionString
         }
       ]
       ingress: {

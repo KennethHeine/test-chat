@@ -248,12 +248,14 @@ async function testServerSessionsList(): Promise<void> {
 }
 
 async function testServerSessionPersistence(): Promise<void> {
+  const TEST_MSG = "PERSIST_TEST_OK";
+
   // Send a chat to create a session
   const chatRes = await fetch(`${BASE}/api/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...testAuthHeaders() },
     body: JSON.stringify({
-      message: "Reply with exactly: PERSIST_TEST_OK",
+      message: `Reply with exactly: ${TEST_MSG}`,
       model: FREE_MODEL,
     }),
   });
@@ -276,8 +278,8 @@ async function testServerSessionPersistence(): Promise<void> {
     headers: { "Content-Type": "application/json", ...testAuthHeaders() },
     body: JSON.stringify({
       messages: [
-        { role: "user", text: "PERSIST_TEST_OK" },
-        { role: "assistant", text: "PERSIST_TEST_OK" },
+        { role: "user", text: TEST_MSG },
+        { role: "assistant", text: TEST_MSG },
       ],
     }),
   });

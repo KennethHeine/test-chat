@@ -115,6 +115,10 @@ export class AzureSessionStore implements SessionStore {
 
   async listSessions(tokenHash: string): Promise<SessionMetadata[]> {
     const result: SessionMetadata[] = [];
+    // Validate tokenHash is hex-only (SHA-256 output) to prevent OData filter injection
+    if (!/^[0-9a-f]+$/.test(tokenHash)) {
+      throw new Error("Invalid token hash format");
+    }
     const iter = this.tableClient.listEntities<SessionMetadata & { partitionKey: string; rowKey: string }>({
       queryOptions: { filter: `PartitionKey eq '${tokenHash}'` },
     });
@@ -180,7 +184,10 @@ export class AzureSessionStore implements SessionStore {
     const blobClient = this.containerClient.getBlockBlobClient(blobName);
     try {
       const response = await blobClient.download(0);
-      const body = await streamToString(response.readableStreamBody!);
+      if (!response.readableStreamBody) {
+        return [];
+      }
+      const body = await streamToString(response.readableStreamBody);
       return JSON.parse(body) as ChatMessage[];
     } catch (err: any) {
       if (err?.statusCode === 404) return [];
