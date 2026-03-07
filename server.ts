@@ -15,6 +15,14 @@ app.use(express.static(path.join(__dirname, "public")));
 
 const PORT = parseInt(process.env.PORT || "3000", 10);
 
+// --- GitHub OAuth Config ---
+const GITHUB_CLIENT_ID = process.env.GITHUB_CLIENT_ID || "";
+const GITHUB_CLIENT_SECRET = process.env.GITHUB_CLIENT_SECRET || "";
+
+// CSRF state tokens for OAuth (state → expiry timestamp)
+const oauthStates = new Map<string, number>();
+const OAUTH_STATE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+
 // --- Per-user Copilot Clients ---
 
 // Key: github token → CopilotClient (one client per user token)
@@ -169,6 +177,87 @@ app.post("/api/chat", async (req: Request, res: Response) => {
   } catch (err: any) {
     res.write(`data: ${JSON.stringify({ type: "error", message: err.message || "Server error" })}\n\n`);
     res.end();
+  }
+});
+
+// --- GitHub OAuth Routes ---
+
+// Check if OAuth is configured
+app.get("/api/auth/github/status", (_req: Request, res: Response) => {
+  res.json({ configured: !!(GITHUB_CLIENT_ID && GITHUB_CLIENT_SECRET) });
+});
+
+// Start OAuth flow — redirect to GitHub
+app.get("/api/auth/github", (_req: Request, res: Response) => {
+  if (!GITHUB_CLIENT_ID || !GITHUB_CLIENT_SECRET) {
+    res.status(501).json({ error: "GitHub OAuth not configured" });
+    return;
+  }
+
+  const state = crypto.randomUUID();
+  oauthStates.set(state, Date.now() + OAUTH_STATE_TTL_MS);
+
+  const params = new URLSearchParams({
+    client_id: GITHUB_CLIENT_ID,
+    scope: "copilot",
+    state,
+  });
+
+  res.redirect(`https://github.com/login/oauth/authorize?${params}`);
+});
+
+// OAuth callback — exchange code for token
+app.get("/api/auth/github/callback", async (req: Request, res: Response) => {
+  const { code, state } = req.query as { code?: string; state?: string };
+
+  if (!code || !state) {
+    res.status(400).send("Missing code or state parameter");
+    return;
+  }
+
+  // Validate CSRF state
+  const expiry = oauthStates.get(state);
+  oauthStates.delete(state);
+  if (!expiry || Date.now() > expiry) {
+    res.status(403).send("Invalid or expired state parameter");
+    return;
+  }
+
+  try {
+    const tokenRes = await fetch("https://github.com/login/oauth/access_token", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify({
+        client_id: GITHUB_CLIENT_ID,
+        client_secret: GITHUB_CLIENT_SECRET,
+        code,
+      }),
+    });
+
+    const tokenData = (await tokenRes.json()) as { access_token?: string; error?: string; error_description?: string };
+
+    if (!tokenData.access_token) {
+      res.status(400).send(`OAuth error: ${tokenData.error_description || tokenData.error || "Unknown error"}`);
+      return;
+    }
+
+    // Return a small HTML page that stores the token and redirects
+    res.setHeader("Content-Type", "text/html");
+    res.send(`<!DOCTYPE html>
+<html><head><title>Signing in...</title></head>
+<body>
+<p>Signing in...</p>
+<script>
+  localStorage.setItem("copilot_github_token", ${JSON.stringify(tokenData.access_token)});
+  localStorage.setItem("copilot_auth_method", "oauth");
+  window.location.href = "/";
+</script>
+</body></html>`);
+  } catch (err: any) {
+    res.status(500).send(`OAuth token exchange failed: ${err.message}`);
   }
 });
 

@@ -13,29 +13,47 @@ const statusDot = document.getElementById("status-dot");
 const statusText = document.getElementById("status-text");
 const tokenInput = document.getElementById("token-input");
 const saveTokenBtn = document.getElementById("save-token-btn");
+const githubLoginBtn = document.getElementById("github-login-btn");
+const authDivider = document.getElementById("auth-divider");
 
 // --- Token Management ---
 function getToken() {
   return localStorage.getItem("copilot_github_token") || "";
 }
 
-function saveToken(token) {
+function getAuthMethod() {
+  return localStorage.getItem("copilot_auth_method") || "token";
+}
+
+function saveToken(token, method) {
   if (token) {
     localStorage.setItem("copilot_github_token", token);
+    localStorage.setItem("copilot_auth_method", method || "token");
   } else {
     localStorage.removeItem("copilot_github_token");
+    localStorage.removeItem("copilot_auth_method");
   }
   updateTokenUI();
 }
 
 function updateTokenUI() {
   const token = getToken();
-  if (token) {
+  const method = getAuthMethod();
+  if (token && method === "oauth") {
+    tokenInput.value = "";
+    tokenInput.placeholder = "Signed in via GitHub OAuth ✓";
+    tokenInput.disabled = true;
+    saveTokenBtn.textContent = "Sign Out";
+    if (githubLoginBtn) githubLoginBtn.style.display = "none";
+    if (authDivider) authDivider.style.display = "none";
+  } else if (token) {
     tokenInput.value = "";
     tokenInput.placeholder = "Token saved ✓  (click Save to clear)";
+    tokenInput.disabled = false;
     saveTokenBtn.textContent = "Clear Token";
   } else {
     tokenInput.placeholder = "GitHub token (ghp_... or github_pat_...)";
+    tokenInput.disabled = false;
     saveTokenBtn.textContent = "Save Token";
   }
 }
@@ -52,19 +70,41 @@ function authHeaders() {
 // --- Init ---
 updateTokenUI();
 checkHealth();
+checkOAuthStatus();
 if (getToken()) loadModels();
+
+// --- GitHub OAuth ---
+async function checkOAuthStatus() {
+  try {
+    const res = await fetch("/api/auth/github/status");
+    const data = await res.json();
+    if (data.configured && githubLoginBtn && !getToken()) {
+      githubLoginBtn.style.display = "inline-flex";
+      if (authDivider) authDivider.style.display = "inline";
+    }
+  } catch {
+    // OAuth not available, hide button
+  }
+}
+
+if (githubLoginBtn) {
+  githubLoginBtn.addEventListener("click", () => {
+    window.location.href = "/api/auth/github";
+  });
+}
 
 saveTokenBtn.addEventListener("click", () => {
   const current = getToken();
   if (current) {
-    // Clear token
+    // Clear token (works for both OAuth and manual tokens)
     saveToken("");
     modelSelect.innerHTML = '<option value="gpt-4.1">Enter token to load models</option>';
+    checkOAuthStatus();
   } else {
     // Save new token
     const val = tokenInput.value.trim();
     if (!val) return;
-    saveToken(val);
+    saveToken(val, "token");
     loadModels();
   }
 });
@@ -100,7 +140,8 @@ async function checkHealth() {
       statusDot.classList.remove("disconnected");
       const parts = [];
       if (data.copilotCli) parts.push("CLI ready");
-      if (getToken()) parts.push("Token set");
+      if (getToken() && getAuthMethod() === "oauth") parts.push("OAuth");
+      else if (getToken()) parts.push("Token set");
       statusText.textContent = parts.length ? parts.join(" · ") : "Connected";
     } else {
       setDisconnected("Server error");
