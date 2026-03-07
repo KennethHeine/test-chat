@@ -35,28 +35,34 @@ Deploy the chat app on Azure using **Static Web Apps** (frontend) and **Containe
 - [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli) v2.60+
 - An Azure subscription
 - Docker (for building the container image)
+- Resource group `rg-test-chat` (managed by [Azure-infrastructure](https://github.com/KennethHeine/Azure-infrastructure))
 
-## Quick Deploy (Azure CLI)
+## CI/CD Deployment (recommended)
+
+Push to `main` and GitHub Actions handles everything:
+
+| Workflow | Trigger | What it does |
+|----------|---------|-------------|
+| `deploy-infra.yml` | `infra/**` changes or manual | Deploys Bicep template to `rg-test-chat` |
+| `deploy-app.yml` | `public/**`, `server.ts`, `Dockerfile` changes or manual | Builds Docker image → pushes to GHCR → updates Container App → deploys SWA |
+
+**Required repo secrets** (provisioned by [Azure-infrastructure](https://github.com/KennethHeine/Azure-infrastructure)):
+- `AZURE_CLIENT_ID`
+- `AZURE_TENANT_ID`
+- `AZURE_SUBSCRIPTION_ID`
+
+## Manual Deploy (Azure CLI)
 
 ### 1. Log in and set variables
 
 ```bash
 az login
 
-RESOURCE_GROUP="test-chat-rg"
-LOCATION="eastus"            # choose a region close to your users
+RESOURCE_GROUP="rg-test-chat"
 APP_NAME="test-chat"
 ```
 
-### 2. Create the resource group
-
-```bash
-az group create --name $RESOURCE_GROUP --location $LOCATION
-```
-
-### 3. Deploy with Bicep
-
-Build and push your container image first (see [Build the Docker Image](#build-the-docker-image) below), then deploy:
+### 2. Deploy infrastructure
 
 ```bash
 az deployment group create \
@@ -64,12 +70,12 @@ az deployment group create \
   --template-file infra/main.bicep \
   --parameters \
       appName=$APP_NAME \
-      containerImage="<your-registry>/test-chat:latest"
+      containerImage=ghcr.io/KennethHeine/test-chat:latest
 ```
 
 The deployment outputs the URLs for both the Static Web App and the Container App.
 
-### 4. Deploy the frontend
+### 3. Deploy the frontend
 
 ```bash
 # Get the deployment token
@@ -90,31 +96,12 @@ npx @azure/static-web-apps-cli deploy ./public \
 # Build locally
 docker build -t test-chat:latest .
 
-# Tag for your registry (Azure Container Registry or GitHub Container Registry)
-docker tag test-chat:latest <your-registry>/test-chat:latest
-
-# Push
-docker push <your-registry>/test-chat:latest
+# Tag and push to GitHub Container Registry
+docker tag test-chat:latest ghcr.io/KennethHeine/test-chat:latest
+docker push ghcr.io/KennethHeine/test-chat:latest
 ```
 
-### Option A: Azure Container Registry
-
-```bash
-# Create an ACR (adds ~$5/month for Basic tier)
-az acr create --name ${APP_NAME}acr --resource-group $RESOURCE_GROUP --sku Basic
-az acr login --name ${APP_NAME}acr
-
-# Build and push in one step
-az acr build --registry ${APP_NAME}acr --image test-chat:latest .
-```
-
-### Option B: GitHub Container Registry (free for public repos)
-
-```bash
-echo $GITHUB_TOKEN | docker login ghcr.io -u USERNAME --password-stdin
-docker tag test-chat:latest ghcr.io/USERNAME/test-chat:latest
-docker push ghcr.io/USERNAME/test-chat:latest
-```
+> The `deploy-app.yml` workflow handles this automatically on push to `main`.
 
 ## Update the Container App
 
@@ -122,9 +109,9 @@ After pushing a new image, update the running app:
 
 ```bash
 az containerapp update \
-  --name "${APP_NAME}-api" \
-  --resource-group $RESOURCE_GROUP \
-  --image <your-registry>/test-chat:latest
+  --name test-chat-api \
+  --resource-group rg-test-chat \
+  --image ghcr.io/KennethHeine/test-chat:latest
 ```
 
 ## Environment Variables
@@ -133,8 +120,8 @@ The Container App needs no mandatory environment variables — users provide the
 
 ```bash
 az containerapp update \
-  --name "${APP_NAME}-api" \
-  --resource-group $RESOURCE_GROUP \
+  --name test-chat-api \
+  --resource-group rg-test-chat \
   --set-env-vars "COPILOT_GITHUB_TOKEN=<token>"
 ```
 
@@ -145,6 +132,10 @@ docker build -t test-chat:latest .
 docker run -p 3000:3000 test-chat:latest
 # Open http://localhost:3000
 ```
+
+## Scaling
+
+See [SCALING.md](SCALING.md) for detailed scaling configuration, including how to change min/max replicas, adjust scaling thresholds, and emergency manual overrides.
 
 ## Alternatives Considered
 

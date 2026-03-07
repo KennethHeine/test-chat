@@ -1,19 +1,13 @@
 targetScope = 'resourceGroup'
 
 @description('Azure region for all resources')
-param location string = resourceGroup().location
+param location string = 'norwayeast'
 
 @description('Base name used to derive resource names')
 param appName string = 'test-chat'
 
-@description('Container image to deploy (e.g. ghcr.io/owner/test-chat:latest)')
+@description('Container image to deploy (e.g. ghcr.io/KennethHeine/test-chat:latest)')
 param containerImage string
-
-@description('GitHub repository URL for the Static Web App')
-param repositoryUrl string = ''
-
-@description('GitHub repository branch for the Static Web App')
-param repositoryBranch string = 'main'
 
 // ---------- Log Analytics (required by Container Apps Environment) ----------
 
@@ -102,8 +96,6 @@ resource staticWebApp 'Microsoft.Web/staticSites@2023-12-01' = {
     tier: 'Free'
   }
   properties: {
-    repositoryUrl: repositoryUrl != '' ? repositoryUrl : null
-    branch: repositoryUrl != '' ? repositoryBranch : null
     buildProperties: {
       appLocation: '/public'
       outputLocation: '/public'
