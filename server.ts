@@ -22,6 +22,16 @@ const clients = new Map<string, CopilotClient>();
 // Key: "token:sessionId" → CopilotSession
 const sessions = new Map<string, CopilotSession>();
 
+// Session metadata for listing/managing sessions
+interface SessionMeta {
+  id: string;
+  title: string;
+  model: string;
+  createdAt: string;
+}
+// Key: "token:sessionId" → SessionMeta
+const sessionMeta = new Map<string, SessionMeta>();
+
 function extractToken(req: Request): string | undefined {
   const authHeader = req.headers.authorization;
   if (authHeader?.startsWith("Bearer ")) {
@@ -86,6 +96,48 @@ app.get("/api/models", async (req: Request, res: Response) => {
   }
 });
 
+// List sessions for the authenticated user
+app.get("/api/sessions", (req: Request, res: Response) => {
+  const token = extractToken(req);
+  if (!token) {
+    res.status(401).json({ error: "Missing token. Provide Authorization: Bearer <token> header." });
+    return;
+  }
+
+  const prefix = `${token}:`;
+  const userSessions: SessionMeta[] = [];
+  for (const [key, meta] of sessionMeta) {
+    if (key.startsWith(prefix)) {
+      userSessions.push(meta);
+    }
+  }
+
+  // Sort by creation time, newest first
+  userSessions.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  res.json({ sessions: userSessions });
+});
+
+// Delete a session
+app.delete("/api/sessions/:id", (req: Request, res: Response) => {
+  const token = extractToken(req);
+  if (!token) {
+    res.status(401).json({ error: "Missing token. Provide Authorization: Bearer <token> header." });
+    return;
+  }
+
+  const sid = req.params.id as string;
+  const key = sessionKey(token, sid);
+
+  if (!sessions.has(key) && !sessionMeta.has(key)) {
+    res.status(404).json({ error: "Session not found" });
+    return;
+  }
+
+  sessions.delete(key);
+  sessionMeta.delete(key);
+  res.json({ deleted: true, sessionId: sid });
+});
+
 // Chat endpoint (SSE streaming)
 app.post("/api/chat", async (req: Request, res: Response) => {
   const token = extractToken(req);
@@ -124,6 +176,15 @@ app.post("/api/chat", async (req: Request, res: Response) => {
         onPermissionRequest: approveAll,
       });
       sessions.set(sessionKey(token, sid), session);
+
+      // Store session metadata
+      const title = message.length > 50 ? message.slice(0, 50) + "…" : message;
+      sessionMeta.set(sessionKey(token, sid), {
+        id: sid,
+        title,
+        model: model || "gpt-4.1",
+        createdAt: new Date().toISOString(),
+      });
     }
 
     // Collect unsubscribe functions
