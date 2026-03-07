@@ -26,12 +26,14 @@ The application follows a layered architecture with four main tiers:
 ```
 test-chat/
 ├── server.ts              # Express backend — API routes, SDK integration, SSE streaming
+├── storage.ts             # Storage abstraction — Azure Table/Blob + in-memory fallback
+├── storage.test.ts        # Unit tests for storage module
 ├── public/                # Frontend (served as static files)
-│   ├── index.html         #   Chat UI — GitHub dark theme, model selector, message area
-│   ├── app.js             #   Frontend logic — token management, SSE parsing, streaming render
+│   ├── index.html         #   Chat UI — GitHub dark theme, model selector, session sidebar
+│   ├── app.js             #   Frontend logic — token management, SSE parsing, session management
 │   └── staticwebapp.config.json  # Azure SWA routing config
 ├── infra/
-│   └── main.bicep         # Azure infrastructure (Container Apps + Static Web Apps)
+│   └── main.bicep         # Azure infrastructure (Container Apps + SWA + Storage Account)
 ├── test.ts                # Integration tests — SDK direct + server HTTP tests
 ├── e2e/
 │   └── chat.spec.ts       # Playwright E2E tests — browser tests against live site
@@ -64,8 +66,12 @@ Request → express.json() → express.static('public') → Route Handler
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| `GET` | `/api/health` | None | Health check — returns server status and Copilot CLI availability |
+| `GET` | `/api/health` | None | Health check — returns server status, Copilot CLI availability, storage backend |
 | `GET` | `/api/models` | Bearer token | Lists available AI models from the Copilot SDK |
+| `GET` | `/api/sessions` | Bearer token | Lists all sessions for the authenticated user |
+| `DELETE` | `/api/sessions/:id` | Bearer token | Deletes a session and its messages |
+| `GET` | `/api/sessions/:id/messages` | Bearer token | Gets chat messages for a session |
+| `PUT` | `/api/sessions/:id/messages` | Bearer token | Saves chat messages for a session |
 | `POST` | `/api/chat` | Bearer token | Sends a chat message and streams the response via SSE |
 
 ### Per-User Client Management
@@ -96,6 +102,19 @@ Chat sessions maintain conversation context across multiple turns. Sessions are 
 - **New chat** → server creates a new session with `crypto.randomUUID()` as the session ID
 - **Follow-up message** → client sends the existing `sessionId`, server reuses that session
 - **New Chat button** → frontend resets `sessionId` to `null`, forcing a new session on next message
+
+### Persistent Storage
+
+Session metadata and chat messages are persisted via a `SessionStore` interface (`storage.ts`), with two implementations:
+
+| Implementation | Backend | When Used |
+|---------------|---------|-----------|
+| `InMemorySessionStore` | JavaScript `Map` objects | Default (no Azure connection string) |
+| `AzureSessionStore` | Azure Table Storage + Blob Storage | When `AZURE_STORAGE_CONNECTION_STRING` is set |
+
+**Azure Table Storage** stores session metadata (partition key = hashed token, row key = session ID), enabling fast per-user lookups. **Azure Blob Storage** stores chat message history as JSON files (`{tokenHash}/{sessionId}.json`), allowing large conversation histories.
+
+The frontend also caches sessions in `localStorage` for instant UI rendering, with the backend as the persistent source of truth.
 
 ### SSE Streaming
 
@@ -258,6 +277,7 @@ Internet
 | **Static Web Apps** | Serves frontend files, proxies `/api/*` to backend | Standard |
 | **Container Apps** | Runs the Express server in a Docker container | Consumption (scale-to-zero) |
 | **Container Apps Environment** | Shared hosting environment for Container Apps | Consumption |
+| **Storage Account** | Persists session metadata (Table) and chat messages (Blob) | Standard LRS |
 | **Log Analytics** | Collects logs from Container Apps | PerGB2018, 30-day retention |
 
 **Scaling:** Replicas scale from 0 to 3 based on concurrent HTTP requests (20 per replica). Scale-to-zero means no cost when idle. See [SCALING.md](SCALING.md) for details.
@@ -277,6 +297,8 @@ Internet
 |---------|---------|
 | [`@github/copilot-sdk`](https://github.com/github/copilot-sdk) | Official SDK for communicating with GitHub Copilot |
 | [`express`](https://expressjs.com/) | Web server framework |
+| [`@azure/data-tables`](https://github.com/Azure/azure-sdk-for-js) | Azure Table Storage client for session metadata |
+| [`@azure/storage-blob`](https://github.com/Azure/azure-sdk-for-js) | Azure Blob Storage client for chat message history |
 | [`dotenv`](https://github.com/motdotla/dotenv) | Loads environment variables from `.env` |
 | [`tsx`](https://github.com/privatenumber/tsx) | Runs TypeScript directly without a compile step |
 | [`typescript`](https://www.typescriptlang.org/) | Type checking (`npx tsc --noEmit`) |
@@ -330,6 +352,7 @@ Clicking "New Chat" resets `sessionId` to `null`, which causes the server to cre
 | `PORT` | No | `3000` | Express server listen port |
 | `NODE_ENV` | No | `development` | Set to `production` in Docker/Azure |
 | `COPILOT_GITHUB_TOKEN` | No | — | Fallback token when no `Authorization` header (for CI/testing) |
+| `AZURE_STORAGE_CONNECTION_STRING` | No | — | Azure Storage connection string for persistent sessions |
 
 For local development, copy `.env.example` to `.env` and fill in the values.
 

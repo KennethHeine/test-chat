@@ -4,6 +4,7 @@ import { execSync } from "child_process";
 import { fileURLToPath } from "url";
 import { config } from "dotenv";
 import path from "path";
+import { createSessionStore, hashToken, AzureSessionStore, type SessionStore } from "./storage.js";
 
 config(); // load .env
 
@@ -15,23 +16,17 @@ app.use(express.static(path.join(__dirname, "public")));
 
 const PORT = parseInt(process.env.PORT || "3000", 10);
 
+// --- Storage ---
+
+const storageConnectionString = process.env.AZURE_STORAGE_CONNECTION_STRING || "";
+const sessionStore: SessionStore = createSessionStore(storageConnectionString || undefined);
+
 // --- Per-user Copilot Clients ---
 
 // Key: github token → CopilotClient (one client per user token)
 const clients = new Map<string, CopilotClient>();
-// Key: "token:sessionId" → CopilotSession
+// Key: "token:sessionId" → CopilotSession (in-memory SDK sessions for active conversations)
 const sessions = new Map<string, CopilotSession>();
-
-// Session metadata for listing/managing sessions
-interface SessionMeta {
-  id: string;
-  title: string;
-  model: string;
-  createdAt: string;
-  updatedAt: string;
-}
-// Key: "token:sessionId" → SessionMeta
-const sessionMeta = new Map<string, SessionMeta>();
 
 function extractToken(req: Request): string | undefined {
   const authHeader = req.headers.authorization;
@@ -78,6 +73,7 @@ app.get("/api/health", (_req: Request, res: Response) => {
   res.json({
     status: "ok",
     copilotCli: isCopilotCliAvailable(),
+    storage: storageConnectionString ? "azure" : "memory",
   });
 });
 
@@ -98,28 +94,24 @@ app.get("/api/models", async (req: Request, res: Response) => {
 });
 
 // List sessions for the authenticated user
-app.get("/api/sessions", (req: Request, res: Response) => {
+app.get("/api/sessions", async (req: Request, res: Response) => {
   const token = extractToken(req);
   if (!token) {
     res.status(401).json({ error: "Missing token. Provide Authorization: Bearer <token> header." });
     return;
   }
 
-  const prefix = `${token}:`;
-  const userSessions: SessionMeta[] = [];
-  for (const [key, meta] of sessionMeta) {
-    if (key.startsWith(prefix)) {
-      userSessions.push(meta);
-    }
+  try {
+    const tHash = await hashToken(token);
+    const userSessions = await sessionStore.listSessions(tHash);
+    res.json({ sessions: userSessions });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Failed to list sessions" });
   }
-
-  // Sort by last update time, newest first
-  userSessions.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
-  res.json({ sessions: userSessions });
 });
 
 // Delete a session
-app.delete("/api/sessions/:id", (req: Request, res: Response) => {
+app.delete("/api/sessions/:id", async (req: Request, res: Response) => {
   const token = extractToken(req);
   if (!token) {
     res.status(401).json({ error: "Missing token. Provide Authorization: Bearer <token> header." });
@@ -127,16 +119,65 @@ app.delete("/api/sessions/:id", (req: Request, res: Response) => {
   }
 
   const sid = req.params.id as string;
-  const key = sessionKey(token, sid);
 
-  if (!sessions.has(key) && !sessionMeta.has(key)) {
-    res.status(404).json({ error: "Session not found" });
+  try {
+    const tHash = await hashToken(token);
+    const existing = await sessionStore.getSession(tHash, sid);
+    if (!existing && !sessions.has(sessionKey(token, sid))) {
+      res.status(404).json({ error: "Session not found" });
+      return;
+    }
+
+    sessions.delete(sessionKey(token, sid));
+    await sessionStore.deleteSession(tHash, sid);
+    res.json({ deleted: true, sessionId: sid });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Failed to delete session" });
+  }
+});
+
+// Get messages for a session
+app.get("/api/sessions/:id/messages", async (req: Request, res: Response) => {
+  const token = extractToken(req);
+  if (!token) {
+    res.status(401).json({ error: "Missing token. Provide Authorization: Bearer <token> header." });
     return;
   }
 
-  sessions.delete(key);
-  sessionMeta.delete(key);
-  res.json({ deleted: true, sessionId: sid });
+  const sid = req.params.id as string;
+
+  try {
+    const tHash = await hashToken(token);
+    const messages = await sessionStore.getMessages(tHash, sid);
+    res.json({ messages });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Failed to get messages" });
+  }
+});
+
+// Save messages for a session
+app.put("/api/sessions/:id/messages", async (req: Request, res: Response) => {
+  const token = extractToken(req);
+  if (!token) {
+    res.status(401).json({ error: "Missing token. Provide Authorization: Bearer <token> header." });
+    return;
+  }
+
+  const sid = req.params.id as string;
+  const { messages } = req.body;
+
+  if (!Array.isArray(messages)) {
+    res.status(400).json({ error: "Missing or invalid 'messages' array" });
+    return;
+  }
+
+  try {
+    const tHash = await hashToken(token);
+    await sessionStore.saveMessages(tHash, sid, messages);
+    res.json({ saved: true, sessionId: sid });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Failed to save messages" });
+  }
 });
 
 // Chat endpoint (SSE streaming)
@@ -181,7 +222,8 @@ app.post("/api/chat", async (req: Request, res: Response) => {
       // Store session metadata
       const title = message.length > 50 ? message.slice(0, 50) + "…" : message;
       const now = new Date().toISOString();
-      sessionMeta.set(sessionKey(token, sid), {
+      const tHash = await hashToken(token);
+      await sessionStore.saveSession(tHash, {
         id: sid,
         title,
         model: model || "gpt-4.1",
@@ -191,10 +233,11 @@ app.post("/api/chat", async (req: Request, res: Response) => {
     }
 
     // Update session last-used time
-    const metaKey = sessionKey(token, sid);
-    const meta = sessionMeta.get(metaKey);
+    const tHash = await hashToken(token);
+    const meta = await sessionStore.getSession(tHash, sid);
     if (meta) {
       meta.updatedAt = new Date().toISOString();
+      await sessionStore.saveSession(tHash, meta);
     }
 
     // Collect unsubscribe functions
@@ -245,20 +288,37 @@ app.post("/api/chat", async (req: Request, res: Response) => {
 
 // --- Start Server ---
 
-const server = app.listen(PORT, () => {
-  console.log(`Server running at http://localhost:${PORT}`);
-});
+async function startServer() {
+  // Initialize Azure storage if configured
+  if (sessionStore instanceof AzureSessionStore) {
+    try {
+      await sessionStore.initialize();
+      console.log("Azure Storage initialized (table + blob)");
+    } catch (err: any) {
+      console.error("Failed to initialize Azure Storage:", err.message);
+      console.log("Falling back to in-memory storage");
+    }
+  } else {
+    console.log("Using in-memory session storage (set AZURE_STORAGE_CONNECTION_STRING for persistence)");
+  }
 
-// Graceful shutdown
-async function shutdown() {
-  console.log("\nShutting down...");
-  const stopPromises = [...clients.values()].map((c) =>
-    c.stop().catch(() => {})
-  );
-  await Promise.all(stopPromises);
-  server.close();
-  process.exit(0);
+  const server = app.listen(PORT, () => {
+    console.log(`Server running at http://localhost:${PORT}`);
+  });
+
+  // Graceful shutdown
+  async function shutdown() {
+    console.log("\nShutting down...");
+    const stopPromises = [...clients.values()].map((c) =>
+      c.stop().catch(() => {})
+    );
+    await Promise.all(stopPromises);
+    server.close();
+    process.exit(0);
+  }
+
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
 }
 
-process.on("SIGINT", shutdown);
-process.on("SIGTERM", shutdown);
+startServer();

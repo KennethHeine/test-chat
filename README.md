@@ -44,6 +44,17 @@ A minimal web application that provides a chat interface to **GitHub Copilot**, 
 - New chat = new session; follow-up messages reuse the same session ID
 - All clients cleaned up on server shutdown
 
+### Persistent Storage
+
+Session metadata and chat messages can optionally be persisted to **Azure Storage**:
+
+| Storage | Data | Purpose |
+|---------|------|---------|
+| **Table Storage** | Session metadata (id, title, model, timestamps) | Fast key-value lookups per user |
+| **Blob Storage** | Chat message history (JSON per session) | Stores full conversation text |
+
+When `AZURE_STORAGE_CONNECTION_STRING` is set, the server uses Azure Storage. Otherwise, it falls back to **in-memory storage** (data lost on restart). The frontend also caches sessions in `localStorage` for instant UI rendering.
+
 ## Prerequisites
 
 - **Node.js 18+** — `node --version`
@@ -72,6 +83,7 @@ npm start
 |----------|----------|---------|-------------|
 | `COPILOT_GITHUB_TOKEN` | No | — | Server-side fallback token for testing/CI. In normal use, each user provides their own token via the web UI. |
 | `PORT` | No | `3000` | Server port |
+| `AZURE_STORAGE_CONNECTION_STRING` | No | — | Azure Storage connection string for persistent sessions. When empty, uses in-memory storage. |
 
 ### Authentication
 
@@ -93,7 +105,7 @@ The server also accepts `COPILOT_GITHUB_TOKEN` in `.env` as a fallback (used whe
 Returns server status and CLI availability. No auth required.
 
 ```json
-{ "status": "ok", "copilotCli": true }
+{ "status": "ok", "copilotCli": true, "storage": "memory" }
 ```
 
 ### `GET /api/models`
@@ -103,6 +115,30 @@ Returns available models. Requires `Authorization: Bearer <token>` header.
 ```json
 { "models": [{ "id": "gpt-4.1", ... }, ...] }
 ```
+
+### `GET /api/sessions`
+
+List all sessions for the authenticated user. Requires `Authorization: Bearer <token>` header.
+
+```json
+{ "sessions": [{ "id": "...", "title": "...", "model": "gpt-4.1", "createdAt": "...", "updatedAt": "..." }] }
+```
+
+### `DELETE /api/sessions/:id`
+
+Delete a session and its messages. Requires `Authorization: Bearer <token>` header.
+
+### `GET /api/sessions/:id/messages`
+
+Get chat messages for a session. Requires `Authorization: Bearer <token>` header.
+
+```json
+{ "messages": [{ "role": "user", "text": "Hello" }, { "role": "assistant", "text": "Hi!" }] }
+```
+
+### `PUT /api/sessions/:id/messages`
+
+Save chat messages for a session. Requires `Authorization: Bearer <token>` header.
 
 ### `POST /api/chat`
 
@@ -123,6 +159,14 @@ data: {"type":"done","sessionId":"abc-123"}
 ## Testing
 
 Tests use `gpt-4.1` which costs **0 premium requests** on paid plans, so they are safe to run repeatedly.
+
+### Storage Unit Tests (`npm run test:storage`)
+
+Fast, offline tests for the session storage module. No external services needed.
+
+```bash
+npm run test:storage
+```
 
 ### Integration Tests (`npm test`)
 
@@ -155,13 +199,17 @@ See **[TESTING.md](TESTING.md)** for full details on prerequisites, CI setup, co
 ```
 test-chat/
 ├── server.ts              # Express backend — CopilotClient, session management, SSE streaming
+├── storage.ts             # Storage abstraction — Azure Table/Blob Storage + in-memory fallback
+├── storage.test.ts        # Unit tests for storage module
 ├── test.ts                # Integration tests — SDK direct + server HTTP tests
 ├── e2e/
 │   └── chat.spec.ts       # Playwright E2E tests — browser tests against live site
 ├── playwright.config.ts   # Playwright configuration (base URL, timeouts, browser)
 ├── public/
-│   ├── index.html         # Chat UI — GitHub dark theme, model selector, message area
-│   └── app.js             # Frontend logic — fetch, SSE parsing, streaming render
+│   ├── index.html         # Chat UI — GitHub dark theme, model selector, session sidebar
+│   └── app.js             # Frontend logic — fetch, SSE parsing, streaming render, session mgmt
+├── infra/
+│   └── main.bicep         # Azure infrastructure (Container Apps + SWA + Storage Account)
 ├── package.json           # Dependencies & scripts
 ├── tsconfig.json          # TypeScript config (ES2022, bundler resolution)
 ├── .env.example           # Environment variable template

@@ -7,11 +7,14 @@
   "scripts": {
     "start": "npx tsx server.ts",
     "test": "npx tsx test.ts",
+    "test:storage": "npx tsx storage.test.ts",
     "test:e2e": "npx playwright test",
     "test:e2e:prod": "npx playwright test --project=prod",
     "test:e2e:local": "npx playwright test --project=local"
   },
   "dependencies": {
+    "@azure/data-tables": "^13.3.2",
+    "@azure/storage-blob": "^12.31.0",
     "@github/copilot-sdk": "^0.1.31",
     "dotenv": "^17.3.1",
     "express": "^5.2.1"

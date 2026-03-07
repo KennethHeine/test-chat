@@ -1,11 +1,29 @@
 # Testing
 
-This project has two layers of automated tests:
+This project has three layers of automated tests:
 
-1. **Integration tests** (`test.ts`) — SDK-level and HTTP API tests run locally
-2. **E2E tests** (`e2e/chat.spec.ts`) — Playwright browser tests run against the live production site
+1. **Storage unit tests** (`storage.test.ts`) — Fast offline tests for the session storage module
+2. **Integration tests** (`test.ts`) — SDK-level and HTTP API tests run locally
+3. **E2E tests** (`e2e/chat.spec.ts`) — Playwright browser tests run against the live production site
 
-Both test layers use `gpt-4.1` which costs **0 premium requests** on paid Copilot plans, so they are safe to run repeatedly.
+Both integration and E2E test layers use `gpt-4.1` which costs **0 premium requests** on paid Copilot plans, so they are safe to run repeatedly.
+
+---
+
+## Storage Unit Tests (`npm run test:storage`)
+
+Fast offline tests for the `InMemorySessionStore` — no external services or tokens required.
+
+```bash
+npm run test:storage
+```
+
+These tests verify:
+- Token hashing (SHA-256)
+- Session CRUD operations (create, read, update, delete)
+- User isolation (sessions scoped by token hash)
+- Message persistence (save and retrieve chat messages)
+- Sorting (newest sessions first)
 
 ---
 

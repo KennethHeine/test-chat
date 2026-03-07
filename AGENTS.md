@@ -24,6 +24,7 @@
 | Install deps | `npm ci` | Use `ci` (not `install`) for reproducible builds |
 | Run server | `npx tsx server.ts` | Starts on `PORT` (default 3000) |
 | Typecheck | `npx tsc --noEmit` | Validates TypeScript without emitting files |
+| Storage unit tests | `npm run test:storage` | Fast, offline — no tokens needed |
 | Integration tests | `npm test` | Requires `COPILOT_GITHUB_TOKEN` env var; uses `TEST_PORT=3099` |
 | E2E tests (local) | `npm run test:e2e:local` | Requires Playwright browsers + `COPILOT_GITHUB_TOKEN` |
 | E2E tests (prod) | `npm run test:e2e:prod` | Runs against `https://test-chat.kscloud.io` |
@@ -35,15 +36,17 @@
 
 ```
 ├── server.ts              # Express backend (API routes, Copilot SDK integration)
+├── storage.ts             # Storage abstraction (Azure Table/Blob + in-memory fallback)
+├── storage.test.ts        # Unit tests for storage module
 ├── test.ts                # Integration tests (SDK + server HTTP API)
 ├── public/                # Frontend (served as static files)
-│   ├── index.html         #   Chat UI (dark theme)
-│   ├── app.js             #   Frontend logic (token mgmt, SSE streaming, DOM)
+│   ├── index.html         #   Chat UI (dark theme, session sidebar)
+│   ├── app.js             #   Frontend logic (token mgmt, SSE streaming, session mgmt)
 │   └── staticwebapp.config.json  # Azure SWA routing config
 ├── e2e/
 │   └── chat.spec.ts       # Playwright E2E tests
 ├── infra/
-│   └── main.bicep         # Azure infrastructure (Container Apps + SWA)
+│   └── main.bicep         # Azure infrastructure (Container Apps + SWA + Storage Account)
 ├── .github/workflows/
 │   ├── deploy-app.yml     # Build Docker image → GHCR → deploy to Azure
 │   ├── deploy-infra.yml   # Deploy Bicep templates to Azure

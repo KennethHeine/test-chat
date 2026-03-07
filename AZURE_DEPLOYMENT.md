@@ -12,11 +12,19 @@ Deploy the chat app on Azure using **Static Web Apps** (frontend) and **Containe
 │  public/                │         │  Express.js API server       │
 │   ├─ index.html         │         │  Scale: 0 – 3 replicas       │
 │   ├─ app.js             │         │  0.25 vCPU · 0.5 Gi memory   │
-│   └─ staticwebapp...    │         └──────────────────────────────┘
-└─────────────────────────┘
+│   └─ staticwebapp...    │         └────────────┬─────────────────┘
+└─────────────────────────┘                      │
+                                                 ▼
+                                    ┌──────────────────────────────┐
+                                    │  Azure Storage Account       │
+                                    │  (Standard LRS)              │
+                                    │                              │
+                                    │  Table Storage: sessions     │
+                                    │  Blob Storage: chatmessages  │
+                                    └──────────────────────────────┘
 ```
 
-**How it works:** Static Web Apps serves the frontend. Requests to `/api/*` are proxied to the Container App backend via a [linked backend](https://learn.microsoft.com/azure/static-web-apps/apis-container-apps). Users never talk directly to the Container App.
+**How it works:** Static Web Apps serves the frontend. Requests to `/api/*` are proxied to the Container App backend via a [linked backend](https://learn.microsoft.com/azure/static-web-apps/apis-container-apps). The Container App persists session data to Azure Storage (Table Storage for metadata, Blob Storage for chat messages). Users never talk directly to the Container App or Storage Account.
 
 ## Estimated Monthly Cost
 
@@ -26,6 +34,7 @@ Deploy the chat app on Azure using **Static Web Apps** (frontend) and **Containe
 | Container Apps Environment | Consumption | **$0** when idle |
 | Container Apps vCPU | 0.25 vCPU × active seconds | ~$0.000012/s |
 | Container Apps Memory | 0.5 Gi × active seconds | ~$0.000002/s |
+| Storage Account (Table + Blob) | Standard LRS | **$0** (typical light usage) |
 | Log Analytics | Free up to 5 GB/month | **$0** (typical) |
 
 **With scale-to-zero**, you pay nothing when no one is using the app. Light usage (a few hours/day) costs **under $1/month**. See [Container Apps pricing](https://azure.microsoft.com/pricing/details/container-apps/) for details.

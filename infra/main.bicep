@@ -26,6 +26,44 @@ resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
   }
 }
 
+// ---------- Storage Account (persistent session data) ----------
+
+// Storage account name must be 3-24 chars, lowercase + numbers only
+var storageAccountName = replace('${appName}stor', '-', '')
+
+resource storageAccount 'Microsoft.Storage/storageAccounts@2023-05-01' = {
+  name: storageAccountName
+  location: location
+  kind: 'StorageV2'
+  sku: {
+    name: 'Standard_LRS'
+  }
+  properties: {
+    accessTier: 'Hot'
+    supportsHttpsTrafficOnly: true
+    minimumTlsVersion: 'TLS1_2'
+    allowBlobPublicAccess: false
+  }
+}
+
+// Enable Table service (implicit with StorageV2, but declare for clarity)
+resource tableService 'Microsoft.Storage/storageAccounts/tableServices@2023-05-01' = {
+  parent: storageAccount
+  name: 'default'
+}
+
+// Enable Blob service
+resource blobService 'Microsoft.Storage/storageAccounts/blobServices@2023-05-01' = {
+  parent: storageAccount
+  name: 'default'
+  properties: {
+    deleteRetentionPolicy: {
+      enabled: true
+      days: 7
+    }
+  }
+}
+
 // ---------- Container Apps Environment (Consumption plan) ----------
 
 resource containerAppsEnv 'Microsoft.App/managedEnvironments@2024-03-01' = {
@@ -50,6 +88,12 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
   properties: {
     managedEnvironmentId: containerAppsEnv.id
     configuration: {
+      secrets: [
+        {
+          name: 'storage-connection'
+          value: storageAccount.listKeys().keys[0].value != '' ? 'DefaultEndpointsProtocol=https;AccountName=${storageAccount.name};AccountKey=${storageAccount.listKeys().keys[0].value};EndpointSuffix=core.windows.net' : ''
+        }
+      ]
       ingress: {
         external: true
         targetPort: 3000
@@ -71,6 +115,7 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
           env: [
             { name: 'PORT', value: '3000' }
             { name: 'NODE_ENV', value: 'production' }
+            { name: 'AZURE_STORAGE_CONNECTION_STRING', secretRef: 'storage-connection' }
           ]
         }
       ]
@@ -135,3 +180,4 @@ output customDomainUrl string = 'https://${customDomain}'
 output containerAppUrl string = 'https://${containerApp.properties.configuration.ingress.fqdn}'
 output staticWebAppName string = staticWebApp.name
 output containerAppName string = containerApp.name
+output storageAccountName string = storageAccount.name
