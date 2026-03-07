@@ -308,8 +308,8 @@ app.post("/api/chat", async (req: Request, res: Response) => {
                 meta.title = title;
                 sessionStore.saveSession(tHash, meta);
               }
-            });
-          });
+            }).catch(() => {});
+          }).catch(() => {});
         }
       })
     );

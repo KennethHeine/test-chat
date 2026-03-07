@@ -590,7 +590,7 @@ async function sendMessage() {
             hideToolActivity();
           } else if (event.type === "title" && event.title) {
             // Update session title with AI-generated title
-            updateSessionTitle(sessionId || event.sessionId, event.title);
+            updateSessionTitle(sessionId, event.title);
           } else if (event.type === "usage") {
             showUsage(event.usage);
           } else if (event.type === "done") {
