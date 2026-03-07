@@ -6,6 +6,22 @@ import { config } from "dotenv";
 import path from "path";
 import { createSessionStore, hashToken, AzureSessionStore, InMemorySessionStore, type SessionStore } from "./storage.js";
 
+// --- System Message for Agent Orchestration ---
+const ORCHESTRATOR_SYSTEM_MESSAGE = `You are a coding task orchestrator. Your role is to help users research codebases, plan coding tasks, and coordinate work across repositories.
+
+When helping users, follow these principles:
+1. **Research First** — Before suggesting changes, explore the repository structure, read key files, and understand the architecture.
+2. **Structured Task Breakdown** — Break down complex requests into clear, actionable sub-tasks with specific descriptions and acceptance criteria.
+3. **Parallel Identification** — Identify which tasks can be worked on independently and which have dependencies.
+4. **Context Gathering** — Ask clarifying questions when requirements are ambiguous. Gather enough context before planning.
+
+When defining tasks, use this structure:
+- **Repository**: owner/repo
+- **Description**: What needs to be done
+- **Files**: Key files likely to be modified
+- **Dependencies**: Other tasks that must complete first
+- **Acceptance Criteria**: How to verify the task is done`;
+
 config(); // load .env
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -220,6 +236,9 @@ app.post("/api/chat", async (req: Request, res: Response) => {
         model: model || "gpt-4.1",
         streaming: true,
         onPermissionRequest: approveAll,
+        systemMessage: {
+          content: ORCHESTRATOR_SYSTEM_MESSAGE,
+        },
       });
       sessions.set(sessionKey(token, sid), session);
 
@@ -262,6 +281,46 @@ app.post("/api/chat", async (req: Request, res: Response) => {
       })
     );
 
+    // Tool execution events — show agent activity in real-time
+    unsubscribers.push(
+      session.on("tool.execution_start", (event) => {
+        const toolName = event.data?.toolName || "unknown";
+        res.write(`data: ${JSON.stringify({ type: "tool_start", tool: toolName })}\n\n`);
+      })
+    );
+
+    unsubscribers.push(
+      session.on("tool.execution_complete", () => {
+        res.write(`data: ${JSON.stringify({ type: "tool_complete" })}\n\n`);
+      })
+    );
+
+    // AI-generated session title
+    unsubscribers.push(
+      session.on("session.title_changed", (event) => {
+        const title = event.data?.title || "";
+        if (title) {
+          res.write(`data: ${JSON.stringify({ type: "title", title })}\n\n`);
+          // Update stored session title
+          hashToken(token).then((tHash) => {
+            sessionStore.getSession(tHash, sid!).then((meta) => {
+              if (meta) {
+                meta.title = title;
+                sessionStore.saveSession(tHash, meta);
+              }
+            });
+          });
+        }
+      })
+    );
+
+    // Token usage tracking
+    unsubscribers.push(
+      session.on("assistant.usage", (event) => {
+        res.write(`data: ${JSON.stringify({ type: "usage", usage: event.data })}\n\n`);
+      })
+    );
+
     // Stream complete
     unsubscribers.push(
       session.on("session.idle", () => {
@@ -287,6 +346,35 @@ app.post("/api/chat", async (req: Request, res: Response) => {
   } catch (err: any) {
     res.write(`data: ${JSON.stringify({ type: "error", message: err.message || "Server error" })}\n\n`);
     res.end();
+  }
+});
+
+// Abort a streaming response
+app.post("/api/chat/abort", async (req: Request, res: Response) => {
+  const token = extractToken(req);
+  if (!token) {
+    res.status(401).json({ error: "Missing token." });
+    return;
+  }
+
+  const { sessionId: sid } = req.body;
+  if (!sid) {
+    res.status(400).json({ error: "Missing sessionId" });
+    return;
+  }
+
+  const key = sessionKey(token, sid);
+  const session = sessions.get(key);
+  if (!session) {
+    res.status(404).json({ error: "Session not found" });
+    return;
+  }
+
+  try {
+    await session.abort();
+    res.json({ aborted: true, sessionId: sid });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Failed to abort" });
   }
 });
 

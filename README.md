@@ -155,7 +155,20 @@ Send a message and receive a streaming SSE response. Requires `Authorization: Be
 ```
 data: {"type":"delta","content":"Hi"}
 data: {"type":"delta","content":" there!"}
+data: {"type":"tool_start","tool":"read_file"}
+data: {"type":"tool_complete"}
+data: {"type":"title","title":"AI-generated title"}
+data: {"type":"usage","usage":{"model":"gpt-4.1","inputTokens":100,"outputTokens":50}}
 data: {"type":"done","sessionId":"abc-123"}
+```
+
+### `POST /api/chat/abort`
+
+Abort a streaming response. Requires `Authorization: Bearer <token>` header.
+
+**Request:**
+```json
+{ "sessionId": "abc-123" }
 ```
 
 ## Testing
