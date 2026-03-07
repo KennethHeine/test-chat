@@ -1,21 +1,18 @@
-name: E2E Tests (Production)
+name: E2E Tests (Local)
 
 on:
-  workflow_run:
-    workflows: ["Deploy App"]
-    types: [completed]
+  pull_request:
     branches: [main]
+  push:
+    branches-ignore: [main]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  e2e-prod:
+  e2e-local:
     runs-on: ubuntu-latest
-    if: >
-      github.event_name == 'workflow_dispatch' ||
-      github.event.workflow_run.conclusion == 'success'
     steps:
       - uses: actions/checkout@v4
 
@@ -30,16 +27,17 @@ jobs:
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium
 
-      - name: Run E2E tests against production
-        run: npx playwright test --project=prod
+      - name: Run E2E tests against local server
+        run: npx playwright test --project=local
         env:
           COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+          BASE_URL: http://localhost:3000
 
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: playwright-report-prod
+          name: playwright-report-local
           path: |
             test-results/
             playwright-report/

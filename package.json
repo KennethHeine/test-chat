@@ -7,7 +7,9 @@
   "scripts": {
     "start": "npx tsx server.ts",
     "test": "npx tsx test.ts",
-    "test:e2e": "npx playwright test"
+    "test:e2e": "npx playwright test",
+    "test:e2e:prod": "npx playwright test --project=prod",
+    "test:e2e:local": "npx playwright test --project=local"
   },
   "dependencies": {
     "@github/copilot-sdk": "^0.1.31",

@@ -1,27 +1,48 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, Page } from "@playwright/test";
 
 /**
- * Playwright E2E tests that run against the live production site
- * at https://test-chat.kscloud.io
+ * Playwright E2E tests that run against either:
+ *   - Production:  https://test-chat.kscloud.io  (--project=prod)
+ *   - Local dev:   http://localhost:3000          (--project=local)
  *
- * These mirror the server-level tests in test.ts but exercise
- * the real UI exactly the way a user would.
- *
- * Required env var:  COPILOT_GITHUB_TOKEN  (for token/chat tests)
+ * Required env var:  COPILOT_GITHUB_TOKEN  (for authenticated tests)
  */
 
 const TOKEN = process.env.COPILOT_GITHUB_TOKEN || "";
 
-// ─── Health check (mirrors: Server health check) ───────────────
+/** Saves the token via the UI, waits for models to load, and selects one. */
+async function authenticateAndSelectModel(page: Page) {
+  const tokenInput = page.locator("#token-input");
+  await tokenInput.fill(TOKEN);
+  await page.locator("#save-token-btn").click();
+  await expect(tokenInput).toHaveAttribute("placeholder", /Token saved/);
+
+  // Wait for model dropdown to populate
+  const modelSelect = page.locator("#model-select");
+  await expect(modelSelect).not.toHaveText("Loading models...", { timeout: 30_000 });
+  await expect(modelSelect).not.toHaveText("Enter token to load models");
+
+  // Select a model (prefer gpt-4.1, fall back to first available)
+  const options = modelSelect.locator("option");
+  const count = await options.count();
+  expect(count).toBeGreaterThan(0);
+
+  const optionValues = await options.evaluateAll((opts: HTMLOptionElement[]) =>
+    opts.map((o) => o.value)
+  );
+  const preferred = optionValues.find((v) => v.includes("gpt-4.1")) ?? optionValues[0];
+  await modelSelect.selectOption(preferred);
+  expect(await modelSelect.inputValue()).toBe(preferred);
+}
+
+// ─── Health check ──────────────────────────────────────────────
 
 test("page loads and shows connected status", async ({ page }) => {
   await page.goto("/");
 
-  // The status bar should show the green dot (no "disconnected" class)
   const statusDot = page.locator("#status-dot");
   await expect(statusDot).not.toHaveClass(/disconnected/, { timeout: 15_000 });
 
-  // Status text should indicate a working connection
   const statusText = page.locator("#status-text");
   await expect(statusText).toHaveText(/Connected|CLI ready/, { timeout: 15_000 });
 });
@@ -34,43 +55,21 @@ test.describe("authenticated tests", () => {
     await page.goto("/");
   });
 
-  // ─── Token + Models (mirrors: Server models endpoint) ──────────
+  // ─── Token + Models ────────────────────────────────────────────
 
-  test("save token and load models", async ({ page }) => {
-    // Enter the token
-    const tokenInput = page.locator("#token-input");
-    await tokenInput.fill(TOKEN);
+  test("save token, load models, and select one", async ({ page }) => {
+    await authenticateAndSelectModel(page);
 
-    // Click "Save Token"
-    await page.locator("#save-token-btn").click();
-
-    // After saving, the placeholder should confirm the token is saved
-    await expect(tokenInput).toHaveAttribute("placeholder", /Token saved/);
-
-    // The model dropdown should populate with real models (not the placeholder)
-    const modelSelect = page.locator("#model-select");
-    await expect(modelSelect).not.toHaveText("Loading models...", { timeout: 20_000 });
-    await expect(modelSelect).not.toHaveText("Enter token to load models");
-
-    // Should have multiple model options including a GPT model
-    const options = modelSelect.locator("option");
-    await expect(options).not.toHaveCount(0);
+    // Verify the dropdown has real model options
+    const options = page.locator("#model-select option");
     const optionTexts = await options.allTextContents();
     expect(optionTexts.some((t) => t.includes("gpt"))).toBeTruthy();
   });
 
-  // ─── Chat (mirrors: Server chat SSE streaming) ─────────────────
+  // ─── Chat ──────────────────────────────────────────────────────
 
   test("send message and receive streamed response", async ({ page }) => {
-    // First, set the token so we can chat
-    await page.locator("#token-input").fill(TOKEN);
-    await page.locator("#save-token-btn").click();
-    await expect(page.locator("#token-input")).toHaveAttribute("placeholder", /Token saved/);
-
-    // Wait for models to load
-    await expect(page.locator("#model-select")).not.toHaveText("Loading models...", {
-      timeout: 20_000,
-    });
+    await authenticateAndSelectModel(page);
 
     // The welcome message should be visible initially
     await expect(page.locator("#welcome")).toBeVisible();
@@ -91,7 +90,7 @@ test.describe("authenticated tests", () => {
     const assistantMessage = page.locator(".message.assistant").last();
     await expect(assistantMessage.locator(".content")).not.toBeEmpty({ timeout: 30_000 });
 
-    // Wait for streaming to finish (typing-indicator class is removed)
+    // Wait for streaming to finish
     await expect(assistantMessage).not.toHaveClass(/typing-indicator/, { timeout: 30_000 });
 
     // The response should contain our expected text
@@ -99,23 +98,17 @@ test.describe("authenticated tests", () => {
     expect(responseText).toContain("PLAYWRIGHT_TEST_OK");
   });
 
-  // ─── Multi-turn (mirrors: SDK chat multi-turn recall) ──────────
+  // ─── Multi-turn ────────────────────────────────────────────────
 
   test("multi-turn conversation retains context", async ({ page }) => {
-    // Set the token
-    await page.locator("#token-input").fill(TOKEN);
-    await page.locator("#save-token-btn").click();
-    await expect(page.locator("#token-input")).toHaveAttribute("placeholder", /Token saved/);
-    await expect(page.locator("#model-select")).not.toHaveText("Loading models...", {
-      timeout: 20_000,
-    });
+    await authenticateAndSelectModel(page);
+
+    const input = page.locator("#message-input");
 
     // Turn 1: establish a fact
-    const input = page.locator("#message-input");
     await input.fill("Remember this code: BETA_8832. Just say OK.");
     await page.locator("#send-btn").click();
 
-    // Wait for assistant response and streaming to finish
     const firstAssistant = page.locator(".message.assistant").last();
     await expect(firstAssistant.locator(".content")).not.toBeEmpty({ timeout: 30_000 });
     await expect(firstAssistant).not.toHaveClass(/typing-indicator/, { timeout: 30_000 });
@@ -124,34 +117,24 @@ test.describe("authenticated tests", () => {
     await input.fill("What was the code I asked you to remember? Reply with just the code.");
     await page.locator("#send-btn").click();
 
-    // Wait for second assistant response
-    const secondAssistant = page.locator(".message.assistant").last();
-    // Wait until this is a different element (it should be the 2nd assistant message)
     await expect(page.locator(".message.assistant")).toHaveCount(2, { timeout: 30_000 });
+    const secondAssistant = page.locator(".message.assistant").last();
     await expect(secondAssistant.locator(".content")).not.toBeEmpty({ timeout: 30_000 });
     await expect(secondAssistant).not.toHaveClass(/typing-indicator/, { timeout: 30_000 });
 
-    // The second response should recall the code
     const recallText = await secondAssistant.locator(".content").textContent();
     expect(recallText).toContain("BETA_8832");
   });
 
-  // ─── New Chat (UI-specific test) ───────────────────────────────
+  // ─── New Chat ──────────────────────────────────────────────────
 
   test("new chat button clears conversation", async ({ page }) => {
-    // Set the token and send a message first
-    await page.locator("#token-input").fill(TOKEN);
-    await page.locator("#save-token-btn").click();
-    await expect(page.locator("#token-input")).toHaveAttribute("placeholder", /Token saved/);
-    await expect(page.locator("#model-select")).not.toHaveText("Loading models...", {
-      timeout: 20_000,
-    });
+    await authenticateAndSelectModel(page);
 
     const input = page.locator("#message-input");
     await input.fill("Say hello.");
     await page.locator("#send-btn").click();
 
-    // Wait for assistant response
     const assistantMessage = page.locator(".message.assistant").last();
     await expect(assistantMessage.locator(".content")).not.toBeEmpty({ timeout: 30_000 });
     await expect(assistantMessage).not.toHaveClass(/typing-indicator/, { timeout: 30_000 });
