@@ -12,6 +12,9 @@ param containerImage string = 'mcr.microsoft.com/k8se/quickstart:latest'
 @description('Region for Static Web App (limited availability — norwayeast not supported)')
 param swaLocation string = 'westeurope'
 
+@description('Custom domain for the Static Web App')
+param customDomain string = 'test-chat.kscloud.io'
+
 // ---------- Log Analytics (required by Container Apps Environment) ----------
 
 resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
@@ -118,9 +121,17 @@ resource linkedBackend 'Microsoft.Web/staticSites/linkedBackends@2023-12-01' = {
   }
 }
 
+// ---------- Custom Domain ----------
+
+resource customDomainResource 'Microsoft.Web/staticSites/customDomains@2023-12-01' = {
+  parent: staticWebApp
+  name: customDomain
+}
+
 // ---------- Outputs ----------
 
 output staticWebAppUrl string = 'https://${staticWebApp.properties.defaultHostname}'
+output customDomainUrl string = 'https://${customDomain}'
 output containerAppUrl string = 'https://${containerApp.properties.configuration.ingress.fqdn}'
 output staticWebAppName string = staticWebApp.name
 output containerAppName string = containerApp.name
