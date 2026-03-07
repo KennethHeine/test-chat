@@ -4,6 +4,7 @@ import { execSync } from "child_process";
 import { fileURLToPath } from "url";
 import { config } from "dotenv";
 import path from "path";
+import { createSessionStore, hashToken, AzureSessionStore, InMemorySessionStore, type SessionStore } from "./storage.js";
 
 config(); // load .env
 
@@ -15,11 +16,16 @@ app.use(express.static(path.join(__dirname, "public")));
 
 const PORT = parseInt(process.env.PORT || "3000", 10);
 
+// --- Storage ---
+
+const storageAccountName = process.env.AZURE_STORAGE_ACCOUNT_NAME || "";
+let sessionStore: SessionStore = createSessionStore(storageAccountName || undefined);
+
 // --- Per-user Copilot Clients ---
 
 // Key: github token → CopilotClient (one client per user token)
 const clients = new Map<string, CopilotClient>();
-// Key: "token:sessionId" → CopilotSession
+// Key: "token:sessionId" → CopilotSession (in-memory SDK sessions for active conversations)
 const sessions = new Map<string, CopilotSession>();
 
 function extractToken(req: Request): string | undefined {
@@ -67,6 +73,7 @@ app.get("/api/health", (_req: Request, res: Response) => {
   res.json({
     status: "ok",
     copilotCli: isCopilotCliAvailable(),
+    storage: sessionStore instanceof AzureSessionStore ? "azure" : "memory",
   });
 });
 
@@ -83,6 +90,97 @@ app.get("/api/models", async (req: Request, res: Response) => {
     res.json({ models });
   } catch (err: any) {
     res.status(500).json({ error: err.message || "Failed to fetch models" });
+  }
+});
+
+// List sessions for the authenticated user
+app.get("/api/sessions", async (req: Request, res: Response) => {
+  const token = extractToken(req);
+  if (!token) {
+    res.status(401).json({ error: "Missing token. Provide Authorization: Bearer <token> header." });
+    return;
+  }
+
+  try {
+    const tHash = await hashToken(token);
+    const userSessions = await sessionStore.listSessions(tHash);
+    res.json({ sessions: userSessions });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Failed to list sessions" });
+  }
+});
+
+// Delete a session
+app.delete("/api/sessions/:id", async (req: Request, res: Response) => {
+  const token = extractToken(req);
+  if (!token) {
+    res.status(401).json({ error: "Missing token. Provide Authorization: Bearer <token> header." });
+    return;
+  }
+
+  const sid = req.params.id as string;
+
+  try {
+    const tHash = await hashToken(token);
+    const existing = await sessionStore.getSession(tHash, sid);
+    const inMemory = sessions.has(sessionKey(token, sid));
+    const messages = await sessionStore.getMessages(tHash, sid);
+    const hasMessages = Array.isArray(messages) && messages.length > 0;
+
+    if (!existing && !inMemory && !hasMessages) {
+      res.status(404).json({ error: "Session not found" });
+      return;
+    }
+
+    sessions.delete(sessionKey(token, sid));
+    await sessionStore.deleteSession(tHash, sid);
+    res.json({ deleted: true, sessionId: sid });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Failed to delete session" });
+  }
+});
+
+// Get messages for a session
+app.get("/api/sessions/:id/messages", async (req: Request, res: Response) => {
+  const token = extractToken(req);
+  if (!token) {
+    res.status(401).json({ error: "Missing token. Provide Authorization: Bearer <token> header." });
+    return;
+  }
+
+  const sid = req.params.id as string;
+
+  try {
+    const tHash = await hashToken(token);
+    const messages = await sessionStore.getMessages(tHash, sid);
+    res.json({ messages });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Failed to get messages" });
+  }
+});
+
+// Save messages for a session
+app.put("/api/sessions/:id/messages", async (req: Request, res: Response) => {
+  const token = extractToken(req);
+  if (!token) {
+    res.status(401).json({ error: "Missing token. Provide Authorization: Bearer <token> header." });
+    return;
+  }
+
+  const sid = req.params.id as string;
+  const { messages } = req.body;
+
+  if (!Array.isArray(messages)) {
+    res.status(400).json({ error: "Missing or invalid 'messages' array" });
+    return;
+  }
+
+  try {
+    const tHash = await hashToken(token);
+    await sessionStore.saveMessages(tHash, sid, messages);
+    res.json({ saved: true, sessionId: sid });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Failed to save messages" });
   }
 });
 
@@ -124,6 +222,26 @@ app.post("/api/chat", async (req: Request, res: Response) => {
         onPermissionRequest: approveAll,
       });
       sessions.set(sessionKey(token, sid), session);
+
+      // Store session metadata
+      const title = message.length > 50 ? message.slice(0, 50) + "…" : message;
+      const now = new Date().toISOString();
+      const tHash = await hashToken(token);
+      await sessionStore.saveSession(tHash, {
+        id: sid,
+        title,
+        model: model || "gpt-4.1",
+        createdAt: now,
+        updatedAt: now,
+      });
+    }
+
+    // Update session last-used time
+    const tHash = await hashToken(token);
+    const meta = await sessionStore.getSession(tHash, sid);
+    if (meta) {
+      meta.updatedAt = new Date().toISOString();
+      await sessionStore.saveSession(tHash, meta);
     }
 
     // Collect unsubscribe functions
@@ -174,20 +292,38 @@ app.post("/api/chat", async (req: Request, res: Response) => {
 
 // --- Start Server ---
 
-const server = app.listen(PORT, () => {
-  console.log(`Server running at http://localhost:${PORT}`);
-});
+async function startServer() {
+  // Initialize Azure storage if configured
+  if (sessionStore instanceof AzureSessionStore) {
+    try {
+      await sessionStore.initialize();
+      console.log("Azure Storage initialized (table + blob)");
+    } catch (err: any) {
+      console.error("Failed to initialize Azure Storage:", err.message);
+      console.log("Falling back to in-memory storage");
+      sessionStore = new InMemorySessionStore();
+    }
+  } else {
+    console.log("Using in-memory session storage (set AZURE_STORAGE_ACCOUNT_NAME for persistence)");
+  }
 
-// Graceful shutdown
-async function shutdown() {
-  console.log("\nShutting down...");
-  const stopPromises = [...clients.values()].map((c) =>
-    c.stop().catch(() => {})
-  );
-  await Promise.all(stopPromises);
-  server.close();
-  process.exit(0);
+  const server = app.listen(PORT, () => {
+    console.log(`Server running at http://localhost:${PORT}`);
+  });
+
+  // Graceful shutdown
+  async function shutdown() {
+    console.log("\nShutting down...");
+    const stopPromises = [...clients.values()].map((c) =>
+      c.stop().catch(() => {})
+    );
+    await Promise.all(stopPromises);
+    server.close();
+    process.exit(0);
+  }
+
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
 }
 
-process.on("SIGINT", shutdown);
-process.on("SIGTERM", shutdown);
+startServer();

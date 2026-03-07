@@ -47,6 +47,14 @@ test("page loads and shows connected status", async ({ page }) => {
   await expect(statusText).toHaveText(/Connected|CLI ready/, { timeout: 15_000 });
 });
 
+test("health API reports storage backend", async ({ request }) => {
+  const res = await request.get("/api/health");
+  expect(res.ok()).toBeTruthy();
+  const data = await res.json();
+  expect(data.status).toBe("ok");
+  expect(["memory", "azure"]).toContain(data.storage);
+});
+
 // ─── Tests that require a Copilot token ────────────────────────
 
 test.describe("authenticated tests", () => {
@@ -146,5 +154,50 @@ test.describe("authenticated tests", () => {
     await expect(page.locator(".message.user")).toHaveCount(0);
     await expect(page.locator(".message.assistant")).toHaveCount(0);
     await expect(page.locator("#welcome")).toBeVisible();
+  });
+
+  // ─── Session Sidebar ──────────────────────────────────────────
+
+  test("session sidebar shows saved sessions", async ({ page }) => {
+    await authenticateAndSelectModel(page);
+
+    // The session sidebar should be visible
+    const sidebar = page.locator("#session-sidebar");
+    await expect(sidebar).toBeVisible();
+
+    // Initially shows empty state
+    await expect(page.locator(".session-empty")).toBeVisible();
+
+    // Send a message to create a session
+    const input = page.locator("#message-input");
+    await input.fill("Reply with exactly: SESSION_E2E_TEST");
+    await page.locator("#send-btn").click();
+
+    const assistantMessage = page.locator(".message.assistant").last();
+    await expect(assistantMessage.locator(".content")).not.toBeEmpty({ timeout: 30_000 });
+    await expect(assistantMessage).not.toHaveClass(/typing-indicator/, { timeout: 30_000 });
+
+    // The session should now appear in the sidebar
+    const sessionItem = page.locator(".session-item").first();
+    await expect(sessionItem).toBeVisible({ timeout: 5_000 });
+
+    // Session item should contain the message text as title
+    const sessionText = sessionItem.locator(".session-item-text");
+    await expect(sessionText).toContainText("SESSION_E2E_TEST");
+  });
+
+  test("toggle sidebar button hides and shows sidebar", async ({ page }) => {
+    await authenticateAndSelectModel(page);
+
+    const sidebar = page.locator("#session-sidebar");
+    await expect(sidebar).toBeVisible();
+
+    // Toggle to hide
+    await page.locator("#toggle-sidebar-btn").click();
+    await expect(sidebar).not.toBeVisible();
+
+    // Toggle to show
+    await page.locator("#toggle-sidebar-btn").click();
+    await expect(sidebar).toBeVisible();
   });
 });

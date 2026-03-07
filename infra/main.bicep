@@ -26,6 +26,46 @@ resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
   }
 }
 
+// ---------- Storage Account (persistent session data) ----------
+
+// Storage account name must be 3-24 chars, lowercase + numbers only
+var storageAccountBase = toLower(replace(appName, '-', ''))
+var storageAccountFull = '${storageAccountBase}stor'
+var storageAccountName = substring(storageAccountFull, 0, min(length(storageAccountFull), 24))
+
+resource storageAccount 'Microsoft.Storage/storageAccounts@2023-05-01' = {
+  name: storageAccountName
+  location: location
+  kind: 'StorageV2'
+  sku: {
+    name: 'Standard_LRS'
+  }
+  properties: {
+    accessTier: 'Hot'
+    supportsHttpsTrafficOnly: true
+    minimumTlsVersion: 'TLS1_2'
+    allowBlobPublicAccess: false
+  }
+}
+
+// Enable Table service (implicit with StorageV2, but declare for clarity)
+resource tableService 'Microsoft.Storage/storageAccounts/tableServices@2023-05-01' = {
+  parent: storageAccount
+  name: 'default'
+}
+
+// Enable Blob service
+resource blobService 'Microsoft.Storage/storageAccounts/blobServices@2023-05-01' = {
+  parent: storageAccount
+  name: 'default'
+  properties: {
+    deleteRetentionPolicy: {
+      enabled: true
+      days: 7
+    }
+  }
+}
+
 // ---------- Container Apps Environment (Consumption plan) ----------
 
 resource containerAppsEnv 'Microsoft.App/managedEnvironments@2024-03-01' = {
@@ -47,6 +87,9 @@ resource containerAppsEnv 'Microsoft.App/managedEnvironments@2024-03-01' = {
 resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
   name: '${appName}-api'
   location: location
+  identity: {
+    type: 'SystemAssigned'
+  }
   properties: {
     managedEnvironmentId: containerAppsEnv.id
     configuration: {
@@ -71,6 +114,7 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
           env: [
             { name: 'PORT', value: '3000' }
             { name: 'NODE_ENV', value: 'production' }
+            { name: 'AZURE_STORAGE_ACCOUNT_NAME', value: storageAccount.name }
           ]
         }
       ]
@@ -89,6 +133,34 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
         ]
       }
     }
+  }
+}
+
+// ---------- RBAC: Container App → Storage Account ----------
+
+// Storage Blob Data Contributor
+var storageBlobDataContributorRoleId = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
+
+resource blobRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(containerApp.id, storageAccount.id, storageBlobDataContributorRoleId)
+  scope: storageAccount
+  properties: {
+    principalId: containerApp.identity.principalId
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageBlobDataContributorRoleId)
+    principalType: 'ServicePrincipal'
+  }
+}
+
+// Storage Table Data Contributor
+var storageTableDataContributorRoleId = '0a9a7e1f-b9d0-4cc4-a60d-0319b160aaa3'
+
+resource tableRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(containerApp.id, storageAccount.id, storageTableDataContributorRoleId)
+  scope: storageAccount
+  properties: {
+    principalId: containerApp.identity.principalId
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageTableDataContributorRoleId)
+    principalType: 'ServicePrincipal'
   }
 }
 
@@ -135,3 +207,4 @@ output customDomainUrl string = 'https://${customDomain}'
 output containerAppUrl string = 'https://${containerApp.properties.configuration.ingress.fqdn}'
 output staticWebAppName string = staticWebApp.name
 output containerAppName string = containerApp.name
+output storageAccountName string = storageAccount.name

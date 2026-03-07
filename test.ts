@@ -226,6 +226,109 @@ async function testServerChat(): Promise<void> {
 }
 
 // ============================================================
+// 3. Session persistence tests (HTTP API)
+// ============================================================
+
+async function testServerHealthStorage(): Promise<void> {
+  const res = await fetch(`${BASE}/api/health`);
+  const data = await res.json();
+  if (!data.storage) throw new Error('Health check missing "storage" field');
+  if (data.storage !== "memory" && data.storage !== "azure") {
+    throw new Error(`Unexpected storage type: "${data.storage}"`);
+  }
+  log("  ", `Storage backend: ${data.storage}`);
+}
+
+async function testServerSessionsList(): Promise<void> {
+  const res = await fetch(`${BASE}/api/sessions`, { headers: testAuthHeaders() });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const data = await res.json();
+  if (!Array.isArray(data.sessions)) throw new Error("Expected sessions array");
+  log("  ", `Found ${data.sessions.length} sessions`);
+}
+
+async function testServerSessionPersistence(): Promise<void> {
+  const TEST_MSG = "PERSIST_TEST_OK";
+
+  // Send a chat to create a session
+  const chatRes = await fetch(`${BASE}/api/chat`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({
+      message: `Reply with exactly: ${TEST_MSG}`,
+      model: FREE_MODEL,
+    }),
+  });
+
+  if (!chatRes.ok) throw new Error(`Chat HTTP ${chatRes.status}`);
+
+  const text = await chatRes.text();
+  const lines = text.split("\n").filter((l) => l.startsWith("data: "));
+  let sessionId = "";
+  for (const line of lines) {
+    const event = JSON.parse(line.slice(6));
+    if (event.type === "done") sessionId = event.sessionId;
+  }
+
+  if (!sessionId) throw new Error("No sessionId from chat");
+
+  // Now save messages via the messages endpoint
+  const saveRes = await fetch(`${BASE}/api/sessions/${sessionId}/messages`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({
+      messages: [
+        { role: "user", text: TEST_MSG },
+        { role: "assistant", text: TEST_MSG },
+      ],
+    }),
+  });
+
+  if (!saveRes.ok) throw new Error(`Save messages HTTP ${saveRes.status}`);
+  const saveData = await saveRes.json();
+  if (!saveData.saved) throw new Error("Expected saved: true");
+
+  // Verify the session appears in list
+  const listRes = await fetch(`${BASE}/api/sessions`, { headers: testAuthHeaders() });
+  const listData = await listRes.json();
+  const found = listData.sessions.find((s: any) => s.id === sessionId);
+  if (!found) throw new Error(`Session ${sessionId} not found in list`);
+
+  // Get messages
+  const getRes = await fetch(`${BASE}/api/sessions/${sessionId}/messages`, { headers: testAuthHeaders() });
+  if (!getRes.ok) throw new Error(`Get messages HTTP ${getRes.status}`);
+  const getData = await getRes.json();
+  if (!Array.isArray(getData.messages) || getData.messages.length !== 2) {
+    throw new Error(`Expected 2 messages, got ${getData.messages?.length}`);
+  }
+
+  // Delete the session
+  const delRes = await fetch(`${BASE}/api/sessions/${sessionId}`, {
+    method: "DELETE",
+    headers: testAuthHeaders(),
+  });
+  if (!delRes.ok) throw new Error(`Delete HTTP ${delRes.status}`);
+  const delData = await delRes.json();
+  if (!delData.deleted) throw new Error("Expected deleted: true");
+
+  // Verify it's gone
+  const listRes2 = await fetch(`${BASE}/api/sessions`, { headers: testAuthHeaders() });
+  const listData2 = await listRes2.json();
+  const foundAfter = listData2.sessions.find((s: any) => s.id === sessionId);
+  if (foundAfter) throw new Error("Session should be gone after delete");
+
+  log("  ", `Session lifecycle: create → save messages → list → get messages → delete → verify gone ✓`);
+}
+
+async function testServerSessionDeleteNotFound(): Promise<void> {
+  const res = await fetch(`${BASE}/api/sessions/nonexistent-id-12345`, {
+    method: "DELETE",
+    headers: testAuthHeaders(),
+  });
+  if (res.status !== 404) throw new Error(`Expected 404, got ${res.status}`);
+}
+
+// ============================================================
 // Main
 // ============================================================
 
@@ -272,6 +375,14 @@ async function main() {
   await run("Server health check", testServerHealth);
   await run("Server models endpoint", testServerModels);
   await run("Server chat (SSE streaming)", testServerChat);
+
+  // --- Session persistence tests ---
+  console.log("\n── Session Persistence Tests ──\n");
+
+  await run("Health check includes storage field", testServerHealthStorage);
+  await run("Sessions list endpoint", testServerSessionsList);
+  await run("Session full lifecycle (create/save/list/get/delete)", testServerSessionPersistence);
+  await run("Delete non-existent session returns 404", testServerSessionDeleteNotFound);
 
   // Cleanup
   serverProcess.kill();

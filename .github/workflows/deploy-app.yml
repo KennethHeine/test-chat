@@ -6,6 +6,7 @@ on:
     paths:
       - 'public/**'
       - 'server.ts'
+      - 'storage.ts'
       - 'package.json'
       - 'package-lock.json'
       - 'tsconfig.json'

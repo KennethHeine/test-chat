@@ -13,6 +13,9 @@ const statusDot = document.getElementById("status-dot");
 const statusText = document.getElementById("status-text");
 const tokenInput = document.getElementById("token-input");
 const saveTokenBtn = document.getElementById("save-token-btn");
+const sessionListEl = document.getElementById("session-list");
+const toggleSidebarBtn = document.getElementById("toggle-sidebar-btn");
+const sessionSidebar = document.getElementById("session-sidebar");
 
 // --- Token Management ---
 function getToken() {
@@ -49,10 +52,308 @@ function authHeaders() {
   return headers;
 }
 
+// --- Session Persistence (localStorage) ---
+
+function getSessionStorageKey() {
+  return "copilot_sessions";
+}
+
+function loadSavedSessions() {
+  try {
+    const data = localStorage.getItem(getSessionStorageKey());
+    return data ? JSON.parse(data) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveSessions(sessions) {
+  localStorage.setItem(getSessionStorageKey(), JSON.stringify(sessions));
+}
+
+function saveCurrentSessionMessages() {
+  if (!sessionId) return;
+  const sessions = loadSavedSessions();
+  const existing = sessions.find((s) => s.id === sessionId);
+  const messages = getMessagesFromDOM();
+
+  // Don't create new entries for empty sessions
+  if (!existing && messages.length === 0) return;
+
+  if (existing) {
+    existing.messages = messages;
+    existing.updatedAt = new Date().toISOString();
+  } else {
+    const firstUserMsg = messages.find((m) => m.role === "user");
+    const title = firstUserMsg ? firstUserMsg.text : "New conversation";
+    const displayTitle = title.length > 50 ? title.slice(0, 50) + "…" : title;
+    sessions.unshift({
+      id: sessionId,
+      title: displayTitle,
+      model: modelSelect.value,
+      messages,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+  }
+
+  saveSessions(sessions);
+  renderSessionList();
+
+  // Persist messages to backend (fire-and-forget), keeping localStorage as a fast cache
+  persistMessagesToBackend(sessionId, messages);
+}
+
+async function persistMessagesToBackend(sid, messages) {
+  try {
+    const response = await fetch(
+      "/api/sessions/" + encodeURIComponent(sid) + "/messages",
+      {
+        method: "PUT",
+        headers: {
+          ...authHeaders(),
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ messages }),
+      }
+    );
+    if (!response.ok) {
+      console.error("Failed to persist session messages to server:", response.status);
+    }
+  } catch (err) {
+    console.error("Error persisting session messages to server:", err);
+  }
+}
+
+function getMessagesFromDOM() {
+  const msgs = [];
+  const elements = messagesEl.querySelectorAll(".message");
+  for (const el of elements) {
+    const contentEl = el.querySelector(".content");
+    if (!contentEl) continue;
+    let role = "user";
+    if (el.classList.contains("assistant")) role = "assistant";
+    if (el.classList.contains("error")) role = "error";
+    msgs.push({ role, text: contentEl.textContent || "" });
+  }
+  return msgs;
+}
+
+function deleteSavedSession(sid) {
+  let sessions = loadSavedSessions();
+  sessions = sessions.filter((s) => s.id !== sid);
+  saveSessions(sessions);
+
+  // Also delete on backend
+  fetch(`/api/sessions/${encodeURIComponent(sid)}`, {
+    method: "DELETE",
+    headers: authHeaders(),
+  }).catch((err) => {
+    console.warn("Failed to delete session on backend:", err);
+  });
+
+  if (sessionId === sid) {
+    sessionId = null;
+    localStorage.removeItem("copilot_last_session");
+    clearChatUI();
+  }
+
+  renderSessionList();
+}
+
+function switchToSession(sid) {
+  // Save current session first
+  if (sessionId && sessionId !== sid) {
+    saveCurrentSessionMessages();
+  }
+
+  const sessions = loadSavedSessions();
+  const target = sessions.find((s) => s.id === sid);
+  if (!target) return;
+
+  sessionId = sid;
+  localStorage.setItem("copilot_last_session", sid);
+
+  // Restore messages
+  clearMessagesOnly();
+  welcomeEl.style.display = "none";
+
+  for (const msg of target.messages) {
+    appendMessage(msg.role, msg.text);
+  }
+
+  renderSessionList();
+  inputEl.focus();
+}
+
+function clearChatUI() {
+  messagesEl.innerHTML = "";
+  messagesEl.appendChild(welcomeEl);
+  welcomeEl.style.display = "flex";
+}
+
+function clearMessagesOnly() {
+  messagesEl.innerHTML = "";
+  messagesEl.appendChild(welcomeEl);
+}
+
+function renderSessionList() {
+  const sessions = loadSavedSessions();
+
+  if (sessions.length === 0) {
+    sessionListEl.innerHTML = '<div class="session-empty">No sessions yet.<br>Start a conversation!</div>';
+    return;
+  }
+
+  sessionListEl.innerHTML = "";
+  for (const s of sessions) {
+    const item = document.createElement("div");
+    item.className = "session-item" + (s.id === sessionId ? " active" : "");
+    item.setAttribute("data-session-id", s.id);
+
+    const text = document.createElement("div");
+    text.className = "session-item-text";
+
+    const titleEl = document.createElement("div");
+    titleEl.textContent = s.title || "New conversation";
+    text.appendChild(titleEl);
+
+    const meta = document.createElement("div");
+    meta.className = "session-item-meta";
+    const date = new Date(s.updatedAt || s.createdAt);
+    meta.textContent = formatSessionDate(date);
+    text.appendChild(meta);
+
+    const deleteBtn = document.createElement("button");
+    deleteBtn.className = "session-item-delete";
+    deleteBtn.textContent = "✕";
+    deleteBtn.title = "Delete session";
+    deleteBtn.setAttribute("aria-label", `Delete session: ${s.title || "New conversation"}`);
+    deleteBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      deleteSavedSession(s.id);
+    });
+
+    item.appendChild(text);
+    item.appendChild(deleteBtn);
+
+    item.addEventListener("click", () => switchToSession(s.id));
+    sessionListEl.appendChild(item);
+  }
+}
+
+function formatSessionDate(date) {
+  const now = new Date();
+  const diff = now - date;
+  const minutes = Math.floor(diff / 60000);
+  const hours = Math.floor(diff / 3600000);
+  const days = Math.floor(diff / 86400000);
+
+  if (minutes < 1) return "Just now";
+  if (minutes < 60) return `${minutes}m ago`;
+  if (hours < 24) return `${hours}h ago`;
+  if (days < 7) return `${days}d ago`;
+  return date.toLocaleDateString();
+}
+
+// --- Sidebar Toggle ---
+
+function toggleSidebar() {
+  sessionSidebar.classList.toggle("collapsed");
+  const isCollapsed = sessionSidebar.classList.contains("collapsed");
+  localStorage.setItem("copilot_sidebar_collapsed", isCollapsed ? "true" : "false");
+}
+
+function restoreSidebarState() {
+  const collapsed = localStorage.getItem("copilot_sidebar_collapsed") === "true";
+  if (collapsed) {
+    sessionSidebar.classList.add("collapsed");
+  }
+}
+
+function restoreLastSession() {
+  const lastId = localStorage.getItem("copilot_last_session");
+  if (!lastId) return;
+
+  const sessions = loadSavedSessions();
+  const target = sessions.find((s) => s.id === lastId);
+  if (!target || !target.messages || target.messages.length === 0) return;
+
+  sessionId = lastId;
+  clearMessagesOnly();
+  welcomeEl.style.display = "none";
+
+  for (const msg of target.messages) {
+    appendMessage(msg.role, msg.text);
+  }
+
+  renderSessionList();
+}
+
+// --- Backend Session Loading ---
+
+async function loadSessionsFromBackend() {
+  try {
+    const res = await fetch("/api/sessions", { headers: authHeaders() });
+    if (!res.ok) return;
+    const data = await res.json();
+    if (!Array.isArray(data.sessions)) return;
+
+    const localSessions = loadSavedSessions();
+    const localMap = new Map(localSessions.map((s) => [s.id, s]));
+
+    // Merge backend sessions into local cache
+    let changed = false;
+    for (const remote of data.sessions) {
+      const local = localMap.get(remote.id);
+      if (!local) {
+        // Session exists on backend but not locally — fetch its messages
+        const msgRes = await fetch(
+          "/api/sessions/" + encodeURIComponent(remote.id) + "/messages",
+          { headers: authHeaders() }
+        );
+        const msgData = msgRes.ok ? await msgRes.json() : { messages: [] };
+        localMap.set(remote.id, {
+          id: remote.id,
+          title: remote.title,
+          model: remote.model,
+          messages: msgData.messages || [],
+          createdAt: remote.createdAt,
+          updatedAt: remote.updatedAt,
+        });
+        changed = true;
+      } else if (remote.updatedAt > (local.updatedAt || "")) {
+        // Backend is newer — update local metadata
+        local.title = remote.title;
+        local.model = remote.model;
+        local.updatedAt = remote.updatedAt;
+        changed = true;
+      }
+    }
+
+    if (changed) {
+      const merged = Array.from(localMap.values());
+      merged.sort((a, b) => new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0));
+      saveSessions(merged);
+      renderSessionList();
+    }
+  } catch (err) {
+    console.warn("Failed to load sessions from backend:", err);
+  }
+}
+
 // --- Init ---
 updateTokenUI();
 checkHealth();
-if (getToken()) loadModels();
+restoreSidebarState();
+renderSessionList();
+restoreLastSession();
+if (getToken()) {
+  loadModels();
+  loadSessionsFromBackend();
+}
+
+toggleSidebarBtn.addEventListener("click", toggleSidebar);
 
 saveTokenBtn.addEventListener("click", () => {
   const current = getToken();
@@ -66,6 +367,7 @@ saveTokenBtn.addEventListener("click", () => {
     if (!val) return;
     saveToken(val);
     loadModels();
+    loadSessionsFromBackend();
   }
 });
 
@@ -84,10 +386,14 @@ inputEl.addEventListener("input", () => {
 sendBtn.addEventListener("click", sendMessage);
 
 newChatBtn.addEventListener("click", () => {
+  // Save current session before starting new one
+  if (sessionId) {
+    saveCurrentSessionMessages();
+  }
   sessionId = null;
-  messagesEl.innerHTML = "";
-  messagesEl.appendChild(welcomeEl);
-  welcomeEl.style.display = "flex";
+  localStorage.removeItem("copilot_last_session");
+  clearChatUI();
+  renderSessionList();
   inputEl.focus();
 });
 
@@ -211,6 +517,9 @@ async function sendMessage() {
             messagesEl.scrollTop = messagesEl.scrollHeight;
           } else if (event.type === "done") {
             sessionId = event.sessionId;
+            // Persist session state
+            localStorage.setItem("copilot_last_session", sessionId);
+            saveCurrentSessionMessages();
           } else if (event.type === "error") {
             appendMessage("error", event.message);
           }
