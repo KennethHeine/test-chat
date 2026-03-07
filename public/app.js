@@ -117,6 +117,7 @@ function setDisconnected(msg) {
 
 // --- Load Models ---
 async function loadModels() {
+  modelSelect.innerHTML = '<option value="gpt-4.1">Loading models...</option>';
   try {
     const res = await fetch("/api/models", { headers: authHeaders() });
     if (!res.ok) {
