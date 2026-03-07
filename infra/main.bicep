@@ -1,7 +1,7 @@
 targetScope = 'resourceGroup'
 
-@description('Azure region for all resources')
-param location string = 'norwayeast'
+@description('Azure region for all resources — defaults to the resource group location (norwayeast, set by Azure-infrastructure)')
+param location string = resourceGroup().location
 
 @description('Base name used to derive resource names')
 param appName string = 'test-chat'

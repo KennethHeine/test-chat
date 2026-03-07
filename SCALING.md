@@ -24,7 +24,7 @@ Light usage          → 1 replica   → billed per active second
 Traffic drops        → scales back → eventually 0
 ```
 
-Cold start time when scaling from 0 → 1 is approximately **2–5 seconds**.
+Cold start time when scaling from 0 → 1 is approximately **2–5 seconds** (varies by image size, region, and platform conditions).
 
 ## Changing Scale Settings
 
