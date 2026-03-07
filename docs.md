@@ -222,7 +222,7 @@ await session.send({ prompt: "Hello!" });
 
 - Sessions are stored in a `Map<string, CopilotSession>` in server memory (for active SDK sessions)
 - Session metadata and chat messages are persisted via the `SessionStore` interface (`storage.ts`)
-- **Azure mode**: Uses Table Storage for metadata and Blob Storage for messages (when `AZURE_STORAGE_CONNECTION_STRING` is set)
+- **Azure mode**: Uses Table Storage for metadata and Blob Storage for messages (when `AZURE_STORAGE_ACCOUNT_NAME` is set, authenticates via managed identity)
 - **Memory mode**: Falls back to in-memory Maps (data lost on restart)
 - Creating a new chat = creating a new session
 - Sessions are cleaned up when the server stops (`client.stop()`)

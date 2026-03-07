@@ -1,5 +1,6 @@
 import { TableClient } from "@azure/data-tables";
 import { BlobServiceClient, ContainerClient } from "@azure/storage-blob";
+import { DefaultAzureCredential } from "@azure/identity";
 
 // --- Types ---
 
@@ -43,7 +44,7 @@ export async function hashToken(token: string): Promise<string> {
   return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-// --- In-memory store (fallback when no Azure connection string) ---
+// --- In-memory store (fallback when no Azure storage account configured) ---
 
 export class InMemorySessionStore implements SessionStore {
   private sessions = new Map<string, SessionMetadata>();
@@ -99,9 +100,12 @@ export class AzureSessionStore implements SessionStore {
   private tableClient: TableClient;
   private containerClient: ContainerClient;
 
-  constructor(connectionString: string) {
-    this.tableClient = TableClient.fromConnectionString(connectionString, TABLE_NAME);
-    const blobService = BlobServiceClient.fromConnectionString(connectionString);
+  constructor(accountName: string) {
+    const credential = new DefaultAzureCredential();
+    const tableUrl = `https://${accountName}.table.core.windows.net`;
+    const blobUrl = `https://${accountName}.blob.core.windows.net`;
+    this.tableClient = new TableClient(tableUrl, TABLE_NAME, credential);
+    const blobService = new BlobServiceClient(blobUrl, credential);
     this.containerClient = blobService.getContainerClient(BLOB_CONTAINER);
   }
 
@@ -215,9 +219,9 @@ async function streamToString(stream: NodeJS.ReadableStream): Promise<string> {
 
 // --- Factory ---
 
-export function createSessionStore(connectionString?: string): SessionStore {
-  if (connectionString) {
-    return new AzureSessionStore(connectionString);
+export function createSessionStore(accountName?: string): SessionStore {
+  if (accountName) {
+    return new AzureSessionStore(accountName);
   }
   return new InMemorySessionStore();
 }

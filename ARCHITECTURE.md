@@ -109,8 +109,8 @@ Session metadata and chat messages are persisted via a `SessionStore` interface 
 
 | Implementation | Backend | When Used |
 |---------------|---------|-----------|
-| `InMemorySessionStore` | JavaScript `Map` objects | Default (no Azure connection string) |
-| `AzureSessionStore` | Azure Table Storage + Blob Storage | When `AZURE_STORAGE_CONNECTION_STRING` is set |
+| `InMemorySessionStore` | JavaScript `Map` objects | Default (no Azure storage account configured) |
+| `AzureSessionStore` | Azure Table Storage + Blob Storage | When `AZURE_STORAGE_ACCOUNT_NAME` is set |
 
 **Azure Table Storage** stores session metadata (partition key = hashed token, row key = session ID), enabling fast per-user lookups. **Azure Blob Storage** stores chat message history as JSON files (`{tokenHash}/{sessionId}.json`), allowing large conversation histories.
 
@@ -352,7 +352,7 @@ Clicking "New Chat" resets `sessionId` to `null`, which causes the server to cre
 | `PORT` | No | `3000` | Express server listen port |
 | `NODE_ENV` | No | `development` | Set to `production` in Docker/Azure |
 | `COPILOT_GITHUB_TOKEN` | No | — | Fallback token when no `Authorization` header (for CI/testing) |
-| `AZURE_STORAGE_CONNECTION_STRING` | No | — | Azure Storage connection string for persistent sessions |
+| `AZURE_STORAGE_ACCOUNT_NAME` | No | — | Azure Storage account name for persistent sessions (uses managed identity) |
 
 For local development, copy `.env.example` to `.env` and fill in the values.
 

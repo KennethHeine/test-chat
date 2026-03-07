@@ -18,8 +18,8 @@ const PORT = parseInt(process.env.PORT || "3000", 10);
 
 // --- Storage ---
 
-const storageConnectionString = process.env.AZURE_STORAGE_CONNECTION_STRING || "";
-const sessionStore: SessionStore = createSessionStore(storageConnectionString || undefined);
+const storageAccountName = process.env.AZURE_STORAGE_ACCOUNT_NAME || "";
+const sessionStore: SessionStore = createSessionStore(storageAccountName || undefined);
 
 // --- Per-user Copilot Clients ---
 
@@ -73,7 +73,7 @@ app.get("/api/health", (_req: Request, res: Response) => {
   res.json({
     status: "ok",
     copilotCli: isCopilotCliAvailable(),
-    storage: storageConnectionString ? "azure" : "memory",
+    storage: storageAccountName ? "azure" : "memory",
   });
 });
 
@@ -299,7 +299,7 @@ async function startServer() {
       console.log("Falling back to in-memory storage");
     }
   } else {
-    console.log("Using in-memory session storage (set AZURE_STORAGE_CONNECTION_STRING for persistence)");
+    console.log("Using in-memory session storage (set AZURE_STORAGE_ACCOUNT_NAME for persistence)");
   }
 
   const server = app.listen(PORT, () => {

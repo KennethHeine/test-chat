@@ -53,7 +53,7 @@ Session metadata and chat messages can optionally be persisted to **Azure Storag
 | **Table Storage** | Session metadata (id, title, model, timestamps) | Fast key-value lookups per user |
 | **Blob Storage** | Chat message history (JSON per session) | Stores full conversation text |
 
-When `AZURE_STORAGE_CONNECTION_STRING` is set, the server uses Azure Storage. Otherwise, it falls back to **in-memory storage** (data lost on restart). The frontend also caches sessions in `localStorage` for instant UI rendering.
+When `AZURE_STORAGE_ACCOUNT_NAME` is set, the server uses Azure Storage with managed identity (DefaultAzureCredential). Otherwise, it falls back to **in-memory storage** (data lost on restart). The frontend also caches sessions in `localStorage` for instant UI rendering.
 
 ## Prerequisites
 
@@ -83,7 +83,7 @@ npm start
 |----------|----------|---------|-------------|
 | `COPILOT_GITHUB_TOKEN` | No | — | Server-side fallback token for testing/CI. In normal use, each user provides their own token via the web UI. |
 | `PORT` | No | `3000` | Server port |
-| `AZURE_STORAGE_CONNECTION_STRING` | No | — | Azure Storage connection string for persistent sessions. When empty, uses in-memory storage. |
+| `AZURE_STORAGE_ACCOUNT_NAME` | No | — | Azure Storage account name for persistent sessions. Uses managed identity (DefaultAzureCredential). When empty, uses in-memory storage. |
 
 ### Authentication
 
