@@ -17,6 +17,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Lowercase repo name
+        run: echo "REPO_LC=${GITHUB_REPOSITORY,,}" >> $GITHUB_ENV
+
       - name: Azure Login
         uses: azure/login@v2
         with:
@@ -30,4 +33,4 @@ jobs:
           resourceGroupName: rg-test-chat
           template: ./infra/main.bicep
           parameters: >-
-            containerImage=ghcr.io/${{ github.repository }}:latest
+            containerImage=ghcr.io/${{ env.REPO_LC }}:latest

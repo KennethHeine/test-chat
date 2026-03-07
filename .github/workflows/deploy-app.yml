@@ -18,8 +18,6 @@ permissions:
   packages: write
 
 env:
-  IMAGE: ghcr.io/${{ github.repository }}:${{ github.sha }}
-  IMAGE_LATEST: ghcr.io/${{ github.repository }}:latest
   RESOURCE_GROUP: rg-test-chat
   CONTAINER_APP_NAME: test-chat-api
   SWA_NAME: test-chat-web
@@ -29,6 +27,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Lowercase repo name
+        run: echo "REPO_LC=${GITHUB_REPOSITORY,,}" >> $GITHUB_ENV
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
@@ -43,13 +44,16 @@ jobs:
           context: .
           push: true
           tags: |
-            ${{ env.IMAGE }}
-            ${{ env.IMAGE_LATEST }}
+            ghcr.io/${{ env.REPO_LC }}:${{ github.sha }}
+            ghcr.io/${{ env.REPO_LC }}:latest
 
   deploy-backend:
     needs: build-and-push
     runs-on: ubuntu-latest
     steps:
+      - name: Lowercase repo name
+        run: echo "REPO_LC=${GITHUB_REPOSITORY,,}" >> $GITHUB_ENV
+
       - name: Azure Login
         uses: azure/login@v2
         with:
@@ -62,7 +66,7 @@ jobs:
           az containerapp update \
             --name ${{ env.CONTAINER_APP_NAME }} \
             --resource-group ${{ env.RESOURCE_GROUP }} \
-            --image ${{ env.IMAGE }}
+            --image ghcr.io/${{ env.REPO_LC }}:${{ github.sha }}
 
   deploy-frontend:
     runs-on: ubuntu-latest

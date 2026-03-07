@@ -6,8 +6,8 @@ param location string = resourceGroup().location
 @description('Base name used to derive resource names')
 param appName string = 'test-chat'
 
-@description('Container image to deploy (e.g. ghcr.io/KennethHeine/test-chat:latest)')
-param containerImage string
+@description('Container image to deploy (e.g. ghcr.io/kennethheine/test-chat:latest)')
+param containerImage string = 'mcr.microsoft.com/k8se/quickstart:latest'
 
 @description('Region for Static Web App (limited availability — norwayeast not supported)')
 param swaLocation string = 'westeurope'
