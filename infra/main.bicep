@@ -95,8 +95,8 @@ resource staticWebApp 'Microsoft.Web/staticSites@2023-12-01' = {
   name: '${appName}-web'
   location: swaLocation
   sku: {
-    name: 'Free'
-    tier: 'Free'
+    name: 'Standard'
+    tier: 'Standard'
   }
   properties: {
     buildProperties: {
