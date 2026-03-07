@@ -101,26 +101,28 @@ function saveCurrentSessionMessages() {
   renderSessionList();
 
   // Persist messages to backend (fire-and-forget), keeping localStorage as a fast cache
-  (async () => {
-    try {
-      const response = await fetch(
-        "/api/sessions/" + encodeURIComponent(sessionId) + "/messages",
-        {
-          method: "PUT",
-          headers: {
-            ...authHeaders(),
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ messages }),
-        }
-      );
-      if (!response.ok) {
-        console.error("Failed to persist session messages to server:", response.status);
+  persistMessagesToBackend(sessionId, messages);
+}
+
+async function persistMessagesToBackend(sid, messages) {
+  try {
+    const response = await fetch(
+      "/api/sessions/" + encodeURIComponent(sid) + "/messages",
+      {
+        method: "PUT",
+        headers: {
+          ...authHeaders(),
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ messages }),
       }
-    } catch (err) {
-      console.error("Error persisting session messages to server:", err);
+    );
+    if (!response.ok) {
+      console.error("Failed to persist session messages to server:", response.status);
     }
-  })();
+  } catch (err) {
+    console.error("Error persisting session messages to server:", err);
+  }
 }
 
 function getMessagesFromDOM() {
