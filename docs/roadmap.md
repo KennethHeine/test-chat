@@ -1,6 +1,6 @@
 # Optimization Plan: AI Chat App for Coding Agent Orchestration
 
-This plan outlines how to transform the current Copilot Chat application into an **AI-powered orchestration platform** for coding agent tasks. The goal is to leverage the GitHub Copilot SDK's extensive unused capabilities (documented in [BACKEND_AND_SDK.md](./BACKEND_AND_SDK.md)) to create a system that can:
+This plan outlines how to transform the current Copilot Chat application into an **AI-powered orchestration platform** for coding agent tasks. The goal is to leverage the GitHub Copilot SDK's extensive unused capabilities (documented in [sdk-reference.md](./sdk-reference.md)) to create a system that can:
 
 1. **Orchestrate coding agent tasks** across GitHub repositories
 2. **Support research workflows** — investigate codebases before committing to implementation
@@ -105,7 +105,7 @@ Transform from a **simple chat interface** into an **agent orchestration dashboa
 
 ### 1.1 System Message Customization ✅ COMPLETE
 
-**SDK Feature:** `systemMessage` option in `createSession()` ([BACKEND_AND_SDK.md §8.4](./BACKEND_AND_SDK.md#84-system-message-customization))
+**SDK Feature:** `systemMessage` option in `createSession()` ([sdk-reference.md §8.4](./sdk-reference.md#84-system-message-customization))
 
 **What:** Configure the Copilot agent as a coding task orchestrator instead of a generic assistant.
 
@@ -131,7 +131,7 @@ When asked to explore a repo, use available tools to read files and understand t
 
 ### 1.2 Session Abort — Stop Button ✅ COMPLETE
 
-**SDK Feature:** `session.abort()` ([BACKEND_AND_SDK.md §8.2](./BACKEND_AND_SDK.md#82-session-level-features))
+**SDK Feature:** `session.abort()` ([sdk-reference.md §8.2](./sdk-reference.md#82-session-level-features))
 
 **What:** Allow users to cancel long-running agent responses. Essential for orchestration where agents may be performing lengthy operations.
 
@@ -142,7 +142,7 @@ When asked to explore a repo, use available tools to read files and understand t
 
 ### 1.3 Tool Execution Events — Agent Activity ✅ COMPLETE
 
-**SDK Feature:** `tool.execution_start`, `tool.execution_complete`, `tool.execution_progress` events ([BACKEND_AND_SDK.md §8.13](./BACKEND_AND_SDK.md#813-additional-unused-events))
+**SDK Feature:** `tool.execution_start`, `tool.execution_complete`, `tool.execution_progress` events ([sdk-reference.md §8.13](./sdk-reference.md#813-additional-unused-events))
 
 **What:** Show users what the agent is doing in real-time. When the agent reads a file, runs a command, or searches code — the user sees it.
 
@@ -152,7 +152,7 @@ When asked to explore a repo, use available tools to read files and understand t
 
 ### 1.4 AI-Generated Session Titles ✅ COMPLETE
 
-**SDK Feature:** `session.title_changed` event ([BACKEND_AND_SDK.md §8.13](./BACKEND_AND_SDK.md#813-additional-unused-events))
+**SDK Feature:** `session.title_changed` event ([sdk-reference.md §8.13](./sdk-reference.md#813-additional-unused-events))
 
 **What:** Replace the current "first 50 chars of message" title with AI-generated conversation titles.
 
@@ -162,7 +162,7 @@ When asked to explore a repo, use available tools to read files and understand t
 
 ### 1.5 Token Usage Tracking ✅ COMPLETE
 
-**SDK Feature:** `assistant.usage` event ([BACKEND_AND_SDK.md §8.13](./BACKEND_AND_SDK.md#813-additional-unused-events))
+**SDK Feature:** `assistant.usage` event ([sdk-reference.md §8.13](./sdk-reference.md#813-additional-unused-events))
 
 **What:** Show users token consumption per message. Important for orchestration where tasks may consume significant tokens.
 
@@ -172,7 +172,7 @@ When asked to explore a repo, use available tools to read files and understand t
 
 ### 1.6 Better Health Monitoring ✅ COMPLETE
 
-**SDK Feature:** `client.ping()`, `client.getState()` ([BACKEND_AND_SDK.md §8.1](./BACKEND_AND_SDK.md#81-client-level-features))
+**SDK Feature:** `client.ping()`, `client.getState()` ([sdk-reference.md §8.1](./sdk-reference.md#81-client-level-features))
 
 **What:** Replace the current CLI binary check with actual RPC connection health monitoring.
 
@@ -193,7 +193,7 @@ When asked to explore a repo, use available tools to read files and understand t
 
 ### 2.1 Custom Tools — GitHub API Integration ✅ COMPLETE
 
-**SDK Feature:** Tool System with `defineTool()` ([BACKEND_AND_SDK.md §8.3](./BACKEND_AND_SDK.md#83-tool-system))
+**SDK Feature:** Tool System with `defineTool()` ([sdk-reference.md §8.3](./sdk-reference.md#83-tool-system))
 
 **What:** Give the agent tools to interact with GitHub repositories directly. This is the core of the orchestration capability.
 
@@ -219,7 +219,7 @@ When asked to explore a repo, use available tools to read files and understand t
 
 ### 2.2 MCP Server Integration — Repository Context ⏸️ DEFERRED
 
-**SDK Feature:** MCP Server Integration ([BACKEND_AND_SDK.md §8.9](./BACKEND_AND_SDK.md#89-mcp-server-integration))
+**SDK Feature:** MCP Server Integration ([sdk-reference.md §8.9](./sdk-reference.md#89-mcp-server-integration))
 
 **What:** Connect to GitHub's MCP server to give the agent rich repository context.
 
@@ -232,7 +232,7 @@ When asked to explore a repo, use available tools to read files and understand t
 
 ### 2.3 Session Resumption — Persistent Tasks ✅ COMPLETE
 
-**SDK Feature:** `client.resumeSession()` ([BACKEND_AND_SDK.md §8.1](./BACKEND_AND_SDK.md#81-client-level-features))
+**SDK Feature:** `client.resumeSession()` ([sdk-reference.md §8.1](./sdk-reference.md#81-client-level-features))
 
 **What:** Preserve full conversation context across server restarts. Critical for long-running orchestration tasks.
 
@@ -243,7 +243,7 @@ When asked to explore a repo, use available tools to read files and understand t
 
 ### 2.4 Session Hooks — Task Tracking ✅ COMPLETE
 
-**SDK Feature:** Session Hooks ([BACKEND_AND_SDK.md §8.6](./BACKEND_AND_SDK.md#86-session-hooks))
+**SDK Feature:** Session Hooks ([sdk-reference.md §8.6](./sdk-reference.md#86-session-hooks))
 
 **What:** Track agent activity for audit trails and task management.
 
@@ -257,7 +257,7 @@ When asked to explore a repo, use available tools to read files and understand t
 
 ### 2.5 Model Switching Mid-Conversation ✅ COMPLETE
 
-**SDK Feature:** `session.setModel()` ([BACKEND_AND_SDK.md §8.2](./BACKEND_AND_SDK.md#82-session-level-features))
+**SDK Feature:** `session.setModel()` ([sdk-reference.md §8.2](./sdk-reference.md#82-session-level-features))
 
 **What:** Allow switching between models during a conversation. Useful for using cheaper models for research and premium models for complex tasks.
 
@@ -268,7 +268,7 @@ When asked to explore a repo, use available tools to read files and understand t
 
 ### 2.6 Quota Monitoring ✅ COMPLETE
 
-**SDK Feature:** `account.getQuota()` ([BACKEND_AND_SDK.md §8.14](./BACKEND_AND_SDK.md#814-rpc-methods))
+**SDK Feature:** `account.getQuota()` ([sdk-reference.md §8.14](./sdk-reference.md#814-rpc-methods))
 
 **What:** Show users their remaining premium request quota. Important when orchestrating multiple agent tasks.
 
@@ -289,7 +289,7 @@ When asked to explore a repo, use available tools to read files and understand t
 
 ### 3.1 Fleet Mode — Parallel Agents
 
-**SDK Feature:** `fleet.start()` RPC method ([BACKEND_AND_SDK.md §8.14](./BACKEND_AND_SDK.md#814-rpc-methods))
+**SDK Feature:** `fleet.start()` RPC method ([sdk-reference.md §8.14](./sdk-reference.md#814-rpc-methods))
 
 **What:** Launch a fleet of sub-agents that work on related tasks in parallel. This is the "spread tasks over agents" capability.
 
@@ -301,7 +301,7 @@ When asked to explore a repo, use available tools to read files and understand t
 
 ### 3.2 Sub-Agent Monitoring
 
-**SDK Feature:** `subagent.started/completed/failed` events ([BACKEND_AND_SDK.md §8.13](./BACKEND_AND_SDK.md#813-additional-unused-events))
+**SDK Feature:** `subagent.started/completed/failed` events ([sdk-reference.md §8.13](./sdk-reference.md#813-additional-unused-events))
 
 **What:** Track the progress of each sub-agent in the fleet.
 
@@ -312,7 +312,7 @@ When asked to explore a repo, use available tools to read files and understand t
 
 ### 3.3 Custom Agents — Specialized Roles
 
-**SDK Feature:** Custom Agents ([BACKEND_AND_SDK.md §8.10](./BACKEND_AND_SDK.md#810-custom-agents))
+**SDK Feature:** Custom Agents ([sdk-reference.md §8.10](./sdk-reference.md#810-custom-agents))
 
 **What:** Create specialized agent personas for different orchestration roles.
 
@@ -337,25 +337,25 @@ When asked to explore a repo, use available tools to read files and understand t
 
 ### 4.1 User Input Requests — Agent Questions
 
-**SDK Feature:** `onUserInputRequest` ([BACKEND_AND_SDK.md §8.7](./BACKEND_AND_SDK.md#87-user-input-requests))
+**SDK Feature:** `onUserInputRequest` ([sdk-reference.md §8.7](./sdk-reference.md#87-user-input-requests))
 
 **What:** Allow the agent to ask clarifying questions during task execution.
 
 ### 4.2 File & Image Attachments
 
-**SDK Feature:** File Attachments ([BACKEND_AND_SDK.md §8.11](./BACKEND_AND_SDK.md#811-file-and-image-attachments))
+**SDK Feature:** File Attachments ([sdk-reference.md §8.11](./sdk-reference.md#811-file-and-image-attachments))
 
 **What:** Allow users to share files, images, and code selections with the agent.
 
 ### 4.3 Reasoning Effort Control
 
-**SDK Feature:** `reasoningEffort` option ([BACKEND_AND_SDK.md §8.12](./BACKEND_AND_SDK.md#812-reasoning-effort-control))
+**SDK Feature:** `reasoningEffort` option ([sdk-reference.md §8.12](./sdk-reference.md#812-reasoning-effort-control))
 
 **What:** Let users control how deeply the agent thinks about a task.
 
 ### 4.4 BYOK — Alternative Providers
 
-**SDK Feature:** BYOK ([BACKEND_AND_SDK.md §8.8](./BACKEND_AND_SDK.md#88-byok-bring-your-own-key))
+**SDK Feature:** BYOK ([sdk-reference.md §8.8](./sdk-reference.md#88-byok-bring-your-own-key))
 
 **What:** Support alternative model providers for specialized tasks.
 
@@ -365,7 +365,7 @@ When asked to explore a repo, use available tools to read files and understand t
 
 This table maps every relevant unused SDK feature to the orchestration goal:
 
-| SDK Feature | BACKEND_AND_SDK.md Section | Phase | Orchestration Value |
+| SDK Feature | sdk-reference.md Section | Phase | Orchestration Value |
 |-------------|---------------------------|-------|-------------------|
 | System message | §8.4 | 1 | Configure orchestrator persona |
 | `session.abort()` | §8.2 | 1 | Cancel long-running tasks |
@@ -426,4 +426,4 @@ This table maps every relevant unused SDK feature to the orchestration goal:
 
 ---
 
-*This plan is based on the comprehensive SDK analysis in [BACKEND_AND_SDK.md](./BACKEND_AND_SDK.md). Each phase builds on the previous one, and features can be adopted incrementally.*
+*This plan is based on the comprehensive SDK analysis in [sdk-reference.md](./sdk-reference.md). Each phase builds on the previous one, and features can be adopted incrementally.*

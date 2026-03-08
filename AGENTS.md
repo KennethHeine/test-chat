@@ -36,6 +36,7 @@
 
 ```
 ├── server.ts              # Express backend (API routes, Copilot SDK integration)
+├── tools.ts               # GitHub API tools factory (5 tools bound to user's token)
 ├── storage.ts             # Storage abstraction (Azure Table/Blob + in-memory fallback)
 ├── storage.test.ts        # Unit tests for storage module
 ├── test.ts                # Integration tests (SDK + server HTTP API)
@@ -45,6 +46,16 @@
 │   └── staticwebapp.config.json  # Azure SWA routing config
 ├── e2e/
 │   └── chat.spec.ts       # Playwright E2E tests
+├── docs/                  # Documentation
+│   ├── architecture.md    #   System architecture and data flow
+│   ├── frontend.md        #   Frontend documentation
+│   ├── backend.md         #   Backend documentation
+│   ├── frontend-testing.md#   E2E / Playwright tests
+│   ├── backend-testing.md #   Unit + integration tests
+│   ├── regression-testing.md # Regression test strategy
+│   ├── deployment.md      #   Azure deployment + scaling
+│   ├── sdk-reference.md   #   Copilot SDK deep dive
+│   └── roadmap.md         #   Optimization plan
 ├── infra/
 │   └── main.bicep         # Azure infrastructure (Container Apps + SWA + Storage Account)
 ├── .github/workflows/
@@ -57,12 +68,7 @@
 ├── Dockerfile             # Production container (node:22-alpine)
 ├── playwright.config.ts   # Playwright test configuration
 ├── .env.example           # Template for local env vars
-├── README.md              # User-facing documentation
-├── TESTING.md             # Full testing documentation
-├── AZURE_DEPLOYMENT.md    # Azure deployment guide
-├── SCALING.md             # Container App scaling guide
-├── docs.md                # Detailed technical docs
-└── AGENT_LEARNINGS.md     # Quick reference for agents/developers
+└── README.md              # User-facing documentation
 ```
 
 ### Do Not Touch (without explicit request)
@@ -82,6 +88,18 @@
 | GET | `/api/sessions/:id/messages` | Bearer token | Get chat messages for a session |
 | PUT | `/api/sessions/:id/messages` | Bearer token | Save chat messages for a session |
 | POST | `/api/chat` | Bearer token | SSE streaming chat |
+| POST | `/api/chat/abort` | Bearer token | Abort streaming response |
+| POST | `/api/chat/model` | Bearer token | Switch model mid-conversation |
+| GET | `/api/quota` | Bearer token | Premium request quota |
+
+## SDK Quick Reference
+
+- `session.on()` returns an **unsubscribe function** — there is no `.off()` method
+- `onPermissionRequest` is **required** in `SessionConfig` — uses custom `safePermissionHandler`
+- Delta events carry content in `event.data.deltaContent` (not `event.data.content`)
+- One `CopilotClient` per user token — `client.start()` launches a Copilot CLI subprocess
+- `COPILOT_GITHUB_TOKEN` must be a **fine-grained PAT** (`github_pat_`), not a classic PAT (`ghp_`)
+- `gpt-4.1` costs **0 premium requests** on paid plans — used in all tests
 
 ## Guardrails & Safety
 
@@ -100,7 +118,7 @@ When completing any code change, ensure:
    - Typecheck passes: `npx tsc --noEmit`
    - Integration tests pass: `npm test` (requires `COPILOT_GITHUB_TOKEN`)
    - E2E tests pass if UI changed: `npm run test:e2e:local`
-2. **Docs:** Update relevant documentation (README.md, TESTING.md, docs.md, or inline comments) when behavior, configuration, or developer workflow changes.
+2. **Docs:** Update relevant documentation in `docs/` or `README.md` when behavior, configuration, or developer workflow changes.
 3. **Validation:** Run the relevant checks locally before opening a PR:
    - `npx tsc --noEmit` (always)
    - `npm test` (if backend changed and token available)
