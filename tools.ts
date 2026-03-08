@@ -47,7 +47,7 @@ export function createGitHubTools(token: string): Tool[] {
         type: {
           type: "string",
           enum: ["all", "owner", "member"],
-          description: "Filter by repo type. For authenticated user: all, owner, member. For other users: all, owner, member. The GitHub API default varies by endpoint.",
+          description: "Filter by repo type: all, owner, or member. The GitHub API default varies by endpoint.",
         },
         sort: {
           type: "string",
@@ -145,13 +145,15 @@ export function createGitHubTools(token: string): Tool[] {
         throw new Error(`Path is a ${file.type}, not a file`);
       }
       const content = Buffer.from(file.content, "base64").toString("utf-8");
-      const truncated = content.length > MAX_FILE_SIZE;
+      const byteLength = Buffer.byteLength(content, "utf-8");
+      const truncated = byteLength > MAX_FILE_SIZE;
+      const outputContent = truncated ? content.slice(0, MAX_FILE_SIZE) : content;
       return {
         path: file.path,
         size: file.size,
         truncated,
-        content: truncated ? content.slice(0, MAX_FILE_SIZE) : content,
-        ...(truncated ? { note: `File truncated to ${MAX_FILE_SIZE} bytes (original: ${content.length} bytes)` } : {}),
+        content: outputContent,
+        ...(truncated ? { note: `File truncated to ~${MAX_FILE_SIZE} bytes (original: ${byteLength} bytes)` } : {}),
       };
     },
   };

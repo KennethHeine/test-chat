@@ -86,7 +86,7 @@ const safePermissionHandler: PermissionHandler = async (request) => {
     return { kind: "approved" };
   }
   // Deny shell commands and write operations by default
-  return { kind: "denied-by-rules", rules: [{ description: "Only custom GitHub tools and read operations are auto-approved" }] };
+  return { kind: "denied-by-rules", rules: [{ description: `Denied ${request.kind}: only custom tools and read operations are auto-approved` }] };
 };
 
 // Build the shared session config used for both new and resumed sessions
