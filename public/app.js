@@ -23,6 +23,7 @@ const usageDisplay = document.getElementById("usage-display");
 const usageText = document.getElementById("usage-text");
 const quotaDisplay = document.getElementById("quota-display");
 const quotaText = document.getElementById("quota-text");
+const sidebarBackdrop = document.getElementById("sidebar-backdrop");
 
 // --- Token Management ---
 function getToken() {
@@ -190,6 +191,7 @@ function switchToSession(sid) {
   }
 
   renderSessionList();
+  closeSidebarOnMobile();
   inputEl.focus();
 }
 
@@ -276,16 +278,35 @@ function formatSessionDate(date) {
 
 // --- Sidebar Toggle ---
 
+function isMobileView() {
+  return window.matchMedia("(max-width: 768px)").matches;
+}
+
 function toggleSidebar() {
   sessionSidebar.classList.toggle("collapsed");
   const isCollapsed = sessionSidebar.classList.contains("collapsed");
   localStorage.setItem("copilot_sidebar_collapsed", isCollapsed ? "true" : "false");
+
+  // Show/hide backdrop on mobile
+  if (isMobileView()) {
+    sidebarBackdrop.style.display = isCollapsed ? "none" : "block";
+  }
+}
+
+function closeSidebarOnMobile() {
+  if (isMobileView() && !sessionSidebar.classList.contains("collapsed")) {
+    sessionSidebar.classList.add("collapsed");
+    sidebarBackdrop.style.display = "none";
+    localStorage.setItem("copilot_sidebar_collapsed", "true");
+  }
 }
 
 function restoreSidebarState() {
   const collapsed = localStorage.getItem("copilot_sidebar_collapsed") === "true";
-  if (collapsed) {
+  // On mobile, always start collapsed
+  if (isMobileView() || collapsed) {
     sessionSidebar.classList.add("collapsed");
+    sidebarBackdrop.style.display = "none";
   }
 }
 
@@ -373,6 +394,9 @@ if (getToken()) {
 }
 
 toggleSidebarBtn.addEventListener("click", toggleSidebar);
+
+// Close sidebar when backdrop is tapped (mobile)
+sidebarBackdrop.addEventListener("click", closeSidebarOnMobile);
 
 // --- Stop Button ---
 stopBtn.addEventListener("click", async () => {
