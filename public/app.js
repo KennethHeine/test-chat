@@ -21,6 +21,8 @@ const toolActivityEl = document.getElementById("tool-activity");
 const toolActivityText = document.getElementById("tool-activity-text");
 const usageDisplay = document.getElementById("usage-display");
 const usageText = document.getElementById("usage-text");
+const quotaDisplay = document.getElementById("quota-display");
+const quotaText = document.getElementById("quota-text");
 
 // --- Token Management ---
 function getToken() {
@@ -367,6 +369,7 @@ restoreLastSession();
 if (getToken()) {
   loadModels();
   loadSessionsFromBackend();
+  loadQuota();
 }
 
 toggleSidebarBtn.addEventListener("click", toggleSidebar);
@@ -422,12 +425,65 @@ function showUsage(usage) {
   }
 }
 
+// --- Quota Display (Phase 2.6) ---
+async function loadQuota() {
+  // Clear previous quota to avoid showing stale data
+  quotaText.textContent = "";
+  quotaDisplay.style.display = "none";
+
+  try {
+    const res = await fetch("/api/quota", { headers: authHeaders() });
+    if (!res.ok) return;
+    const data = await res.json();
+    if (data.quota) {
+      const q = data.quota;
+      const parts = [];
+      if (q.premiumRequestsRemaining !== undefined) {
+        parts.push(`Premium: ${q.premiumRequestsRemaining}/${q.premiumRequestsLimit || "∞"}`);
+      }
+      if (parts.length > 0) {
+        quotaText.textContent = "Quota — " + parts.join(" · ");
+        quotaDisplay.style.display = "inline";
+      }
+    }
+  } catch (err) {
+    console.warn("Failed to load quota:", err);
+  }
+}
+
+// --- Model Switching Mid-Conversation (Phase 2.5) ---
+modelSelect.addEventListener("change", async () => {
+  if (!sessionId || isStreaming) return;
+  const newModel = modelSelect.value;
+  try {
+    const res = await fetch("/api/chat/model", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify({ sessionId, model: newModel }),
+    });
+    if (res.ok) {
+      // Update local session metadata
+      const sessions = loadSavedSessions();
+      const target = sessions.find((s) => s.id === sessionId);
+      if (target) {
+        target.model = newModel;
+        saveSessions(sessions);
+      }
+    }
+  } catch (err) {
+    console.warn("Failed to switch model:", err);
+  }
+});
+
 saveTokenBtn.addEventListener("click", () => {
   const current = getToken();
   if (current) {
     // Clear token
     saveToken("");
     modelSelect.innerHTML = '<option value="gpt-4.1">Enter token to load models</option>';
+    // Clear stale quota when token is removed
+    quotaText.textContent = "";
+    quotaDisplay.style.display = "none";
   } else {
     // Save new token
     const val = tokenInput.value.trim();
@@ -435,6 +491,7 @@ saveTokenBtn.addEventListener("click", () => {
     saveToken(val);
     loadModels();
     loadSessionsFromBackend();
+    loadQuota();
   }
 });
 
@@ -472,7 +529,7 @@ async function checkHealth() {
     if (data.status === "ok") {
       statusDot.classList.remove("disconnected");
       const parts = [];
-      if (data.copilotCli) parts.push("CLI ready");
+      if (data.clients?.connected > 0) parts.push(`${data.clients.connected} client(s)`);
       if (getToken()) parts.push("Token set");
       statusText.textContent = parts.length ? parts.join(" · ") : "Connected";
     } else {

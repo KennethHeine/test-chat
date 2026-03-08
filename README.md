@@ -104,10 +104,10 @@ The server also accepts `COPILOT_GITHUB_TOKEN` in `.env` as a fallback (used whe
 
 ### `GET /api/health`
 
-Returns server status and CLI availability. No auth required.
+Returns server status, connected client info, and active session count. No auth required.
 
 ```json
-{ "status": "ok", "copilotCli": true, "storage": "memory" }
+{ "status": "ok", "storage": "memory", "clients": { "total": 2, "connected": 2 }, "activeSessions": 3 }
 ```
 
 ### `GET /api/models`
@@ -171,6 +171,29 @@ Abort a streaming response. Requires `Authorization: Bearer <token>` header.
 { "sessionId": "abc-123" }
 ```
 
+### `POST /api/chat/model`
+
+Switch the model for an active session mid-conversation. Requires `Authorization: Bearer <token>` header.
+
+**Request:**
+```json
+{ "sessionId": "abc-123", "model": "claude-sonnet-4" }
+```
+
+**Response:**
+```json
+{ "switched": true, "sessionId": "abc-123", "model": "claude-sonnet-4" }
+```
+
+### `GET /api/quota`
+
+Get the user's premium request quota. Requires `Authorization: Bearer <token>` header.
+
+**Response:**
+```json
+{ "quota": { ... } }
+```
+
 ## Testing
 
 Tests use `gpt-4.1` which costs **0 premium requests** on paid plans, so they are safe to run repeatedly.
@@ -214,9 +237,10 @@ See **[TESTING.md](TESTING.md)** for full details on prerequisites, CI setup, co
 ```
 test-chat/
 ├── server.ts              # Express backend — CopilotClient, session management, SSE streaming
+├── tools.ts               # GitHub API tools factory — 5 tools (list_repos, get_repo_structure, read_repo_file, list_issues, search_code) using user's token
 ├── storage.ts             # Storage abstraction — Azure Table/Blob Storage + in-memory fallback
-├── storage.test.ts        # Unit tests for storage module
-├── test.ts                # Integration tests — SDK direct + server HTTP tests
+├── storage.test.ts        # Unit tests for storage module (15 tests)
+├── test.ts                # Integration tests — SDK direct + server HTTP tests (16 tests)
 ├── e2e/
 │   └── chat.spec.ts       # Playwright E2E tests — browser tests against live site
 ├── playwright.config.ts   # Playwright configuration (base URL, timeouts, browser)
@@ -256,5 +280,5 @@ Models are fetched dynamically from the Copilot API. Pricing depends on your pla
 | `Failed to list models: 400` | Token lacks Copilot scope. Use a fine-grained PAT (`github_pat_`) with Copilot permission. |
 | `401 Missing token` | Enter your GitHub token in the web UI header and click "Save Token", or set `COPILOT_GITHUB_TOKEN` in `.env`. |
 | `EADDRINUSE` | Kill leftover node processes: `Stop-Process -Name node -Force` (Windows) or `pkill node` (macOS/Linux). |
-| Server starts but chat fails | Check `GET /api/health` — verify `copilotCli: true`. Ensure your token is valid. |
+| Server starts but chat fails | Check `GET /api/health` — verify `status: "ok"` and `clients.connected > 0`. Ensure your token is valid. |
 | Streaming stops mid-response | Network or token issue. Refresh the page and try again. |

@@ -18,23 +18,29 @@ Fast offline tests for the `InMemorySessionStore` — no external services or to
 npm run test:storage
 ```
 
-These tests verify:
+These tests verify (15 tests total):
 - Token hashing (SHA-256)
 - Session CRUD operations (create, read, update, delete)
 - User isolation (sessions scoped by token hash)
 - Message persistence (save and retrieve chat messages)
 - Sorting (newest sessions first)
+- SDK session ID persistence (`sdkSessionId` stored in metadata, optional field, updatable)
 
 ---
 
 ## Integration Tests (`npm test`)
 
-These run directly against the Copilot SDK and the local Express server. See the [README](README.md#testing) for details.
+These run directly against the Copilot SDK and the local Express server (16 tests total). See the [README](README.md#testing) for details.
 
 ```bash
 # Requires COPILOT_GITHUB_TOKEN in .env or environment
 npm test
 ```
+
+The integration tests include:
+- **SDK tests** (4): connect, listModels, chat, multi-turn recall
+- **Server API tests** (7): health, models, chat SSE streaming, storage health, sessions list, session persistence, session delete
+- **Phase 2 tests** (5): enhanced health (clients/activeSessions fields), model switch (404 for missing session), model switch (missing fields validation), quota endpoint, quota without auth
 
 ---
 

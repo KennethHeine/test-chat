@@ -24,7 +24,7 @@ npm start         # → npx tsx server.ts
 Health check (no auth required):
 ```bash
 curl http://localhost:3000/api/health
-# → {"status":"ok","copilotCli":true}
+# → {"status":"ok","storage":"memory","clients":{"total":0,"connected":0},"activeSessions":0}
 ```
 
 List models (auth required):
@@ -37,18 +37,30 @@ curl -H "Authorization: Bearer $COPILOT_GITHUB_TOKEN" http://localhost:3000/api/
 ```
 test-chat/
 ├── server.ts          # Express backend — entry point for the web server.
-│                      #   Hosts /api/health, /api/models, /api/chat (SSE streaming).
+│                      #   Hosts /api/health, /api/models, /api/chat, /api/chat/abort,
+│                      #   /api/chat/model, /api/quota (SSE streaming).
 │                      #   Creates per-user CopilotClient instances keyed by token.
 │                      #   Sessions keyed by "token:sessionId" for multi-user isolation.
+│                      #   Session resumption via resolveSession() + sdkSessionId.
 │                      #   Graceful shutdown: stops all CopilotClient instances on SIGINT/SIGTERM.
-├── test.ts            # Integration test suite — entry point for tests.
+├── tools.ts           # GitHub API tools factory — creates 5 tools bound to user's token:
+│                      #   list_repos, get_repo_structure, read_repo_file, list_issues, search_code.
+│                      #   Tools passed to createSession() for agent use.
+├── storage.ts         # Storage abstraction — Azure Table/Blob + in-memory fallback.
+│                      #   Session metadata includes sdkSessionId for session resumption.
+├── storage.test.ts    # Unit tests for storage module (15 tests).
+├── test.ts            # Integration test suite — entry point for tests (16 tests).
 │                      #   SDK Direct Tests (4): connect, listModels, chat, multi-turn recall.
-│                      #   Server API Tests (3): health, models, chat SSE streaming.
+│                      #   Server API Tests (7): health, models, chat SSE, storage health,
+│                      #     sessions list, session persistence, session delete.
+│                      #   Phase 2 Tests (5): enhanced health, model switch (2), quota (2).
 │                      #   Spawns a child server process on TEST_PORT (3099) for HTTP tests.
 ├── public/
 │   ├── index.html     # Chat UI — GitHub dark theme, model selector, token input in header.
 │   └── app.js         # Frontend logic — token in localStorage, authHeaders(), SSE parsing,
 │                      #   streaming render. Loads models on page load if token is set.
+│                      #   Handles tool_start, tool_complete, title, usage SSE events.
+│                      #   Fires model switch on dropdown change, displays quota in status bar.
 ├── package.json       # Dependencies & scripts. Includes "overrides" for @github/copilot@0.0.423.
 ├── tsconfig.json      # TypeScript: ES2022, bundler resolution, strict, skipLibCheck.
 ├── .env.example       # Template: COPILOT_GITHUB_TOKEN, PORT.
@@ -85,13 +97,18 @@ Key facts about `@github/copilot-sdk` behavior:
   const unsub = session.on("assistant.message_delta", handler);
   unsub(); // to remove listener
   ```
-- `onPermissionRequest: approveAll` is **required** in `SessionConfig` (from `@github/copilot-sdk`).
+- `onPermissionRequest` is **required** in `SessionConfig`. This project uses a custom `safePermissionHandler` that auto-approves only custom tools and read operations, denying shell/write by default.
 - Delta events carry content in `event.data.deltaContent` (not `event.data.content`).
 - `streaming: true` is a valid `SessionConfig` option — enables streaming deltas.
 - One `CopilotClient` per user token — `client.start()` launches a Copilot CLI subprocess.
 - `client.stop()` must be called during shutdown to clean up the subprocess.
 - `client.getState()` returns `"connected"` when the client is ready.
 - `client.ping()` returns `{ timestamp }` — useful to verify connectivity.
+- `session.setModel(model)` switches the model mid-conversation without creating a new session.
+- `client.resumeSession(sdkSessionId, config)` resumes an existing session by its SDK-internal ID.
+- `client.rpc.account.getQuota()` returns the user's premium request quota.
+- `createGitHubTools(token)` in `tools.ts` returns 5 GitHub API `Tool` objects for session creation.
+- Session hooks (`onPreToolUse`, `onPostToolUse`, `onSessionStart`, `onSessionEnd`, `onErrorOccurred`) are passed via the `hooks` field in `SessionConfig`.
 
 ## Testing
 
@@ -119,7 +136,10 @@ Key facts about `@github/copilot-sdk` behavior:
 
 - **Per-user CopilotClient instances**: `Map<token, CopilotClient>` — one client per unique user token. This means each user gets their own Copilot CLI subprocess, properly isolated.
 - **Sessions keyed by `token:sessionId`**: `Map<string, CopilotSession>` — ensures sessions from different users with the same session ID are isolated.
-- **SSE streaming** for real-time token delivery: server writes `data: {"type":"delta","content":"..."}` events as Copilot responds.
+- **SSE streaming** for real-time token delivery: server writes `data: {"type":"delta","content":"..."}` events as Copilot responds. Also streams `tool_start`, `tool_complete`, `title`, `usage`, `done`, and `error` event types.
 - **Frontend stores token in localStorage**, sends via `Authorization: Bearer` header — server is stateless with respect to tokens.
 - **`sendAndWait` in SDK tests** vs. manual event subscription in server: `sendAndWait` blocks until `session.idle`, making it suitable for synchronous test assertions.
 - **Unsubscribe pattern**: collect `() => void` unsubscribers in an array, call all on cleanup (client disconnect or stream end) to avoid memory leaks.
+- **Session resumption**: `resolveSession()` stores `sdkSessionId` in session metadata and tries `client.resumeSession()` before `createSession()` to preserve conversation context across server restarts.
+- **Custom tools**: 5 GitHub API tools created per-session via `createGitHubTools(token)` from `tools.ts`. Tools use the user's token to authenticate GitHub API calls.
+- **Session hooks**: All sessions created with `onPreToolUse`, `onPostToolUse`, `onSessionStart`, `onSessionEnd`, `onErrorOccurred` hooks for task tracking and audit.

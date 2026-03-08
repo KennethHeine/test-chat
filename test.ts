@@ -176,6 +176,11 @@ async function testServerHealth(): Promise<void> {
   const res = await fetch(`${BASE}/api/health`);
   const data = await res.json();
   if (data.status !== "ok") throw new Error(`Expected "ok", got "${data.status}"`);
+  // Phase 1.6: Verify enhanced health response shape
+  if (typeof data.clients !== "object") throw new Error('Health check missing "clients" object');
+  if (typeof data.clients.total !== "number") throw new Error('Health check missing "clients.total"');
+  if (typeof data.clients.connected !== "number") throw new Error('Health check missing "clients.connected"');
+  if (typeof data.activeSessions !== "number") throw new Error('Health check missing "activeSessions"');
 }
 
 async function testServerModels(): Promise<void> {
@@ -329,6 +334,64 @@ async function testServerSessionDeleteNotFound(): Promise<void> {
 }
 
 // ============================================================
+// 4. Phase 2 feature tests (model switching, quota)
+// ============================================================
+
+async function testServerHealthEnhanced(): Promise<void> {
+  const res = await fetch(`${BASE}/api/health`);
+  const data = await res.json();
+  if (data.status !== "ok") throw new Error(`Expected "ok", got "${data.status}"`);
+  if (!data.storage) throw new Error('Health check missing "storage" field');
+  if (typeof data.clients !== "object") throw new Error('Health check missing "clients" object');
+  if (typeof data.activeSessions !== "number") throw new Error('Health check missing "activeSessions"');
+  log("  ", `Health: ${data.clients.connected}/${data.clients.total} clients, ${data.activeSessions} sessions, storage: ${data.storage}`);
+}
+
+async function testServerModelSwitchNotFound(): Promise<void> {
+  const res = await fetch(`${BASE}/api/chat/model`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ sessionId: "nonexistent-id", model: "gpt-4o" }),
+  });
+  if (res.status !== 404) throw new Error(`Expected 404, got ${res.status}`);
+}
+
+async function testServerModelSwitchMissingFields(): Promise<void> {
+  // Missing sessionId
+  let res = await fetch(`${BASE}/api/chat/model`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ model: "gpt-4o" }),
+  });
+  if (res.status !== 400) throw new Error(`Expected 400 for missing sessionId, got ${res.status}`);
+
+  // Missing model
+  res = await fetch(`${BASE}/api/chat/model`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ sessionId: "some-id" }),
+  });
+  if (res.status !== 400) throw new Error(`Expected 400 for missing model, got ${res.status}`);
+}
+
+async function testServerQuotaEndpoint(): Promise<void> {
+  const res = await fetch(`${BASE}/api/quota`, { headers: testAuthHeaders() });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const data = await res.json();
+  if (!data.quota) throw new Error("Quota response missing 'quota' field");
+  log("  ", `Quota response: ${JSON.stringify(data.quota).slice(0, 100)}`);
+}
+
+async function testServerQuotaNoAuth(): Promise<void> {
+  const res = await fetch(`${BASE}/api/quota`);
+  // Should fail without auth — either 401 (if no env token) or succeed (if env token is fallback)
+  // The important thing is it doesn't crash
+  if (res.status !== 401 && res.status !== 200) {
+    throw new Error(`Expected 401 or 200, got ${res.status}`);
+  }
+}
+
+// ============================================================
 // Main
 // ============================================================
 
@@ -383,6 +446,15 @@ async function main() {
   await run("Sessions list endpoint", testServerSessionsList);
   await run("Session full lifecycle (create/save/list/get/delete)", testServerSessionPersistence);
   await run("Delete non-existent session returns 404", testServerSessionDeleteNotFound);
+
+  // --- Phase 2 feature tests ---
+  console.log("\n── Phase 2 Feature Tests ──\n");
+
+  await run("Enhanced health check (Phase 1.6)", testServerHealthEnhanced);
+  await run("Model switch returns 404 for unknown session", testServerModelSwitchNotFound);
+  await run("Model switch validates required fields", testServerModelSwitchMissingFields);
+  await run("Quota endpoint returns data", testServerQuotaEndpoint);
+  await run("Quota endpoint handles no auth gracefully", testServerQuotaNoAuth);
 
   // Cleanup
   serverProcess.kill();
