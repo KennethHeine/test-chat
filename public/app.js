@@ -427,6 +427,10 @@ function showUsage(usage) {
 
 // --- Quota Display (Phase 2.6) ---
 async function loadQuota() {
+  // Clear previous quota to avoid showing stale data
+  quotaText.textContent = "";
+  quotaDisplay.style.display = "none";
+
   try {
     const res = await fetch("/api/quota", { headers: authHeaders() });
     if (!res.ok) return;
@@ -477,6 +481,9 @@ saveTokenBtn.addEventListener("click", () => {
     // Clear token
     saveToken("");
     modelSelect.innerHTML = '<option value="gpt-4.1">Enter token to load models</option>';
+    // Clear stale quota when token is removed
+    quotaText.textContent = "";
+    quotaDisplay.style.display = "none";
   } else {
     // Save new token
     const val = tokenInput.value.trim();

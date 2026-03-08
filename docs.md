@@ -242,7 +242,7 @@ Get the user's premium request quota via `client.rpc.account.getQuota()`. Requir
 ```
 test-chat/
 ├── server.ts              # Express backend — API routes, SDK integration, SSE streaming
-├── tools.ts               # GitHub API tools factory — 5 tools using defineTool() pattern
+├── tools.ts               # GitHub API tools factory — 5 tools defined as Tool objects with raw JSON schema
 ├── storage.ts             # Storage abstraction — Azure Table/Blob + in-memory fallback
 ├── storage.test.ts        # Unit tests for storage module (15 tests)
 ├── public/
@@ -281,12 +281,12 @@ const client = new CopilotClient({ githubToken: token });
 await client.start();
 
 // Per conversation — with tools (Phase 2.1), hooks (Phase 2.4), system message (Phase 1.1)
-import { createGitHubTools } from "./tools.ts";
+import { createGitHubTools } from "./tools.js";
 
 const session = await client.createSession({
   model: "gpt-4.1",
   streaming: true,
-  onPermissionRequest: approveAll,
+  onPermissionRequest: safePermissionHandler,  // Only auto-approves custom tools + read ops
   systemMessage: { content: "You are a coding task orchestrator..." },
   tools: createGitHubTools(token),  // 5 GitHub API tools bound to user's token
   hooks: {
@@ -306,7 +306,7 @@ session.on("assistant.message_delta", (event) => {
   // event.data.deltaContent — incremental text
 });
 session.on("tool.execution_start", (event) => {
-  // event.data.name — tool being executed
+  // event.data.toolName — tool being executed
 });
 session.on("session.title_changed", (event) => {
   // event.data.title — AI-generated title
@@ -330,7 +330,7 @@ await session.send({ prompt: "Hello!" });
 
 ### Custom Tools (tools.ts)
 
-Five GitHub API tools are defined in `tools.ts` using the SDK's `defineTool()` pattern. Each tool is bound to the user's GitHub token for API authentication:
+Five GitHub API tools are defined in `tools.ts` by constructing `Tool` objects directly with JSON Schema definitions (rather than using the SDK's `defineTool()` helper). Each tool is bound to the user's GitHub token for API authentication:
 
 | Tool | Description |
 |------|-------------|

@@ -97,7 +97,7 @@ Key facts about `@github/copilot-sdk` behavior:
   const unsub = session.on("assistant.message_delta", handler);
   unsub(); // to remove listener
   ```
-- `onPermissionRequest: approveAll` is **required** in `SessionConfig` (from `@github/copilot-sdk`).
+- `onPermissionRequest` is **required** in `SessionConfig`. This project uses a custom `safePermissionHandler` that auto-approves only custom tools and read operations, denying shell/write by default.
 - Delta events carry content in `event.data.deltaContent` (not `event.data.content`).
 - `streaming: true` is a valid `SessionConfig` option — enables streaming deltas.
 - One `CopilotClient` per user token — `client.start()` launches a Copilot CLI subprocess.

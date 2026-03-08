@@ -134,6 +134,7 @@ export class AzureSessionStore implements SessionStore {
         model: entity.model,
         createdAt: entity.createdAt,
         updatedAt: entity.updatedAt,
+        sdkSessionId: entity.sdkSessionId,
       });
     }
     result.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
@@ -149,6 +150,7 @@ export class AzureSessionStore implements SessionStore {
         model: entity.model,
         createdAt: entity.createdAt,
         updatedAt: entity.updatedAt,
+        sdkSessionId: entity.sdkSessionId,
       };
     } catch (err: any) {
       if (err?.statusCode === 404) return null;
@@ -165,6 +167,7 @@ export class AzureSessionStore implements SessionStore {
         model: meta.model,
         createdAt: meta.createdAt,
         updatedAt: meta.updatedAt,
+        sdkSessionId: meta.sdkSessionId || "",
       },
       "Merge"
     );

@@ -20,6 +20,18 @@ async function githubFetch(token: string, path: string): Promise<unknown> {
 
 // --- Tool factory (creates tools bound to a user's GitHub token) ---
 
+// Exported tool names for permission handler reference
+export const GITHUB_TOOL_NAMES = [
+  "list_repos",
+  "get_repo_structure",
+  "read_repo_file",
+  "list_issues",
+  "search_code",
+] as const;
+
+// Max file size returned by read_repo_file (100KB) to prevent blowing up LLM context
+const MAX_FILE_SIZE = 100 * 1024;
+
 export function createGitHubTools(token: string): Tool[] {
   const listRepos: Tool = {
     name: "list_repos",
@@ -35,7 +47,7 @@ export function createGitHubTools(token: string): Tool[] {
         type: {
           type: "string",
           enum: ["all", "owner", "member"],
-          description: "Filter by repo type (default: owner)",
+          description: "Filter by repo type. For authenticated user: all, owner, member. For other users: all, owner, member. The GitHub API default varies by endpoint.",
         },
         sort: {
           type: "string",
@@ -113,7 +125,7 @@ export function createGitHubTools(token: string): Tool[] {
   const readRepoFile: Tool = {
     name: "read_repo_file",
     description:
-      "Read the contents of a specific file from a GitHub repository. Returns the decoded text content.",
+      "Read the contents of a specific file from a GitHub repository. Returns the decoded text content (truncated to 100KB for large files).",
     parameters: {
       type: "object",
       properties: {
@@ -133,7 +145,14 @@ export function createGitHubTools(token: string): Tool[] {
         throw new Error(`Path is a ${file.type}, not a file`);
       }
       const content = Buffer.from(file.content, "base64").toString("utf-8");
-      return { path: file.path, size: file.size, content };
+      const truncated = content.length > MAX_FILE_SIZE;
+      return {
+        path: file.path,
+        size: file.size,
+        truncated,
+        content: truncated ? content.slice(0, MAX_FILE_SIZE) : content,
+        ...(truncated ? { note: `File truncated to ${MAX_FILE_SIZE} bytes (original: ${content.length} bytes)` } : {}),
+      };
     },
   };
 

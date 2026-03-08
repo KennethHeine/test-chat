@@ -1,11 +1,11 @@
 import express, { Request, Response } from "express";
-import { CopilotClient, CopilotSession, approveAll } from "@github/copilot-sdk";
-import type { SessionConfig } from "@github/copilot-sdk";
+import { CopilotClient, CopilotSession } from "@github/copilot-sdk";
+import type { SessionConfig, PermissionHandler } from "@github/copilot-sdk";
 import { fileURLToPath } from "url";
 import { config } from "dotenv";
 import path from "path";
 import { createSessionStore, hashToken, AzureSessionStore, InMemorySessionStore, type SessionStore } from "./storage.js";
-import { createGitHubTools } from "./tools.js";
+import { createGitHubTools, GITHUB_TOOL_NAMES } from "./tools.js";
 
 // --- System Message for Agent Orchestration ---
 const ORCHESTRATOR_SYSTEM_MESSAGE = `You are a coding task orchestrator. Your role is to help users research codebases, plan coding tasks, and coordinate work across repositories.
@@ -74,36 +74,27 @@ function generateSessionId(): string {
   return crypto.randomUUID();
 }
 
-// Resolve or create a CopilotSession — handles resumption (Phase 2.3), tools (2.1), and hooks (2.4)
-async function resolveSession(
-  client: CopilotClient,
-  token: string,
-  sid: string,
-  model: string,
-  message: string
-): Promise<CopilotSession> {
-  // Phase 2.3: Try to resume an existing SDK session
-  const tHash = await hashToken(token);
-  const existingMeta = await sessionStore.getSession(tHash, sid);
-  if (existingMeta?.sdkSessionId) {
-    try {
-      const resumed = await client.resumeSession(existingMeta.sdkSessionId, {
-        onPermissionRequest: approveAll,
-      });
-      sessions.set(sessionKey(token, sid), resumed);
-      return resumed;
-    } catch (err: any) {
-      // Resume failed — create new session below
-      console.warn(`[resumeSession] Failed to resume SDK session ${existingMeta.sdkSessionId}: ${err.message || err}`);
-    }
+// Permission handler that auto-approves only our custom GitHub tools
+// and denies dangerous built-in tool kinds (shell, file write, etc.)
+const safePermissionHandler: PermissionHandler = async (request) => {
+  // Auto-approve our custom GitHub API tools by name
+  if (request.kind === "custom-tool") {
+    return { kind: "approved" };
   }
+  // Auto-approve read-only file operations
+  if (request.kind === "read") {
+    return { kind: "approved" };
+  }
+  // Deny shell commands and write operations by default
+  return { kind: "denied-by-rules", rules: [{ description: "Only custom GitHub tools and read operations are auto-approved" }] };
+};
 
-  // Phase 2.1: Create session with GitHub API tools
-  // Phase 2.4: Create session with hooks for task tracking
-  const sessionConfig: SessionConfig = {
+// Build the shared session config used for both new and resumed sessions
+function buildSessionConfig(token: string, model: string): SessionConfig {
+  return {
     model,
     streaming: true,
-    onPermissionRequest: approveAll,
+    onPermissionRequest: safePermissionHandler,
     systemMessage: {
       content: ORCHESTRATOR_SYSTEM_MESSAGE,
     },
@@ -130,7 +121,34 @@ async function resolveSession(
       },
     },
   };
+}
 
+// Resolve or create a CopilotSession — handles resumption (Phase 2.3), tools (2.1), and hooks (2.4)
+async function resolveSession(
+  client: CopilotClient,
+  token: string,
+  sid: string,
+  model: string,
+  message: string
+): Promise<CopilotSession> {
+  const sessionConfig = buildSessionConfig(token, model);
+
+  // Phase 2.3: Try to resume an existing SDK session
+  const tHash = await hashToken(token);
+  const existingMeta = await sessionStore.getSession(tHash, sid);
+  if (existingMeta?.sdkSessionId) {
+    try {
+      // Pass the full session config so resumed sessions get tools, hooks, and streaming
+      const resumed = await client.resumeSession(existingMeta.sdkSessionId, sessionConfig);
+      sessions.set(sessionKey(token, sid), resumed);
+      return resumed;
+    } catch (err: any) {
+      console.warn(`[resumeSession] Failed to resume SDK session ${existingMeta.sdkSessionId}: ${err.message || err}`);
+    }
+  }
+
+  // Phase 2.1: Create session with GitHub API tools
+  // Phase 2.4: Create session with hooks for task tracking
   const session = await client.createSession(sessionConfig);
   sessions.set(sessionKey(token, sid), session);
 

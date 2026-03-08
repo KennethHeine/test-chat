@@ -117,7 +117,7 @@ Transform from a **simple chat interface** into an **agent orchestration dashboa
 const session = await client.createSession({
   model: model || "gpt-4.1",
   streaming: true,
-  onPermissionRequest: approveAll,
+  onPermissionRequest: safePermissionHandler,  // Only auto-approves custom tools + read ops
   systemMessage: {
     content: `You are a coding task orchestrator. Help users:
 1. Research codebases by exploring repository structure, reading files, and understanding architecture
@@ -212,7 +212,7 @@ When asked to explore a repo, use available tools to read files and understand t
 | `search_code` | Search code across repos | Medium | ✅ Implemented |
 
 **Implementation:**
-- 5 tools defined in `tools.ts` using `defineTool()` pattern
+- 5 tools defined in `tools.ts` as `Tool` objects with inline JSON schema (not using `defineTool()`)
 - `createGitHubTools(token)` factory creates tools bound to the user's GitHub token
 - Tools are passed to `createSession()` configuration
 - Each tool calls the GitHub REST API with the user's token for authentication
