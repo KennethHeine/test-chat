@@ -54,6 +54,7 @@ Push to `main` and GitHub Actions handles everything:
 |----------|---------|-------------|
 | `deploy-infra.yml` | `infra/**` changes or manual | Deploys Bicep template to `rg-test-chat` |
 | `deploy-app.yml` | `public/**`, `server.ts`, `Dockerfile` changes or manual | Builds Docker image → pushes to GHCR → updates Container App → deploys SWA |
+| `deploy-ephemeral.yml` | PRs targeting `main` (excl. Dependabot) | Deploys/tears down ephemeral preview environments |
 
 **Required repo secrets** (provisioned by [Azure-infrastructure](https://github.com/KennethHeine/Azure-infrastructure)):
 - `AZURE_CLIENT_ID`
@@ -236,6 +237,83 @@ Scaling changes are restricted to the repository owner:
 | App Service (Free/B1) | Always-on, no cold starts | Free tier limits (60 min CPU/day); B1 ~$13/month |
 | Azure Functions | True serverless | Requires refactoring Express to function handlers |
 | Container Instances | Simple | No scale-to-zero, billed while running (~$30/month) |
+
+## Ephemeral Environments (Feature Branch Previews)
+
+When a pull request is opened against `main`, the `deploy-ephemeral.yml` workflow automatically provisions a temporary preview environment. This lets team members test and validate changes before merging.
+
+> **Note:** PRs opened by Dependabot (`dependabot[bot]`) do **not** trigger ephemeral deployments.
+
+### How It Works
+
+1. **PR opened/updated** — The workflow builds a Docker image tagged `pr-<number>`, deploys a new Container App using `infra/ephemeral.bicep`, and posts the preview URL as a PR comment.
+2. **PR closed/merged** — A teardown job deletes the ephemeral Container App and comments that the environment has been destroyed.
+
+### Preview URL
+
+Each ephemeral environment gets a unique Azure Container Apps FQDN:
+
+```
+https://test-chat-pr-<number>-api.<environment-hash>.<region>.azurecontainerapps.io
+```
+
+The URL is posted as a comment on the PR after deployment completes.
+
+### Architecture
+
+Ephemeral environments share the **existing** Container Apps Environment from production (`test-chat-env`) but run as a separate Container App with an isolated ingress. This minimises cost (no duplicate Log Analytics or environment resources) and keeps provisioning fast.
+
+| Resource | Shared with prod? | Details |
+|----------|--------------------|---------|
+| Container Apps Environment | ✅ Yes | Reuses `test-chat-env` |
+| Container App | ❌ No | New `test-chat-pr-<N>-api` per PR |
+| Storage Account | ❌ No | Uses in-memory storage (no persistent data) |
+| Static Web App | ❌ No | Not deployed — the Container App serves both API and static files |
+
+### Cost
+
+Ephemeral Container Apps use the same consumption plan as production:
+
+- **Scale to zero** when idle — $0 while no one is testing.
+- **Max 1 replica** — capped to minimise cost.
+- Environments are **automatically destroyed** when the PR closes.
+
+### Workflow File
+
+`deploy-ephemeral.yml` — triggers on `pull_request` events targeting `main`:
+
+| Event | Job | Action |
+|-------|-----|--------|
+| `opened`, `synchronize`, `reopened` | `deploy` | Build image, deploy infra, comment URL |
+| `closed` | `teardown` | Delete Container App, comment teardown |
+
+### Required Secrets
+
+The workflow uses the same Azure OIDC secrets as the production deployment:
+
+- `AZURE_CLIENT_ID`
+- `AZURE_TENANT_ID`
+- `AZURE_SUBSCRIPTION_ID`
+
+### Bicep Template
+
+`infra/ephemeral.bicep` accepts two key parameters:
+
+| Parameter | Description |
+|-----------|-------------|
+| `prNumber` | PR number — used to name the Container App (`test-chat-pr-<N>-api`) |
+| `containerImage` | Docker image to deploy (e.g. `ghcr.io/kennethheine/test-chat:pr-42`) |
+
+### Manual Teardown
+
+If automatic cleanup fails, you can manually delete an ephemeral environment:
+
+```bash
+az containerapp delete \
+  --name test-chat-pr-<NUMBER>-api \
+  --resource-group rg-test-chat \
+  --yes
+```
 
 ## Related Documentation
 

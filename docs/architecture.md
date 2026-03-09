@@ -192,6 +192,7 @@ Internet
 |----------|---------|---------|
 | `deploy-infra.yml` | Push to `main` changing `infra/**` | Deploys Azure Bicep templates |
 | `deploy-app.yml` | Push to `main` changing app files | Builds Docker → GHCR → deploys Container App + SWA |
+| `deploy-ephemeral.yml` | PRs targeting `main` (excl. Dependabot) | Deploys/tears down ephemeral preview environments |
 | `e2e-tests.yml` | After `deploy-app` on `main` | Runs Playwright E2E tests against production |
 | `e2e-local.yml` | PRs and non-main pushes | Runs Playwright E2E tests against local server |
 

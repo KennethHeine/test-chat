@@ -53,6 +53,7 @@ npm run test:storage   # Storage unit tests (15 tests, offline)
 | **Production E2E** | `.github/workflows/e2e-tests.yml` | After deploy to `main` | E2E tests against production |
 | **Deploy App** | `.github/workflows/deploy-app.yml` | Push to `main` (app files) | Builds and deploys, triggers E2E |
 | **Deploy Infra** | `.github/workflows/deploy-infra.yml` | Push to `main` (infra files) | Deploys Azure infrastructure |
+| **Ephemeral Env** | `.github/workflows/deploy-ephemeral.yml` | PRs targeting `main` (excl. Dependabot) | Deploys/tears down preview environments |
 
 ### CI Test Flow
 
