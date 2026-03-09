@@ -27,11 +27,19 @@
 
 ## Vision Summary
 
-Transform the current chat application into an **orchestration tool built on top of GitHub** that helps users plan, research, and execute multi-stage software builds using GitHub as the execution backend.
+Build a system that uses **GitHub as the operational backend for project execution**. The system supports the full flow from strategy to delivery: defining long-term goals, breaking them into milestones, creating GitHub Projects, generating repository issues, and identifying what research must be completed before coding begins.
 
-**Core principle:** This is not a replacement for GitHub project management — it is an orchestration layer that leverages GitHub's native features (Projects, Issues, Milestones, Branches, PRs, Labels, Actions). All features available in GitHub should be preferred over building custom alternatives. The app organizes planning and research before a big task starts, then splits execution into multiple issues across multiple steps.
+**Core principle:** This is an orchestration tool built on top of GitHub — not a replacement for GitHub project management. All features available in GitHub (Projects, Issues, Milestones, Branches, PRs, Labels, Actions, Workflows) are preferred over building custom alternatives. The app handles planning, research, and orchestration; GitHub handles execution and tracking.
 
-**Core workflow:** User defines a goal → system conducts research → creates GitHub milestone plan → generates implementation-ready GitHub issues → orchestrates GitHub Copilot coding agent to execute work issue by issue — all tracked via GitHub Projects and Issues.
+**Long-term goal:** Transform a high-level product or system goal into a structured, research-backed, milestone-driven GitHub execution plan that can be completed with **minimal human involvement during delivery**. Each milestone consists of a long execution chain (e.g., 20+ issues), all completed sequentially and merged into a single milestone branch, resulting in one larger PR for that milestone.
+
+**Core workflow:**
+1. User defines a goal → system conducts detailed research → creates GitHub milestone plan → generates implementation-ready GitHub issues
+2. System creates a dedicated branch per milestone → uses GitHub Actions/Workflows to assign issues to GitHub Copilot coding agent one by one
+3. Each issue: coding agent implements → opens PR → Copilot review → review comments addressed by a new coding agent → merge to milestone branch → next issue (automated loop)
+4. Milestone complete → validation → final PR to main
+
+**Key requirement:** The planning phase must be **extremely detailed**. All necessary research, analysis, and task definition must be completed before implementation starts, so the generated work is high quality and the coding agent has the context it needs to succeed.
 
 **MVP success criteria** (from [mvp-scope.md](./mvp-scope.md)):
 1. A user can define a product/system goal in chat
@@ -39,6 +47,11 @@ Transform the current chat application into an **orchestration tool built on top
 3. Each milestone gets detailed issue drafts created as real GitHub Issues
 4. Work is tracked via GitHub Projects and Milestones — not custom dashboards
 5. The output is good enough to start implementation in GitHub with minimal manual rewriting
+
+**Post-MVP success criteria:**
+6. The system can orchestrate coding agent execution through an entire milestone with minimal human intervention
+7. The system suggests MCP servers/tools that could extend automation and reduce human touchpoints
+8. The system can deploy ephemeral environments and run tests autonomously
 
 ---
 
@@ -433,44 +446,110 @@ Each issue contains: title, purpose, problem to solve, expected outcome, scope b
 
 ### Stage 6: Orchestration & Review Loop
 
-> **Goal:** Enable the platform to orchestrate issue execution through GitHub Copilot coding agent.
+> **Goal:** Enable the platform to orchestrate full milestone execution through GitHub Copilot coding agent with minimal human intervention.
 >
-> **Effort:** Large — 4-5 issues
+> **Effort:** Large — 6-8 issues
 >
 > **Prerequisite:** Stage 5
 >
-> **Note:** This stage extends beyond MVP scope and contains significant research areas.
+> **Note:** This stage extends beyond MVP scope and contains significant research areas. It is the core of the long-term vision.
 
 #### Deliverables
 
 | # | Task | Type |
 |---|------|------|
-| 6.1 | Research GitHub Copilot coding agent integration path | Research |
-| 6.2 | Create `assign_to_agent` tool — assigns issue to coding agent | Code |
-| 6.3 | Create `monitor_execution` tool — tracks issue implementation progress | Code |
-| 6.4 | Implement AI-assisted PR review classification (valid/optional/irrelevant) | Code |
-| 6.5 | Create milestone completion flow — validate, summarize, final PR | Code |
-| 6.6 | Integration tests for orchestration workflow | Tests |
-| 6.7 | Frontend: orchestration controls with links to GitHub Project for progress tracking | Code |
-| 6.8 | Document orchestration in `docs/next-version-plan/orchestration.md` | Docs |
+| 6.1 | Research GitHub Copilot coding agent integration path (API, workflow triggers, MCP) | Research |
+| 6.2 | Create `assign_to_agent` tool — assigns issue to coding agent via GitHub Actions workflow | Code |
+| 6.3 | Create `monitor_execution` tool — tracks issue implementation progress, detects completion | Code |
+| 6.4 | Implement the milestone execution loop — sequential issue processing with auto-advance | Code |
+| 6.5 | Implement AI-assisted PR review classification (valid/optional/irrelevant) | Code |
+| 6.6 | Implement review comment fix loop — new coding agent addresses valid review comments | Code |
+| 6.7 | Implement human stop gates — pause execution when human input is needed | Code |
+| 6.8 | Create milestone completion flow — validate, summarize, final PR to main | Code |
+| 6.9 | Research and suggest MCP servers/tools for extended automation | Research |
+| 6.10 | Integration tests for orchestration workflow | Tests |
+| 6.11 | Frontend: orchestration controls with links to GitHub Project for progress tracking | Code |
+| 6.12 | Document orchestration in `docs/next-version-plan/orchestration.md` | Docs |
 
-#### Execution Sequence (from [github-execution-model.md](./github-execution-model.md))
+#### Milestone Execution Loop (from [github-execution-model.md](./github-execution-model.md))
 
-1. Select next ready issue → 2. Assign to coding agent → 3. Create work branch → 4. Implement → 5. Open PR → 6. Run checks → 7. AI review → 8. Process comments → 9. Apply fixes → 10. Merge → 11. Next issue
+A milestone consists of a **long execution chain** (potentially 20+ issues) that runs with minimal human involvement:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  MILESTONE EXECUTION LOOP                                   │
+│                                                             │
+│  For each issue in milestone (sequential order):            │
+│                                                             │
+│  1. Select next ready issue                                 │
+│  2. Assign to Copilot coding agent (via GitHub Actions)     │
+│  3. Agent creates work branch from milestone branch         │
+│  4. Agent implements the issue                              │
+│  5. Agent opens PR targeting milestone branch               │
+│  6. CI checks run automatically                             │
+│  7. Copilot review reviews the PR                           │
+│  8. Review comments classified (valid/optional/irrelevant)  │
+│  9. Valid comments → new coding agent applies fixes         │
+│  10. Re-review if needed (max 2 cycles)                     │
+│  11. Merge PR into milestone branch                         │
+│  12. → Next issue (loop back to step 1)                     │
+│                                                             │
+│  STOP CONDITIONS (pause and request human input):           │
+│  • CI checks fail after fix attempt                         │
+│  • Review cycle exceeds max retries                         │
+│  • Agent reports it cannot complete the task                 │
+│  • Conflicting changes detected                             │
+│  • Security-sensitive changes flagged                        │
+│                                                             │
+│  ON MILESTONE COMPLETE:                                     │
+│  1. Validate integrated milestone state                     │
+│  2. Run full test suite against milestone branch             │
+│  3. Generate milestone summary                              │
+│  4. Open final PR from milestone branch → main              │
+│  5. Human review and merge                                  │
+└─────────────────────────────────────────────────────────────┘
+```
+
+#### Human Stop Gates
+
+The system must know when to stop and ask for human input:
+- **Build failures** that can't be resolved by the agent
+- **Review loops** that exceed the maximum retry count (2 cycles)
+- **Scope ambiguity** — agent reports the issue is unclear
+- **Security-sensitive changes** — flagged for human review
+- **Dependency conflicts** — agent detects merge conflicts it can't resolve
+- **Test failures** — tests fail after implementation and fix attempts
+
+When stopped, the system provides a clear summary of what happened, what was attempted, and what input is needed.
+
+#### MCP & Tool Suggestions for Extended Automation
+
+The system should suggest MCP servers and tools that could extend its automation capabilities and reduce human touchpoints. Examples:
+- **Ephemeral deployment MCP** — deploy the system to a temporary environment and run integration tests against it autonomously
+- **Test runner MCP** — execute test suites and report results back to the orchestration loop
+- **Code analysis MCP** — run static analysis, linting, security scanning before PR review
+- **Notification MCP** — alert humans via Slack/Teams/email when stop gates are triggered
+- **Documentation MCP** — auto-generate documentation from code changes
+
+Research in Stage 6.9 should identify which MCP servers already exist and which need to be built.
 
 #### Security
 
-- All autonomous actions logged in audit trail
-- Human approval required before merge-to-main
-- Failed issues trigger escalation rather than retry-without-limit
+- All autonomous actions logged in audit trail with full context
+- Human approval required before merge-to-main (milestone PR)
+- Human stop gates enforced at every failure point — system never retries silently
 - Rate limiting on GitHub API calls to prevent abuse
 - Review comment classification must err on the side of caution (flag uncertain items for human review)
+- MCP server integrations must be sandboxed — no unrestricted system access
+- Ephemeral deployments must be time-limited and automatically torn down
 
 #### Feedback Checkpoint
 
 - [ ] Orchestration can execute a single issue end-to-end with human oversight
-- [ ] Review loop correctly classifies and applies fixes
-- [ ] Milestone completion produces a clean summary PR
+- [ ] Review loop correctly classifies comments and applies fixes via new agent
+- [ ] Human stop gates trigger correctly on failure conditions
+- [ ] Milestone completion produces a clean summary PR to main
+- [ ] System can run through a multi-issue milestone (5+ issues) with minimal human intervention
 
 ---
 
@@ -491,10 +570,15 @@ These questions (from [open-questions.md](./open-questions.md)) must be resolved
 
 | Question | Recommended Resolution | Resolve By |
 |----------|----------------------|------------|
-| What is the exact Copilot coding agent integration path? | **Research in Stage 6.1** — investigate GitHub API for agent assignment | Stage 6 |
+| What is the exact Copilot coding agent integration path? | **Research in Stage 6.1** — investigate GitHub API, workflow triggers, MCP integration | Stage 6 |
+| How to trigger coding agent on issues via GitHub Actions? | **Research in Stage 6.1** — investigate workflow_dispatch, issue assignment triggers | Stage 6 |
 | Event-driven, workflow-driven, or hybrid orchestration? | **Start workflow-driven** — GitHub Actions for v1, events for v2 | Stage 6 |
 | How should review comments be classified? | **Conservative classification** — flag uncertain items for human review | Stage 6 |
-| How should failed issues be retried or escalated? | **Escalate to human** after 1 retry attempt | Stage 6 |
+| How should failed issues be retried or escalated? | **Escalate to human** after 1-2 retry attempts with clear context summary | Stage 6 |
+| How to address PR review comments automatically? | **New coding agent instance** addresses valid review comments, then re-review | Stage 6 |
+| What MCP servers/tools could extend automation? | **Research in Stage 6.9** — identify existing MCP servers, plan custom ones | Stage 6 |
+| Can the system deploy ephemeral environments for testing? | **Research in Stage 6.9** — investigate container-based ephemeral deployments | Stage 6 |
+| How long can an execution chain run without human input? | **Start with 5-10 issues per uninterrupted chain**, increase as confidence grows | Stage 6 |
 
 ### Architecture Questions — Resolve in Stage 0
 
@@ -510,8 +594,10 @@ These questions (from [open-questions.md](./open-questions.md)) must be resolved
 | Question | Resolution |
 |----------|-----------|
 | What actions require human approval? | **All GitHub write operations** (create issue, create branch, merge PR) require approval in v1 |
-| When should the system stop autonomous execution? | **On any failure** — escalate to human, never retry silently |
+| When should the system stop autonomous execution? | **On any failure** — escalate to human with clear context, never retry silently |
 | How to handle dependency conflicts? | **Sequential execution** prevents most conflicts; flag remaining ones for human review |
+| How long should the system run without human check-in? | **Configurable per milestone** — suggest stop gates every N issues for early stages |
+| What is the maximum review cycle count? | **2 cycles** — after 2 review-fix rounds, escalate to human |
 
 ---
 
@@ -525,7 +611,7 @@ These questions (from [open-questions.md](./open-questions.md)) must be resolved
 | Stage 3 | Circular dependency detection, milestone name sanitization |
 | Stage 4 | User PAT permission verification, explicit approval for GitHub writes, content sanitization |
 | Stage 5 | Branch name validation, label sanitization, permission checks |
-| Stage 6 | Audit trail for all autonomous actions, human approval gates, rate limiting, conservative review classification |
+| Stage 6 | Audit trail for all autonomous actions, human stop gates, rate limiting, conservative review classification, MCP sandboxing, ephemeral environment cleanup |
 
 **Cross-cutting security principles:**
 - All data scoped to the authenticated user's session and token
@@ -534,6 +620,43 @@ These questions (from [open-questions.md](./open-questions.md)) must be resolved
 - All GitHub write operations require explicit user approval
 - Input validation on all user-provided data
 - Structured logging for audit trails
+
+---
+
+## Planning Phase: Why Extreme Detail Matters
+
+The key to successful autonomous execution is **extremely detailed upfront planning**. The system must ensure that all necessary research, analysis, and task definition are completed before implementation starts. This is what enables a coding agent to succeed:
+
+### What the Agent Needs to Succeed
+
+Each generated issue must contain enough context for a coding agent to implement it without asking clarifying questions:
+- **Clear problem statement** — what needs to be built and why
+- **Exact scope boundaries** — what's in scope and explicitly out of scope
+- **Technical context** — which files to modify, which patterns to follow, which APIs to use
+- **Dependencies** — what must exist before this issue can be started
+- **Acceptance criteria** — testable conditions that define "done"
+- **Testing expectations** — which tests to write, which test patterns to follow
+- **Security considerations** — what to validate, sanitize, or gate
+
+### Research Must Be Complete Before Coding
+
+The research phase (Stage 2) exists because incomplete research leads to:
+- Agents making wrong architectural decisions
+- Issues that need to be reworked after implementation
+- Wasted execution cycles
+- Cascading failures through dependent issues
+
+A milestone should not begin execution until all research items for its issues are marked as resolved.
+
+### Quality Gate: Planning Completeness Check
+
+Before a milestone enters the execution loop, validate:
+- [ ] All research items resolved
+- [ ] All issues have complete acceptance criteria
+- [ ] All dependencies between issues are satisfied
+- [ ] Technical context references existing code patterns
+- [ ] No ambiguous scope boundaries
+- [ ] Security considerations documented per issue
 
 ---
 

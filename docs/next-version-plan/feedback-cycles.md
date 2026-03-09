@@ -121,7 +121,39 @@ After completing a group of related stages, conduct a broader review.
 | Stage 3: Milestones | Integration tests + milestone structure review | Per-commit + plan quality review |
 | Stage 4: Issue Generation | Integration tests + issue quality review + GitHub API testing | Per-commit + generated issue review |
 | Stage 5: Execution Structure | Integration tests + GitHub structure validation | Per-commit + branch/label verification |
-| Stage 6: Orchestration | Full integration tests + end-to-end execution testing | Per-commit + supervised execution run |
+| Stage 6: Orchestration | Full integration tests + end-to-end execution testing + autonomous loop validation | Per-commit + supervised execution run + stop gate verification |
+
+---
+
+## Autonomous Execution Feedback
+
+When the system is running autonomously through a milestone's execution loop, feedback takes a different form:
+
+### During Autonomous Execution
+
+| Feedback Source | How It's Captured |
+|----------------|-------------------|
+| CI check results | GitHub Actions reports pass/fail — system monitors via API |
+| PR review comments | Copilot review generates comments — system classifies and acts |
+| Agent completion status | GitHub API reports issue/PR status — system detects success/failure |
+| Merge conflicts | Git reports conflicts — system escalates to human |
+
+### Human Stop Gates as Feedback
+
+When the system pauses execution, the stop event IS the feedback:
+- **What stopped:** Which issue, which step in the loop
+- **Why it stopped:** The specific failure condition
+- **What was tried:** Any automated fix attempts
+- **What's needed:** Clear description of human input required
+- **How to resume:** Instructions for continuing after the issue is resolved
+
+### Fast Delivery During Autonomous Execution
+
+The system should deliver often during autonomous execution:
+- Each merged PR is a delivery increment
+- Each completed issue in the milestone is a feedback checkpoint
+- The milestone branch at any point represents the current integrated state
+- Human review of the final milestone PR is the last gate before delivery to main
 
 ---
 

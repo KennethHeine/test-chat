@@ -31,10 +31,13 @@
 | 17 | 5 | Add GitHub structure tools (create_branch, manage_labels) | Code + Tests | #14 |
 | 18 | 5 | Create execution plan generator | Code + Tests | #10, #13 |
 | 19 | 5 | Frontend execution plan preview | Code + Tests | #18 |
-| 20 | 6 | Research Copilot coding agent integration | Research | None |
-| 21 | 6 | Implement orchestration workflow | Code + Tests | #17, #18, #20 |
-| 22 | 6 | Implement AI-assisted PR review | Code + Tests | #21 |
-| 23 | 6 | Frontend orchestration controls | Code + Tests | #21 |
+| 20 | 6 | Research Copilot coding agent integration and MCP tools | Research | None |
+| 21 | 6 | Implement milestone execution loop (sequential issue processing) | Code + Tests | #17, #18, #20 |
+| 22 | 6 | Implement coding agent assignment via GitHub Actions | Code + Tests | #21 |
+| 23 | 6 | Implement AI-assisted PR review and fix loop | Code + Tests | #22 |
+| 24 | 6 | Implement human stop gates and escalation | Code + Tests | #21 |
+| 25 | 6 | Implement milestone completion flow (validate, summarize, final PR) | Code + Tests | #21, #23 |
+| 26 | 6 | Frontend orchestration controls | Code + Tests | #21 |
 
 ---
 
@@ -605,111 +608,287 @@
 
 ## Stage 6: Orchestration & Review Loop
 
-### Issue 20: Research Copilot coding agent integration
+### Issue 20: Research Copilot coding agent integration and MCP tools
 
-**Purpose:** Investigate how to programmatically assign GitHub issues to the Copilot coding agent.
+**Purpose:** Investigate how to programmatically assign GitHub issues to the Copilot coding agent, trigger execution via GitHub Actions/Workflows, and identify MCP servers/tools that could extend automation.
+
+**Problem to solve:** The orchestration loop requires programmatic control of coding agent assignment and monitoring. We also need to identify what MCP servers or tools could make the system run longer without human input (e.g., ephemeral deployment, autonomous testing, code analysis).
 
 **Expected outcome:**
 - Research document in `docs/next-version-plan/agent-integration-research.md`
-- Documents: API endpoints, authentication requirements, limitations, recommended approach
+- Documents: API endpoints, workflow triggers, authentication requirements, limitations, recommended approach
+- MCP tool landscape assessment: what exists, what needs to be built, what could enable ephemeral deployment + test
+- Recommended architecture for the execution loop
+
+**Scope boundaries:**
+- In scope: Copilot coding agent API, GitHub Actions triggers, MCP server research, ephemeral deployment options
+- Out of scope: Implementing any of the tools (just research)
 
 **Dependencies:**
-- None (can start in parallel)
+- None (can start in parallel with other stages)
 
 **Acceptance criteria:**
-- [ ] Integration path documented
-- [ ] API requirements listed
-- [ ] Limitations and risks identified
-- [ ] Recommended approach proposed
+- [ ] Coding agent integration path documented (API, workflow, or hybrid)
+- [ ] GitHub Actions workflow trigger approach documented
+- [ ] MCP server landscape assessed (existing vs. needs-building)
+- [ ] Ephemeral deployment options documented (containers, cloud, etc.)
+- [ ] Recommended approach proposed with pros/cons
+- [ ] Security boundaries of agent execution identified
 
 **Testing expectations:**
 - No code tests — research deliverable only
 
 **Security checklist:**
-- [ ] Document permission requirements
+- [ ] Document permission requirements for agent assignment
 - [ ] Identify security boundaries of agent execution
+- [ ] Document MCP server sandboxing requirements
 
 ---
 
-### Issue 21: Implement orchestration workflow
+### Issue 21: Implement milestone execution loop (sequential issue processing)
 
-**Purpose:** Enable the platform to execute milestone issues through GitHub Copilot coding agent.
+**Purpose:** Build the core orchestration engine that processes milestone issues sequentially, managing the lifecycle of each issue from assignment to merge.
+
+**Problem to solve:** A milestone may consist of 20+ issues that need to be executed sequentially, each building on the previous. The system needs to manage this chain automatically, advancing to the next issue after each successful merge into the milestone branch.
 
 **Expected outcome:**
-- Orchestration engine that follows the execution sequence from github-execution-model.md
-- Status tracking for each issue in the execution pipeline
+- Orchestration engine that processes issues in order within a milestone
+- State machine tracking each issue through: pending → assigned → in-progress → review → merged
+- Auto-advance to next issue on successful merge
+- Status tracking for the overall milestone execution
+
+**Scope boundaries:**
+- In scope: Sequential issue processing, state management, auto-advance logic
+- Out of scope: Agent assignment mechanism (Issue #22), review classification (Issue #23), human stop gates (Issue #24)
+
+**Technical context:**
+- Follow existing tool patterns in `tools.ts`
+- Store execution state in PlanningStore (from Issue #2)
+- Use GitHub API to monitor PR status and merge events
 
 **Dependencies:**
-- Issue #17, #18 (GitHub structure tools, execution plan), Issue #20 (research)
+- Issue #17 (GitHub structure tools), Issue #18 (execution plan), Issue #20 (research)
 
 **Acceptance criteria:**
-- [ ] Can execute a single issue through the full lifecycle
-- [ ] Status tracked at each step
-- [ ] Failures escalated to human
-- [ ] Audit trail maintained
+- [ ] Can execute a milestone's issues in sequential order
+- [ ] State tracked at each step for every issue
+- [ ] Auto-advances to next issue after successful merge
+- [ ] Handles the full chain (tested with 5+ issues)
+- [ ] Audit trail maintained for all actions
 
 **Testing expectations:**
 - Integration tests for orchestration lifecycle
-- Test failure handling and escalation
+- Test sequential processing with mock GitHub API
+- Test state transitions for each issue lifecycle phase
 
 **Security checklist:**
-- [ ] All autonomous actions logged
-- [ ] Human approval gates enforced
+- [ ] All autonomous actions logged with full context
 - [ ] Rate limiting on GitHub API calls
+- [ ] Execution state scoped to user session
 
 ---
 
-### Issue 22: Implement AI-assisted PR review
+### Issue 22: Implement coding agent assignment via GitHub Actions
 
-**Purpose:** Classify PR review comments and apply fixes automatically.
+**Purpose:** Enable the system to assign issues to the Copilot coding agent and trigger execution via GitHub Actions workflows.
+
+**Problem to solve:** The execution loop needs a mechanism to assign each issue to the coding agent and kick off implementation. This should use GitHub Actions workflows as the trigger mechanism, allowing the system to start a coding agent on an issue against the milestone branch.
 
 **Expected outcome:**
-- Review comment classification: valid, optional, irrelevant
-- Auto-fix application for valid comments
-- Human escalation for uncertain classifications
+- `assign_to_agent` tool that triggers coding agent on a specific issue
+- GitHub Actions workflow template for agent execution
+- Monitoring of agent progress (in-progress, completed, failed)
+
+**Scope boundaries:**
+- In scope: Agent assignment, workflow trigger, progress monitoring
+- Out of scope: Review classification (Issue #23), stop gates (Issue #24)
+
+**Technical context:**
+- Follow tool patterns in `tools.ts`
+- Use GitHub Actions API to trigger workflows
+- Based on research from Issue #20
 
 **Dependencies:**
-- Issue #21 (orchestration workflow)
+- Issue #21 (milestone execution loop)
 
 **Acceptance criteria:**
-- [ ] Comments correctly classified
-- [ ] Valid fixes applied
+- [ ] Can assign an issue to the coding agent
+- [ ] Agent starts working on the issue (verified via GitHub API)
+- [ ] Progress tracked (in-progress, completed, failed)
+- [ ] Works against a milestone branch (not main)
+
+**Testing expectations:**
+- Integration tests with real GitHub API calls (requires token with repo/actions scope)
+- Test error handling for agent assignment failures
+
+**Security checklist:**
+- [ ] User's own PAT used for all API calls
+- [ ] Workflow triggers validated before execution
+- [ ] Agent execution scoped to correct repository and branch
+
+---
+
+### Issue 23: Implement AI-assisted PR review and fix loop
+
+**Purpose:** Classify PR review comments and orchestrate a new coding agent to apply fixes for valid comments, enabling an automated review-fix cycle.
+
+**Problem to solve:** When a coding agent opens a PR, it gets reviewed by Copilot review. Valid review comments need to be addressed by a new coding agent instance. This creates a review → fix → re-review loop that should run automatically with a maximum cycle count.
+
+**Expected outcome:**
+- Review comment classification: valid (must fix), optional (nice to have), irrelevant (ignore)
+- Mechanism to trigger a new coding agent to address valid review comments
+- Review cycle management (max 2 cycles before escalation)
+- Only implement comments that make sense — ignore irrelevant suggestions
+
+**Scope boundaries:**
+- In scope: Comment classification, fix agent trigger, cycle management
+- Out of scope: Initial PR creation (handled by coding agent in Issue #22)
+
+**Technical context:**
+- Use GitHub PR review API to read comments
+- Classification can use the Copilot SDK for analysis
+- Fix agent uses same mechanism as Issue #22
+
+**Dependencies:**
+- Issue #22 (coding agent assignment)
+
+**Acceptance criteria:**
+- [ ] Comments correctly classified (valid/optional/irrelevant)
+- [ ] Valid fixes applied by new coding agent
+- [ ] Optional comments documented but not auto-fixed
+- [ ] Irrelevant comments ignored
+- [ ] Max 2 review-fix cycles before human escalation
 - [ ] Uncertain items flagged for human review
 
 **Testing expectations:**
 - Unit tests for classification logic
 - Integration tests for fix application
+- Test cycle count enforcement
 
 **Security checklist:**
 - [ ] Conservative classification (err on human review side)
 - [ ] Fix application limited to safe operations
-- [ ] All review actions logged
+- [ ] All review actions logged with classification reasoning
 
 ---
 
-### Issue 23: Frontend orchestration controls
+### Issue 24: Implement human stop gates and escalation
 
-**Purpose:** Provide controls for starting/stopping orchestration and link to GitHub Project for progress tracking. Progress visibility is handled by GitHub Projects — the app only provides orchestration controls.
+**Purpose:** Build the mechanism for the system to pause autonomous execution and request human input when it cannot proceed safely.
+
+**Problem to solve:** The system must know when to stop running autonomously and ask a human for help. This includes build failures, review loops that exceed max retries, security-sensitive changes, scope ambiguity, and dependency conflicts.
+
+**Expected outcome:**
+- Stop gate detection for all failure conditions
+- Clear escalation messages with context (what happened, what was tried, what input is needed)
+- Pause/resume mechanism for the execution loop
+- Notification to the user (via the chat UI and optionally external notifications)
+
+**Scope boundaries:**
+- In scope: Stop gate detection, escalation messages, pause/resume
+- Out of scope: External notification integrations (future MCP tool)
+
+**Technical context:**
+- Integrate with the milestone execution loop (Issue #21)
+- Stop conditions: CI failure, review loop exceeded, agent failure, conflicts, security flags
+
+**Dependencies:**
+- Issue #21 (milestone execution loop)
+
+**Acceptance criteria:**
+- [ ] System pauses on each defined stop condition
+- [ ] Clear escalation message provided with full context
+- [ ] User can resume execution after addressing the issue
+- [ ] System suggests what input is needed
+- [ ] All stop events logged in audit trail
+
+**Testing expectations:**
+- Integration tests for each stop condition
+- Test pause/resume lifecycle
+- Test escalation message quality
+
+**Security checklist:**
+- [ ] Stop gates cannot be bypassed
+- [ ] Escalation messages don't leak sensitive data
+- [ ] Resume requires re-authentication
+
+---
+
+### Issue 25: Implement milestone completion flow
+
+**Purpose:** Handle the end-of-milestone process: validate the integrated state, run the full test suite, generate a summary, and open the final PR to main.
+
+**Problem to solve:** After all issues in a milestone are merged into the milestone branch, the system needs to validate that everything works together, generate a completion summary, and create the final PR targeting main.
+
+**Expected outcome:**
+- Milestone validation (all issues merged, tests pass against milestone branch)
+- Milestone summary generation (what was built, what changed, test results)
+- Final PR from milestone branch → main
+- Human review gate before merge to main
+
+**Scope boundaries:**
+- In scope: Validation, summary, final PR creation
+- Out of scope: Automated merge to main (requires human approval)
+
+**Technical context:**
+- Use GitHub API to check issue/PR status
+- Use GitHub Actions to run tests against milestone branch
+- Summary can be generated using Copilot SDK
+
+**Dependencies:**
+- Issue #21 (milestone execution loop), Issue #23 (review loop — all issues must be reviewed)
+
+**Acceptance criteria:**
+- [ ] Validates all milestone issues are merged
+- [ ] Runs test suite against milestone branch
+- [ ] Generates comprehensive milestone summary
+- [ ] Opens final PR with summary as description
+- [ ] Milestone summary includes: issues completed, PRs merged, test results, changes summary
+
+**Testing expectations:**
+- Integration tests for completion flow
+- Test validation logic (incomplete milestones should not proceed)
+
+**Security checklist:**
+- [ ] Final PR requires human review
+- [ ] Summary does not include sensitive data
+- [ ] Test results sanitized before including in PR description
+
+---
+
+### Issue 26: Frontend orchestration controls
+
+**Purpose:** Provide controls for starting/stopping/pausing orchestration and link to GitHub Project for progress tracking. Progress visibility is handled by GitHub Projects — the app only provides orchestration controls and escalation handling.
 
 **Expected outcome:**
 - Start/stop/pause orchestration controls in chat
 - Links to GitHub Project board for progress tracking
-- Status summary showing which issues are in progress
+- Status summary showing which issues are in progress and milestone progress
 - Deep links to GitHub Issues and PRs being worked on
+- Escalation display — when the system stops, show the reason and what input is needed
+- Suggested MCP tools that could extend automation
+
+**Scope boundaries:**
+- In scope: Orchestration controls, status display, escalation handling, GitHub links
+- Out of scope: Custom dashboards (use GitHub Projects), custom issue management (use GitHub Issues)
 
 **Dependencies:**
 - Issue #21 (orchestration workflow)
 
 **Acceptance criteria:**
-- [ ] Can start and stop orchestration from the UI
+- [ ] Can start, stop, and pause orchestration from the UI
 - [ ] Links to GitHub Project for full progress view
-- [ ] Shows current orchestration status (running/paused/idle)
+- [ ] Shows current orchestration status (running/paused/stopped/idle)
+- [ ] Displays escalation reason when stopped
 - [ ] Deep links to active GitHub Issues and PRs
+- [ ] Shows milestone progress (N of M issues complete)
 
 **Testing expectations:**
 - E2E test for orchestration controls
 - Test GitHub link generation
+- Test escalation display
 
 **Security checklist:**
 - [ ] No token data displayed
 - [ ] Content escaped
+- [ ] Escalation messages sanitized
