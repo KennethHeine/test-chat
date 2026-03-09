@@ -104,10 +104,10 @@
 
 **Testing expectations:**
 - Unit tests in `planning-store.test.ts` following the `storage.test.ts` pattern
-- Test all CRUD operations (create, read, update, delete, list)
+- Test all CRUD operations (create, read, update, delete, list) for each of the 4 entity types
 - Test input validation (missing required fields, invalid enums)
 - Test scoping (list research items by goalId, list issues by milestoneId)
-- Target: 12-18 tests minimum
+- Target: full CRUD coverage across all entity types, plus validation and scoping scenarios
 
 **Security checklist:**
 - [ ] Input validation on all fields
@@ -281,7 +281,7 @@
 - Issue #4 (goal definition tools — need an existing goal to research)
 
 **Acceptance criteria:**
-- [ ] Research items generated across all 8 categories (domain, architecture, security, infrastructure, integration, data-model, operational, ux)
+- [ ] Research items generated across all 8 categories (domain, architecture, security, infrastructure, integration, data_model, operational, ux)
 - [ ] Items can be updated from 'open' → 'researching' → 'resolved'
 - [ ] Resolved items include findings and optional decision text
 

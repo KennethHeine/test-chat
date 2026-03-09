@@ -8,10 +8,10 @@
 
 ## Principles
 
-1. **Every stage produces a reviewable artifact** — code, tests, docs, or a combination
-2. **No stage advances without passing its feedback checkpoint** — defined per stage in [project-plan.md](./project-plan.md)
-3. **Fast feedback over perfect feedback** — prefer automated checks that run in seconds over manual reviews that take days
-4. **Feedback is actionable** — every feedback item results in a specific change or an explicit decision to defer
+1. **Every stage produces a reviewable artifact** — code, tests, docs, or a combination.
+2. **No stage advances without passing its feedback checkpoint** — defined per stage in [project-plan.md](./project-plan.md).
+3. **Fast feedback over perfect feedback** — prefer automated checks that run in seconds over manual reviews that take days.
+4. **Feedback is actionable** — every feedback item results in a specific change or an explicit decision to defer.
 
 ---
 

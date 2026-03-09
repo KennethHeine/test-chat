@@ -131,7 +131,7 @@ Each stage is designed to be **independently valuable**, testable, and deployabl
 | 0.4 | Unit tests for InMemoryPlanningStore (all CRUD operations) | Tests |
 | 0.5 | Document data model in `docs/next-version-plan/data-model.md` | Docs |
 
-#### Data Model (Draft)
+#### Data Model
 
 ```typescript
 interface Goal {
@@ -153,7 +153,7 @@ interface Goal {
 interface ResearchItem {
   id: string;
   goalId: string;
-  category: 'domain' | 'architecture' | 'security' | 'infrastructure' | 'integration' | 'data-model' | 'operational' | 'ux';
+  category: 'domain' | 'architecture' | 'security' | 'infrastructure' | 'integration' | 'data_model' | 'operational' | 'ux';
   question: string;
   status: 'open' | 'researching' | 'resolved';
   findings: string;
