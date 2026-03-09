@@ -7,7 +7,7 @@ import path from "path";
 import { createSessionStore, hashToken, AzureSessionStore, InMemorySessionStore, type SessionStore } from "./storage.js";
 import { createGitHubTools, GITHUB_TOOL_NAMES } from "./tools.js";
 import { InMemoryPlanningStore, type PlanningStore } from "./planning-store.js";
-import { createPlanningTools, PLANNING_TOOL_NAMES } from "./planning-tools.js";
+import { createPlanningTools } from "./planning-tools.js";
 
 // --- System Message for Agent Orchestration ---
 const ORCHESTRATOR_SYSTEM_MESSAGE = `You are a coding task orchestrator. Your role is to help users research codebases, plan coding tasks, and coordinate work across repositories.

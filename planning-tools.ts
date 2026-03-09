@@ -183,15 +183,23 @@ export function createPlanningTools(token: string, planningStore: PlanningStore)
         if (err) return { error: err };
       }
 
-      // Validate array fields — each element must be a non-empty string
+      // Validate array fields — each element must be a non-empty string with length limits
+      const MAX_ARRAY_LENGTH = 50;
+      const MAX_ELEMENT_LENGTH = 500;
       for (const arrayField of ["successCriteria", "assumptions", "constraints", "risks"] as const) {
         if (!Array.isArray(args[arrayField])) {
           return { error: `${arrayField} must be an array` };
+        }
+        if ((args[arrayField] as unknown[]).length > MAX_ARRAY_LENGTH) {
+          return { error: `${arrayField} must have at most ${MAX_ARRAY_LENGTH} elements` };
         }
         for (let i = 0; i < (args[arrayField] as unknown[]).length; i++) {
           const element = (args[arrayField] as unknown[])[i];
           if (typeof element !== "string" || element.trim().length === 0) {
             return { error: `${arrayField}[${i}] must be a non-empty string` };
+          }
+          if (element.length > MAX_ELEMENT_LENGTH) {
+            return { error: `${arrayField}[${i}] must be at most ${MAX_ELEMENT_LENGTH} characters` };
           }
         }
       }
