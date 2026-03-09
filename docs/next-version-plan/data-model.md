@@ -109,7 +109,7 @@ A `Goal` is the top-level planning entity. It captures the user's intent and ref
 | Name | Type | Required? | Max length | Description |
 |------|------|-----------|------------|-------------|
 | `id` | `string` | ✅ | — | UUID generated at runtime. Immutable after creation. |
-| `sessionId` | `string` | ✅ | — | The chat session in which this goal was created. Immutable after creation. |
+| `sessionId` | `string` | ✅ | — | The chat session in which this goal was created. |
 | `intent` | `string` | ✅ | 2000 chars | The user's raw, unrefined description of what they want to achieve. |
 | `goal` | `string` | ✅ | 500 chars | The refined, actionable goal statement derived from the intent. |
 | `problemStatement` | `string` | ✅ | 1000 chars | A clear description of the problem this goal addresses. |
@@ -197,7 +197,7 @@ A `ResearchItem` captures an open question or investigation topic tied to a `Goa
 - `category` must be one of the 8 valid category values.
 - `status` must be one of `open`, `researching`, `resolved`.
 - `id` and `goalId` are immutable — `updateResearchItem` silently ignores any attempt to change them.
-- `findings`, `decision`, and `resolvedAt` are not validated for non-emptiness; they start as empty strings.
+- `findings` and `decision` are not validated for non-emptiness and typically start as empty strings. `resolvedAt` is optional and starts as `undefined`; it is not validated until set.
 
 **Example**
 
@@ -412,7 +412,7 @@ Planning data (goals, research, milestones, issue drafts) is separate from chat 
 
 ### Immutable identity fields
 
-`id` and parent-link fields (`sessionId` on Goal, `goalId` on ResearchItem and Milestone, `milestoneId` on IssueDraft) cannot be changed via `update*` methods. This prevents accidental re-parenting of entities, which would corrupt the hierarchy.
+`id` and parent-link fields (`goalId` on ResearchItem and Milestone, `milestoneId` on IssueDraft) cannot be changed via `update*` methods. This prevents accidental re-parenting of entities, which would corrupt the hierarchy. For `Goal`, only `id` is immutable — `sessionId` is intentionally mutable and can be changed via `updateGoal` when re-associating a goal with a different session.
 
 ### Literal-union status fields
 
