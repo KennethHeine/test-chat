@@ -104,7 +104,7 @@ After completing a group of related stages, conduct a broader review.
 
 | Source | How to Integrate |
 |--------|-----------------|
-| Open question resolution | Update [open-questions.md](./open-questions.md) with decision and rationale |
+| Open question resolution | Update the Research & Uncertainty Areas section of [project-plan.md](./project-plan.md) with decision and rationale |
 | Scope change | Update [project-plan.md](./project-plan.md) and affected stage deliverables |
 | Priority change | Reorder stages if dependencies allow, update plan |
 | New risk identified | Add to relevant stage security section and cross-cutting concerns |

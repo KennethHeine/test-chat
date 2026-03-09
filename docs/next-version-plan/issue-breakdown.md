@@ -363,7 +363,7 @@
 - Issue #7 (research tools — milestones informed by research)
 
 **Acceptance criteria:**
-- [ ] Milestones include all fields from planning-workflow.md (name, goal, scope, dependencies, acceptance criteria, exit criteria)
+- [ ] Milestones include all required fields (name, goal, scope, dependencies, acceptance criteria, exit criteria)
 - [ ] Milestones have correct ordering
 - [ ] Dependencies between milestones are validated
 
@@ -436,7 +436,7 @@
 - Issue #10 (milestone tools — issues belong to milestones)
 
 **Acceptance criteria:**
-- [ ] Issues contain all fields from planning-workflow.md Phase 5
+- [ ] Issues contain all required fields (title, purpose, problem, outcome, scope, context, dependencies, criteria, testing, research links)
 - [ ] Issues reference research items where relevant
 - [ ] Issues have correct ordering within milestone
 
@@ -570,7 +570,7 @@
 - Issue #10 (milestones), Issue #13 (issues)
 
 **Acceptance criteria:**
-- [ ] Plan includes all elements from github-execution-model.md
+- [ ] Plan includes all execution model elements (branch naming, issue ordering, labels, milestone branch targeting)
 - [ ] Issue ordering respects dependencies
 - [ ] Branch naming follows convention
 

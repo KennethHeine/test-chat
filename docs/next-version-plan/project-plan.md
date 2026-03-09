@@ -41,7 +41,7 @@ Build a system that uses **GitHub as the operational backend for project executi
 
 **Key requirement:** The planning phase must be **extremely detailed**. All necessary research, analysis, and task definition must be completed before implementation starts, so the generated work is high quality and the coding agent has the context it needs to succeed.
 
-**MVP success criteria** (from [mvp-scope.md](./mvp-scope.md)):
+**MVP success criteria:**
 1. A user can define a product/system goal in chat
 2. The system generates a research-backed milestone plan
 3. Each milestone gets detailed issue drafts created as real GitHub Issues
@@ -74,13 +74,13 @@ Phases 1 and 2 from [roadmap.md](../roadmap.md) are **complete**:
 | Quota monitoring | ✅ |
 | Persistent storage (Azure Table/Blob + in-memory fallback) | ✅ |
 
-The **next version** builds on this foundation to add the planning workflow described in [planning-workflow.md](./planning-workflow.md) and the execution model in [github-execution-model.md](./github-execution-model.md).
+The **next version** builds on this foundation to add the planning workflow and execution model described in this document.
 
 ---
 
 ## Architectural Direction
 
-### Key Decisions (from [system-overview.md](./system-overview.md))
+### Key Decisions
 
 | Decision | Rationale |
 |----------|-----------|
@@ -295,7 +295,7 @@ interface IssueDraft {
 | 2.6 | Frontend: research checklist display with status indicators | Code |
 | 2.7 | Document research workflow in `docs/next-version-plan/research-workflow.md` | Docs |
 
-#### Research Categories (from [planning-workflow.md](./planning-workflow.md))
+#### Research Categories
 
 | Category | Description |
 |----------|-------------|
@@ -341,7 +341,7 @@ interface IssueDraft {
 | 3.5 | Frontend: milestone timeline/list view | Code |
 | 3.6 | Document milestone planning in `docs/next-version-plan/milestone-planning.md` | Docs |
 
-#### Milestone Structure (from [planning-workflow.md](./planning-workflow.md))
+#### Milestone Structure
 
 Each milestone includes: name, goal, scope, dependencies, acceptance criteria, exit criteria, estimated issue list.
 
@@ -385,7 +385,7 @@ Each milestone includes: name, goal, scope, dependencies, acceptance criteria, e
 
 Once issue drafts are approved, they become **real GitHub Issues** tracked in a **GitHub Project** with a **GitHub Milestone**. The app does not maintain its own task board or progress dashboard — GitHub Projects is the task tracking UI. The app is the orchestration layer that creates and manages these GitHub resources.
 
-#### Issue Quality (from [planning-workflow.md](./planning-workflow.md), Phase 5)
+#### Issue Quality
 
 Each issue contains: title, purpose, problem to solve, expected outcome, scope boundaries, technical context, dependencies, acceptance criteria, testing expectations, links to research and decisions.
 
@@ -424,7 +424,7 @@ Each issue contains: title, purpose, problem to solve, expected outcome, scope b
 | 5.6 | Frontend: execution plan preview with links to GitHub Project/Milestone views | Code |
 | 5.7 | Document execution structure in `docs/next-version-plan/execution-structure.md` | Docs |
 
-#### Branch Model (from [github-execution-model.md](./github-execution-model.md))
+#### Branch Model
 
 - One dedicated integration branch per milestone (e.g., `prx-milestone-auth-foundation`)
 - All issue-level PRs target the milestone branch
@@ -471,7 +471,7 @@ Each issue contains: title, purpose, problem to solve, expected outcome, scope b
 | 6.11 | Frontend: orchestration controls with links to GitHub Project for progress tracking | Code |
 | 6.12 | Document orchestration in `docs/next-version-plan/orchestration.md` | Docs |
 
-#### Milestone Execution Loop (from [github-execution-model.md](./github-execution-model.md))
+#### Milestone Execution Loop
 
 A milestone consists of a **long execution chain** (potentially 20+ issues) that runs with minimal human involvement:
 
@@ -555,7 +555,7 @@ Research in Stage 6.9 should identify which MCP servers already exist and which 
 
 ## Research & Uncertainty Areas
 
-These questions (from [open-questions.md](./open-questions.md)) must be resolved through research during the relevant stages.
+These questions must be resolved through research during the relevant stages.
 
 ### Product Questions — Resolve in Stages 3-4
 
