@@ -44,6 +44,13 @@ export default defineConfig({
         baseURL: "http://localhost:3000",
       },
     },
+    {
+      name: "ephemeral",
+      use: {
+        browserName: "chromium",
+        baseURL: process.env.EPHEMERAL_URL || baseURL,
+      },
+    },
   ],
   /* Start a local server when running 'local' project */
   webServer: process.env.BASE_URL?.includes("localhost") || process.argv.some((a) => a.includes("local"))

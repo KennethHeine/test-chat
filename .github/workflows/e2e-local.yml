@@ -2,7 +2,7 @@ name: E2E Tests (Local)
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, 'stage-*/**']
   push:
     branches-ignore: [main]
   workflow_dispatch:

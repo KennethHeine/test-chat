@@ -3,7 +3,8 @@ name: Deploy Ephemeral Environment
 on:
   pull_request:
     types: [opened, synchronize, reopened, closed]
-    branches: [main]
+    branches: [main, 'stage-*/**']
+  workflow_dispatch:
 
 permissions:
   id-token: write
@@ -22,6 +23,8 @@ jobs:
       github.event.action != 'closed' &&
       github.actor != 'dependabot[bot]'
     runs-on: ubuntu-latest
+    outputs:
+      ephemeral-url: ${{ steps.deploy.outputs.ephemeralAppUrl }}
     steps:
       - uses: actions/checkout@v6
 
@@ -138,3 +141,53 @@ jobs:
               issue_number: context.issue.number,
               body: '♻️ **Ephemeral environment destroyed.** The preview environment for this PR has been cleaned up.',
             });
+
+  # ── E2E tests against ephemeral environment ───────────────────────
+  e2e-ephemeral:
+    needs: deploy
+    if: needs.deploy.outputs.ephemeral-url != ''
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Wait for ephemeral app to be ready
+        run: |
+          URL="${{ needs.deploy.outputs.ephemeral-url }}/api/health"
+          echo "Waiting for $URL to respond..."
+          for i in $(seq 1 30); do
+            if curl -sf "$URL" > /dev/null 2>&1; then
+              echo "Ephemeral app is ready!"
+              exit 0
+            fi
+            echo "Attempt $i/30 — not ready yet, waiting 10s..."
+            sleep 10
+          done
+          echo "Ephemeral app did not become ready in time"
+          exit 1
+
+      - name: Run E2E tests against ephemeral environment
+        run: npx playwright test --project=ephemeral
+        env:
+          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+          EPHEMERAL_URL: ${{ needs.deploy.outputs.ephemeral-url }}
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-report-ephemeral
+          path: |
+            test-results/
+            playwright-report/
+          retention-days: 7
