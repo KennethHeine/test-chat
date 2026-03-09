@@ -437,6 +437,26 @@ function hideToolActivity() {
   toolActivityText.textContent = "";
 }
 
+/**
+ * Handles a parsed tool_complete SSE event.
+ * Extracted so it can be called from both the streaming loop and tests.
+ * For save_goal, renders the goal summary card using the result data when present,
+ * or falls back to fetching the latest goal from the API.
+ * @param {Object} event - The parsed tool_complete SSE event
+ */
+function handleToolComplete(event) {
+  // When save_goal completes, render the goal summary card in the chat
+  if (event.tool === "save_goal") {
+    if (event.result) {
+      renderGoalCard(event.result);
+    } else {
+      // Fallback: fetch the latest goal if result wasn't included in the event
+      fetchAndRenderLatestGoal();
+    }
+  }
+  hideToolActivity();
+}
+
 function showUsage(usage) {
   if (!usage) return;
   const parts = [];
@@ -668,7 +688,7 @@ async function sendMessage() {
           } else if (event.type === "tool_start") {
             showToolActivity(event.tool);
           } else if (event.type === "tool_complete") {
-            hideToolActivity();
+            handleToolComplete(event);
           } else if (event.type === "title" && event.title) {
             // Update session title with AI-generated title
             updateSessionTitle(sessionId, event.title);
@@ -724,4 +744,109 @@ function appendMessage(role, text) {
   messagesEl.appendChild(el);
   messagesEl.scrollTop = messagesEl.scrollHeight;
   return el;
+}
+
+// --- Goal Card Rendering ---
+
+/**
+ * Renders a structured goal summary card in the chat flow.
+ * All user-supplied content is inserted via textContent to prevent XSS.
+ * @param {Object} goal - The Goal object from the save_goal tool result
+ */
+function renderGoalCard(goal) {
+  const card = document.createElement("div");
+  card.className = "goal-card";
+  card.setAttribute("data-goal-id", goal.id || "");
+
+  // Header
+  const header = document.createElement("div");
+  header.className = "goal-card-header";
+  const headerTitle = document.createElement("span");
+  headerTitle.textContent = "🎯 Goal Defined";
+  header.appendChild(headerTitle);
+  card.appendChild(header);
+
+  // Body
+  const body = document.createElement("div");
+  body.className = "goal-card-body";
+
+  // Helper to add a text field row
+  function addField(label, value) {
+    if (!value) return;
+    const row = document.createElement("div");
+    row.className = "goal-card-field";
+    const labelEl = document.createElement("span");
+    labelEl.className = "goal-card-label";
+    labelEl.textContent = label;
+    const valueEl = document.createElement("span");
+    valueEl.className = "goal-card-value";
+    valueEl.textContent = value;
+    row.appendChild(labelEl);
+    row.appendChild(valueEl);
+    body.appendChild(row);
+  }
+
+  // Helper to add an array field (e.g. success criteria)
+  function addListField(label, items, prefix) {
+    if (!items || items.length === 0) return;
+    const section = document.createElement("div");
+    section.className = "goal-card-list-section";
+    const labelEl = document.createElement("div");
+    labelEl.className = "goal-card-label";
+    labelEl.textContent = label;
+    section.appendChild(labelEl);
+    const list = document.createElement("ul");
+    list.className = "goal-card-list";
+    for (const item of items) {
+      const li = document.createElement("li");
+      li.textContent = (prefix || "") + item;
+      list.appendChild(li);
+    }
+    section.appendChild(list);
+    body.appendChild(section);
+  }
+
+  addField("Intent:", goal.intent);
+  addField("Goal:", goal.goal);
+  addField("Problem:", goal.problemStatement);
+  addField("Business Value:", goal.businessValue);
+  addField("Target Outcome:", goal.targetOutcome);
+  addListField("Success Criteria:", goal.successCriteria, "✓ ");
+
+  // Counts for assumptions, constraints, risks
+  const counts = [];
+  if (goal.assumptions && goal.assumptions.length > 0) counts.push(`Assumptions: ${goal.assumptions.length}`);
+  if (goal.constraints && goal.constraints.length > 0) counts.push(`Constraints: ${goal.constraints.length}`);
+  if (goal.risks && goal.risks.length > 0) counts.push(`Risks: ${goal.risks.length}`);
+  if (counts.length > 0) {
+    const countsEl = document.createElement("div");
+    countsEl.className = "goal-card-counts";
+    countsEl.textContent = counts.join(" · ");
+    body.appendChild(countsEl);
+  }
+
+  card.appendChild(body);
+  messagesEl.appendChild(card);
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+
+/**
+ * Fetches the most recently created goal for the current session and renders it.
+ * Used as a fallback when the save_goal tool result isn't included in the SSE event.
+ */
+async function fetchAndRenderLatestGoal() {
+  try {
+    const res = await fetch("/api/goals", { headers: authHeaders() });
+    if (!res.ok) return;
+    const data = await res.json();
+    if (data.goals && data.goals.length > 0) {
+      // Show the most recently updated goal
+      const latest = data.goals.sort(
+        (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+      )[0];
+      renderGoalCard(latest);
+    }
+  } catch (err) {
+    console.warn("Failed to fetch goal for card rendering:", err);
+  }
 }

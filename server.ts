@@ -349,9 +349,13 @@ app.post("/api/chat", async (req: Request, res: Response) => {
     // Collect unsubscribe functions
     const unsubscribers: (() => void)[] = [];
 
+    // Track toolCallId -> toolName mappings for correlating start/complete events
+    const activeTools = new Map<string, string>();
+
     const cleanup = () => {
       for (const unsub of unsubscribers) unsub();
       unsubscribers.length = 0;
+      activeTools.clear();
     };
 
     // Listen for streaming deltas
@@ -368,13 +372,31 @@ app.post("/api/chat", async (req: Request, res: Response) => {
     unsubscribers.push(
       session.on("tool.execution_start", (event) => {
         const toolName = event.data?.toolName || "unknown";
+        const toolCallId = event.data?.toolCallId;
+        if (toolCallId) activeTools.set(toolCallId, toolName);
         res.write(`data: ${JSON.stringify({ type: "tool_start", tool: toolName })}\n\n`);
       })
     );
 
     unsubscribers.push(
-      session.on("tool.execution_complete", () => {
-        res.write(`data: ${JSON.stringify({ type: "tool_complete" })}\n\n`);
+      session.on("tool.execution_complete", (event) => {
+        const toolCallId = event.data?.toolCallId;
+        const toolName = (toolCallId && activeTools.get(toolCallId)) || "unknown";
+        if (toolCallId) activeTools.delete(toolCallId);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const payload: Record<string, any> = { type: "tool_complete", tool: toolName };
+        // For save_goal, parse the result content to extract the goal object for the frontend card
+        if (toolName === "save_goal" && event.data?.result?.content) {
+          try {
+            const parsed = JSON.parse(event.data.result.content) as { goal?: unknown; error?: string };
+            if (parsed.goal && !parsed.error) {
+              payload.result = parsed.goal;
+            }
+          } catch {
+            // result content isn't JSON — skip enrichment
+          }
+        }
+        res.write(`data: ${JSON.stringify(payload)}\n\n`);
       })
     );
 
