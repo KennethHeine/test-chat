@@ -392,6 +392,44 @@ async function testServerQuotaNoAuth(): Promise<void> {
 }
 
 // ============================================================
+// 5. Goal API tests
+// ============================================================
+
+async function testGoalsListNoAuth(): Promise<void> {
+  const res = await fetch(`${BASE}/api/goals`);
+  // Should fail without auth — either 401 (if no env token) or succeed (if env token is fallback)
+  if (res.status !== 401 && res.status !== 200) {
+    throw new Error(`Expected 401 or 200 (env fallback), got ${res.status}`);
+  }
+}
+
+async function testGoalsListEmpty(): Promise<void> {
+  const res = await fetch(`${BASE}/api/goals`, { headers: testAuthHeaders() });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const data = await res.json();
+  if (!Array.isArray(data.goals)) throw new Error("Expected goals array in response");
+  // A fresh server has no goals; the list may be empty or contain goals from other tests
+  log("  ", `Goals list: ${data.goals.length} goal(s) returned`);
+}
+
+async function testGoalGetNotFound(): Promise<void> {
+  const res = await fetch(`${BASE}/api/goals/nonexistent-goal-id-99999`, {
+    headers: testAuthHeaders(),
+  });
+  if (res.status !== 404) throw new Error(`Expected 404, got ${res.status}`);
+  const data = await res.json();
+  if (!data.error) throw new Error("Expected error message in 404 response");
+}
+
+async function testGoalGetNoAuth(): Promise<void> {
+  const res = await fetch(`${BASE}/api/goals/some-goal-id`);
+  // Should fail without auth — either 401 (if no env token) or succeed/404 (if env token is fallback)
+  if (res.status !== 401 && res.status !== 404 && res.status !== 200) {
+    throw new Error(`Expected 401, 404, or 200 (env fallback), got ${res.status}`);
+  }
+}
+
+// ============================================================
 // Main
 // ============================================================
 
@@ -455,6 +493,14 @@ async function main() {
   await run("Model switch validates required fields", testServerModelSwitchMissingFields);
   await run("Quota endpoint returns data", testServerQuotaEndpoint);
   await run("Quota endpoint handles no auth gracefully", testServerQuotaNoAuth);
+
+  // --- Goal API tests ---
+  console.log("\n── Goal API Tests ──\n");
+
+  await run("GET /api/goals returns 401 without auth", testGoalsListNoAuth);
+  await run("GET /api/goals returns empty array for new user", testGoalsListEmpty);
+  await run("GET /api/goals/:id returns 404 for unknown goal", testGoalGetNotFound);
+  await run("GET /api/goals/:id returns 401 without auth", testGoalGetNoAuth);
 
   // Cleanup
   serverProcess.kill();

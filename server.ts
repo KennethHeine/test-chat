@@ -6,6 +6,7 @@ import { config } from "dotenv";
 import path from "path";
 import { createSessionStore, hashToken, AzureSessionStore, InMemorySessionStore, type SessionStore } from "./storage.js";
 import { createGitHubTools, GITHUB_TOOL_NAMES } from "./tools.js";
+import { InMemoryPlanningStore, type PlanningStore } from "./planning-store.js";
 
 // --- System Message for Agent Orchestration ---
 const ORCHESTRATOR_SYSTEM_MESSAGE = `You are a coding task orchestrator. Your role is to help users research codebases, plan coding tasks, and coordinate work across repositories.
@@ -37,6 +38,10 @@ const PORT = parseInt(process.env.PORT || "3000", 10);
 
 const storageAccountName = process.env.AZURE_STORAGE_ACCOUNT_NAME || "";
 let sessionStore: SessionStore = createSessionStore(storageAccountName || undefined);
+
+// --- Planning Store ---
+
+const planningStore: PlanningStore = new InMemoryPlanningStore();
 
 // --- Per-user Copilot Clients ---
 
@@ -511,6 +516,62 @@ app.get("/api/quota", async (req: Request, res: Response) => {
     res.json({ quota });
   } catch (err: any) {
     res.status(500).json({ error: err.message || "Failed to fetch quota" });
+  }
+});
+
+// --- Goal API Endpoints ---
+
+// List all goals for the authenticated user across all their sessions
+app.get("/api/goals", async (req: Request, res: Response) => {
+  const token = extractToken(req);
+  if (!token) {
+    res.status(401).json({ error: "Missing token. Provide Authorization: Bearer <token> header." });
+    return;
+  }
+
+  try {
+    const tHash = await hashToken(token);
+    // Gather all sessions belonging to this user, then collect goals from each
+    const userSessions = await sessionStore.listSessions(tHash);
+    const goalArrays = await Promise.all(
+      userSessions.map((s) => planningStore.listGoals(s.id))
+    );
+    const goals = goalArrays.flat();
+    res.json({ goals });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Failed to list goals" });
+  }
+});
+
+// Get a specific goal by ID, scoped to the authenticated user
+app.get("/api/goals/:id", async (req: Request, res: Response) => {
+  const token = extractToken(req);
+  if (!token) {
+    res.status(401).json({ error: "Missing token. Provide Authorization: Bearer <token> header." });
+    return;
+  }
+
+  const goalId = req.params.id as string;
+
+  try {
+    const goal = await planningStore.getGoal(goalId);
+    if (!goal) {
+      res.status(404).json({ error: "Goal not found" });
+      return;
+    }
+
+    // Verify the goal belongs to the authenticated user by checking session ownership
+    const tHash = await hashToken(token);
+    const userSessions = await sessionStore.listSessions(tHash);
+    const userSessionIds = new Set(userSessions.map((s) => s.id));
+    if (!userSessionIds.has(goal.sessionId)) {
+      res.status(404).json({ error: "Goal not found" });
+      return;
+    }
+
+    res.json(goal);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Failed to get goal" });
   }
 });
 
