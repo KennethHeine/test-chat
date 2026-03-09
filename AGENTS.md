@@ -25,6 +25,7 @@
 | Run server | `npx tsx server.ts` | Starts on `PORT` (default 3000) |
 | Typecheck | `npx tsc --noEmit` | Validates TypeScript without emitting files |
 | Storage unit tests | `npm run test:storage` | Fast, offline — no tokens needed |
+| Planning store tests | `npm run test:planning` | Fast, offline — no tokens needed |
 | Integration tests | `npm test` | Requires `COPILOT_GITHUB_TOKEN` env var; uses `TEST_PORT=3099` |
 | E2E tests (local) | `npm run test:e2e:local` | Requires Playwright browsers + `COPILOT_GITHUB_TOKEN` |
 | E2E tests (prod) | `npm run test:e2e:prod` | Runs against `https://test-chat.kscloud.io` |
@@ -39,6 +40,9 @@
 ├── tools.ts               # GitHub API tools factory (5 tools bound to user's token)
 ├── storage.ts             # Storage abstraction (Azure Table/Blob + in-memory fallback)
 ├── storage.test.ts        # Unit tests for storage module
+├── planning-types.ts      # Planning data model interfaces (Goal, ResearchItem, Milestone, IssueDraft)
+├── planning-store.ts      # PlanningStore interface + InMemoryPlanningStore implementation
+├── planning-store.test.ts # Unit tests for planning store
 ├── test.ts                # Integration tests (SDK + server HTTP API)
 ├── public/                # Frontend (served as static files)
 │   ├── index.html         #   Chat UI (dark theme, session sidebar)

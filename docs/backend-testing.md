@@ -7,6 +7,7 @@ The backend has two layers of automated tests: fast offline storage unit tests a
 | Layer | File | Command | Token Required | Tests |
 |-------|------|---------|----------------|-------|
 | **Storage unit tests** | `storage.test.ts` | `npm run test:storage` | No | 15 |
+| **Planning store tests** | `planning-store.test.ts` | `npm run test:planning` | No | 51 |
 | **Integration tests** | `test.ts` | `npm test` | Yes (`COPILOT_GITHUB_TOKEN`) | 16 |
 
 Both test layers use `gpt-4.1` which costs **0 premium requests** on paid Copilot plans, so they are safe to run repeatedly.

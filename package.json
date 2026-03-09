@@ -10,7 +10,8 @@
     "test:storage": "npx tsx storage.test.ts",
     "test:e2e": "npx playwright test",
     "test:e2e:prod": "npx playwright test --project=prod",
-    "test:e2e:local": "npx playwright test --project=local"
+    "test:e2e:local": "npx playwright test --project=local",
+    "test:planning": "npx tsx planning-store.test.ts"
   },
   "dependencies": {
     "@azure/data-tables": "^13.3.2",
