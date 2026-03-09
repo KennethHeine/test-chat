@@ -69,7 +69,7 @@ jobs:
               '',
               `**Preview URL:** ${url}`,
               '',
-              'This environment mirrors production and will be automatically destroyed when this PR is closed or merged.',
+              'This environment runs the same code as production (with in-memory storage instead of Azure Storage). It will be automatically destroyed when this PR is closed or merged.',
               '',
               '_Deployed from commit ${{ github.sha }}_'
             ].join('\n');
