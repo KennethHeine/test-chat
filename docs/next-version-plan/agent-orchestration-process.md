@@ -2,6 +2,8 @@
 
 > Reusable process for orchestrating GitHub Copilot coding agents through staged implementation work. Each stage follows the same branch → issue → PR → review → fix → merge cycle.
 
+> **Custom agent available:** This process is now encoded as a custom Copilot coding agent in [`.github/agents/orchestrator.md`](../../.github/agents/orchestrator.md). You can invoke it by selecting the `orchestrator` agent when assigning the Copilot coding agent to an issue.
+
 ---
 
 ## Overview
