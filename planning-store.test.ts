@@ -415,13 +415,21 @@ async function testMilestoneInvalidStatus(): Promise<void> {
 
 async function testMilestoneNegativeOrder(): Promise<void> {
   const store = new InMemoryPlanningStore();
-  let threw = false;
+  let threwNegative = false;
   try {
     await store.createMilestone(makeMilestone({ order: -1 }));
   } catch {
-    threw = true;
+    threwNegative = true;
   }
-  assert(threw, "Should throw for negative order");
+  assert(threwNegative, "Should throw for negative order");
+
+  let threwZero = false;
+  try {
+    await store.createMilestone(makeMilestone({ order: 0 }));
+  } catch {
+    threwZero = true;
+  }
+  assert(threwZero, "Should throw for order = 0 (1-based)");
 }
 
 async function testMilestoneUpdateInvalidStatus(): Promise<void> {
@@ -531,13 +539,21 @@ async function testIssueDraftInvalidStatus(): Promise<void> {
 
 async function testIssueDraftNegativeOrder(): Promise<void> {
   const store = new InMemoryPlanningStore();
-  let threw = false;
+  let threwNegative = false;
   try {
     await store.createIssueDraft(makeIssueDraft({ order: -5 }));
   } catch {
-    threw = true;
+    threwNegative = true;
   }
-  assert(threw, "Should throw for negative order");
+  assert(threwNegative, "Should throw for negative order");
+
+  let threwZero = false;
+  try {
+    await store.createIssueDraft(makeIssueDraft({ order: 0 }));
+  } catch {
+    threwZero = true;
+  }
+  assert(threwZero, "Should throw for order = 0 (1-based)");
 }
 
 async function testIssueDraftUpdateInvalidStatus(): Promise<void> {
@@ -561,6 +577,42 @@ async function testIssueDraftMissingTitle(): Promise<void> {
     threw = true;
   }
   assert(threw, "Should throw for empty title");
+}
+
+// ============================================================
+// Deep Copy / Isolation Tests
+// ============================================================
+
+async function testGoalArrayIsolation(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const goal = makeGoal({ successCriteria: ["original"] });
+  const created = await store.createGoal(goal);
+  // Mutating the returned copy should not affect stored state
+  created.successCriteria.push("injected");
+  const fetched = await store.getGoal("goal-1");
+  assert(fetched!.successCriteria.length === 1, "Stored successCriteria should not be mutated via returned copy");
+  // Mutating the original input should also not affect stored state
+  goal.assumptions.push("injected");
+  const fetched2 = await store.getGoal("goal-1");
+  assert(fetched2!.assumptions.length === 0, "Stored assumptions should not be mutated via input reference");
+}
+
+async function testMilestoneArrayIsolation(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const milestone = makeMilestone({ acceptanceCriteria: ["criterion 1"], dependencies: [] });
+  const created = await store.createMilestone(milestone);
+  created.acceptanceCriteria.push("injected");
+  const fetched = await store.getMilestone("ms-1");
+  assert(fetched!.acceptanceCriteria.length === 1, "Stored acceptanceCriteria should not be mutated via returned copy");
+}
+
+async function testIssueDraftArrayIsolation(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const draft = makeIssueDraft({ dependencies: [], acceptanceCriteria: ["ac1"] });
+  const created = await store.createIssueDraft(draft);
+  created.dependencies.push("injected");
+  const fetched = await store.getIssueDraft("draft-1");
+  assert(fetched!.dependencies.length === 0, "Stored dependencies should not be mutated via returned copy");
 }
 
 // ============================================================
@@ -616,7 +668,7 @@ async function main() {
 
   console.log("\n── Milestone Validation ──\n");
   await run("createMilestone throws for invalid status", testMilestoneInvalidStatus);
-  await run("createMilestone throws for negative order", testMilestoneNegativeOrder);
+  await run("createMilestone throws for negative/zero order", testMilestoneNegativeOrder);
   await run("updateMilestone throws for invalid status", testMilestoneUpdateInvalidStatus);
 
   console.log("\n── IssueDraft CRUD ──\n");
@@ -632,9 +684,14 @@ async function main() {
 
   console.log("\n── IssueDraft Validation ──\n");
   await run("createIssueDraft throws for invalid status", testIssueDraftInvalidStatus);
-  await run("createIssueDraft throws for negative order", testIssueDraftNegativeOrder);
+  await run("createIssueDraft throws for negative/zero order", testIssueDraftNegativeOrder);
   await run("updateIssueDraft throws for invalid status", testIssueDraftUpdateInvalidStatus);
   await run("createIssueDraft throws for empty title", testIssueDraftMissingTitle);
+
+  console.log("\n── Deep Copy / Isolation ──\n");
+  await run("Goal array fields are deep-copied (structuredClone)", testGoalArrayIsolation);
+  await run("Milestone array fields are deep-copied (structuredClone)", testMilestoneArrayIsolation);
+  await run("IssueDraft array fields are deep-copied (structuredClone)", testIssueDraftArrayIsolation);
 
   console.log("\n═══════════════════════════════════════════════");
   console.log(`  ${passed + failed} tests: ${passed} passed, ${failed} failed`);

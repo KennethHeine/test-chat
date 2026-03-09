@@ -155,9 +155,9 @@ function requireValidEnum<T extends string>(
   }
 }
 
-function requireNonNegativeNumber(value: number, fieldName: string): void {
-  if (typeof value !== "number" || value < 0) {
-    throw new Error(`Invalid ${fieldName}: must be a number >= 0`);
+function requirePositiveNumber(value: number, fieldName: string): void {
+  if (typeof value !== "number" || value < 1) {
+    throw new Error(`Invalid ${fieldName}: must be a number >= 1`);
   }
 }
 
@@ -187,7 +187,7 @@ function validateMilestone(milestone: Milestone): void {
   requireNonEmpty(milestone.name, "name");
   requireNonEmpty(milestone.goal, "goal");
   requireNonEmpty(milestone.scope, "scope");
-  requireNonNegativeNumber(milestone.order, "order");
+  requirePositiveNumber(milestone.order, "order");
   requireValidEnum(milestone.status, VALID_MILESTONE_STATUSES, "status");
 }
 
@@ -198,7 +198,7 @@ function validateIssueDraft(draft: IssueDraft): void {
   requireNonEmpty(draft.purpose, "purpose");
   requireNonEmpty(draft.problem, "problem");
   requireNonEmpty(draft.expectedOutcome, "expectedOutcome");
-  requireNonNegativeNumber(draft.order, "order");
+  requirePositiveNumber(draft.order, "order");
   requireValidEnum(draft.status, VALID_ISSUE_DRAFT_STATUSES, "status");
 }
 
@@ -214,13 +214,13 @@ export class InMemoryPlanningStore implements PlanningStore {
 
   async createGoal(goal: Goal): Promise<Goal> {
     validateGoal(goal);
-    this.goals.set(goal.id, { ...goal });
-    return { ...goal };
+    this.goals.set(goal.id, structuredClone(goal));
+    return structuredClone(goal);
   }
 
   async getGoal(goalId: string): Promise<Goal | null> {
     const goal = this.goals.get(goalId);
-    return goal ? { ...goal } : null;
+    return goal ? structuredClone(goal) : null;
   }
 
   async updateGoal(
@@ -241,7 +241,7 @@ export class InMemoryPlanningStore implements PlanningStore {
 
     const updated: Goal = { ...existing, ...updates, id: existing.id, createdAt: existing.createdAt };
     this.goals.set(goalId, updated);
-    return { ...updated };
+    return structuredClone(updated);
   }
 
   async deleteGoal(goalId: string): Promise<boolean> {
@@ -253,7 +253,7 @@ export class InMemoryPlanningStore implements PlanningStore {
   async listGoals(sessionId: string): Promise<Goal[]> {
     const result: Goal[] = [];
     for (const goal of this.goals.values()) {
-      if (goal.sessionId === sessionId) result.push({ ...goal });
+      if (goal.sessionId === sessionId) result.push(structuredClone(goal));
     }
     result.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
     return result;
@@ -263,13 +263,13 @@ export class InMemoryPlanningStore implements PlanningStore {
 
   async createResearchItem(item: ResearchItem): Promise<ResearchItem> {
     validateResearchItem(item);
-    this.researchItems.set(item.id, { ...item });
-    return { ...item };
+    this.researchItems.set(item.id, structuredClone(item));
+    return structuredClone(item);
   }
 
   async getResearchItem(itemId: string): Promise<ResearchItem | null> {
     const item = this.researchItems.get(itemId);
-    return item ? { ...item } : null;
+    return item ? structuredClone(item) : null;
   }
 
   async updateResearchItem(
@@ -285,7 +285,7 @@ export class InMemoryPlanningStore implements PlanningStore {
 
     const updated: ResearchItem = { ...existing, ...updates, id: existing.id, goalId: existing.goalId };
     this.researchItems.set(itemId, updated);
-    return { ...updated };
+    return structuredClone(updated);
   }
 
   async deleteResearchItem(itemId: string): Promise<boolean> {
@@ -297,7 +297,7 @@ export class InMemoryPlanningStore implements PlanningStore {
   async listResearchItems(goalId: string): Promise<ResearchItem[]> {
     const result: ResearchItem[] = [];
     for (const item of this.researchItems.values()) {
-      if (item.goalId === goalId) result.push({ ...item });
+      if (item.goalId === goalId) result.push(structuredClone(item));
     }
     return result;
   }
@@ -306,13 +306,13 @@ export class InMemoryPlanningStore implements PlanningStore {
 
   async createMilestone(milestone: Milestone): Promise<Milestone> {
     validateMilestone(milestone);
-    this.milestones.set(milestone.id, { ...milestone });
-    return { ...milestone };
+    this.milestones.set(milestone.id, structuredClone(milestone));
+    return structuredClone(milestone);
   }
 
   async getMilestone(milestoneId: string): Promise<Milestone | null> {
     const milestone = this.milestones.get(milestoneId);
-    return milestone ? { ...milestone } : null;
+    return milestone ? structuredClone(milestone) : null;
   }
 
   async updateMilestone(
@@ -325,12 +325,11 @@ export class InMemoryPlanningStore implements PlanningStore {
     if (updates.name !== undefined) requireNonEmpty(updates.name, "name");
     if (updates.goal !== undefined) requireNonEmpty(updates.goal, "goal");
     if (updates.scope !== undefined) requireNonEmpty(updates.scope, "scope");
-    if (updates.order !== undefined) requireNonNegativeNumber(updates.order, "order");
+    if (updates.order !== undefined) requirePositiveNumber(updates.order, "order");
     if (updates.status !== undefined) requireValidEnum(updates.status, VALID_MILESTONE_STATUSES, "status");
 
     const updated: Milestone = { ...existing, ...updates, id: existing.id, goalId: existing.goalId };
-    this.milestones.set(milestoneId, updated);
-    return { ...updated };
+    this.milestones.set(milestoneId, updated);    return structuredClone(updated);
   }
 
   async deleteMilestone(milestoneId: string): Promise<boolean> {
@@ -342,7 +341,7 @@ export class InMemoryPlanningStore implements PlanningStore {
   async listMilestones(goalId: string): Promise<Milestone[]> {
     const result: Milestone[] = [];
     for (const milestone of this.milestones.values()) {
-      if (milestone.goalId === goalId) result.push({ ...milestone });
+      if (milestone.goalId === goalId) result.push(structuredClone(milestone));
     }
     result.sort((a, b) => a.order - b.order);
     return result;
@@ -352,13 +351,13 @@ export class InMemoryPlanningStore implements PlanningStore {
 
   async createIssueDraft(draft: IssueDraft): Promise<IssueDraft> {
     validateIssueDraft(draft);
-    this.issueDrafts.set(draft.id, { ...draft });
-    return { ...draft };
+    this.issueDrafts.set(draft.id, structuredClone(draft));
+    return structuredClone(draft);
   }
 
   async getIssueDraft(draftId: string): Promise<IssueDraft | null> {
     const draft = this.issueDrafts.get(draftId);
-    return draft ? { ...draft } : null;
+    return draft ? structuredClone(draft) : null;
   }
 
   async updateIssueDraft(
@@ -372,12 +371,11 @@ export class InMemoryPlanningStore implements PlanningStore {
     if (updates.purpose !== undefined) requireNonEmpty(updates.purpose, "purpose");
     if (updates.problem !== undefined) requireNonEmpty(updates.problem, "problem");
     if (updates.expectedOutcome !== undefined) requireNonEmpty(updates.expectedOutcome, "expectedOutcome");
-    if (updates.order !== undefined) requireNonNegativeNumber(updates.order, "order");
+    if (updates.order !== undefined) requirePositiveNumber(updates.order, "order");
     if (updates.status !== undefined) requireValidEnum(updates.status, VALID_ISSUE_DRAFT_STATUSES, "status");
 
     const updated: IssueDraft = { ...existing, ...updates, id: existing.id, milestoneId: existing.milestoneId };
-    this.issueDrafts.set(draftId, updated);
-    return { ...updated };
+    this.issueDrafts.set(draftId, updated);    return structuredClone(updated);
   }
 
   async deleteIssueDraft(draftId: string): Promise<boolean> {
@@ -389,7 +387,7 @@ export class InMemoryPlanningStore implements PlanningStore {
   async listIssueDrafts(milestoneId: string): Promise<IssueDraft[]> {
     const result: IssueDraft[] = [];
     for (const draft of this.issueDrafts.values()) {
-      if (draft.milestoneId === milestoneId) result.push({ ...draft });
+      if (draft.milestoneId === milestoneId) result.push(structuredClone(draft));
     }
     result.sort((a, b) => a.order - b.order);
     return result;
