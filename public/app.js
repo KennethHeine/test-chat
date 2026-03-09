@@ -437,6 +437,26 @@ function hideToolActivity() {
   toolActivityText.textContent = "";
 }
 
+/**
+ * Handles a parsed tool_complete SSE event.
+ * Extracted so it can be called from both the streaming loop and tests.
+ * For save_goal, renders the goal summary card using the result data when present,
+ * or falls back to fetching the latest goal from the API.
+ * @param {Object} event - The parsed tool_complete SSE event
+ */
+function handleToolComplete(event) {
+  // When save_goal completes, render the goal summary card in the chat
+  if (event.tool === "save_goal") {
+    if (event.result) {
+      renderGoalCard(event.result);
+    } else {
+      // Fallback: fetch the latest goal if result wasn't included in the event
+      fetchAndRenderLatestGoal();
+    }
+  }
+  hideToolActivity();
+}
+
 function showUsage(usage) {
   if (!usage) return;
   const parts = [];
@@ -668,16 +688,7 @@ async function sendMessage() {
           } else if (event.type === "tool_start") {
             showToolActivity(event.tool);
           } else if (event.type === "tool_complete") {
-            // When save_goal completes, render the goal summary card in the chat
-            if (event.tool === "save_goal") {
-              if (event.result) {
-                renderGoalCard(event.result);
-              } else {
-                // Fallback: fetch the latest goal if result wasn't included in the event
-                fetchAndRenderLatestGoal();
-              }
-            }
-            hideToolActivity();
+            handleToolComplete(event);
           } else if (event.type === "title" && event.title) {
             // Update session title with AI-generated title
             updateSessionTitle(sessionId, event.title);

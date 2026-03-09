@@ -252,3 +252,123 @@ test("goal card renders with correct fields when renderGoalCard is called", asyn
   // Verify goal ID is attached to the card element
   await expect(card).toHaveAttribute("data-goal-id", "test-goal-e2e");
 });
+
+test("SSE tool_complete event for save_goal triggers goal card via handleToolComplete", async ({ page }) => {
+  await page.goto("/");
+
+  const mockGoal = {
+    id: "sse-wiring-test-goal",
+    sessionId: "sse-test-session",
+    intent: "Automate release workflow",
+    goal: "Build a CI/CD pipeline",
+    problemStatement: "Releases are manual and error-prone",
+    businessValue: "Faster, reliable deploys",
+    targetOutcome: "Fully automated release process",
+    successCriteria: ["Pipeline runs in < 10 minutes"],
+    assumptions: [],
+    constraints: [],
+    risks: [],
+    createdAt: "2025-06-01T00:00:00Z",
+    updatedAt: "2025-06-01T00:00:00Z",
+  };
+
+  // Simulate the SSE dispatch path: call handleToolComplete with a save_goal result,
+  // which is what the streaming loop does when it receives a tool_complete SSE event.
+  await page.evaluate((goal) => {
+    // @ts-ignore — handleToolComplete is defined in app.js global scope
+    handleToolComplete({ type: "tool_complete", tool: "save_goal", result: goal });
+  }, mockGoal);
+
+  // The goal card should be rendered just as if the real SSE stream triggered it
+  const card = page.locator(".goal-card[data-goal-id='sse-wiring-test-goal']");
+  await expect(card).toBeVisible();
+  await expect(card.locator(".goal-card-header")).toHaveText("🎯 Goal Defined");
+  await expect(card.locator(".goal-card-body")).toContainText("Automate release workflow");
+  await expect(card.locator(".goal-card-list li").first()).toContainText("Pipeline runs in < 10 minutes");
+});
+
+test("SSE tool_complete for save_goal without result falls back to fetchAndRenderLatestGoal", async ({ page }) => {
+  await page.goto("/");
+
+  // Override fetchAndRenderLatestGoal with a spy that renders a card directly,
+  // so we can verify it's called without making a real API call.
+  await page.evaluate(() => {
+    // @ts-ignore — override the global function defined in app.js
+    window._fetchAndRenderCalled = false;
+    // @ts-ignore
+    fetchAndRenderLatestGoal = async () => {
+      // @ts-ignore
+      window._fetchAndRenderCalled = true;
+      // Render a sentinel card so the test can assert it appeared
+      // @ts-ignore
+      renderGoalCard({
+        id: "fallback-goal",
+        sessionId: "test",
+        intent: "Fallback test intent",
+        goal: "Fallback goal",
+        problemStatement: "Problem",
+        businessValue: "Value",
+        targetOutcome: "Outcome",
+        successCriteria: ["Fallback criterion"],
+        assumptions: [],
+        constraints: [],
+        risks: [],
+        createdAt: "2025-01-01T00:00:00Z",
+        updatedAt: "2025-01-01T00:00:00Z",
+      });
+    };
+  });
+
+  // Simulate the SSE event with no result (fallback path)
+  await page.evaluate(() => {
+    // @ts-ignore
+    handleToolComplete({ type: "tool_complete", tool: "save_goal" });
+  });
+
+  // Verify the fallback was invoked and a goal card was rendered
+  const calledFallback = await page.evaluate(() => (window as any)._fetchAndRenderCalled);
+  expect(calledFallback).toBe(true);
+
+  const card = page.locator(".goal-card[data-goal-id='fallback-goal']");
+  await expect(card).toBeVisible();
+  await expect(card.locator(".goal-card-body")).toContainText("Fallback test intent");
+});
+
+// ─── Goal Card — authenticated (requires Copilot token) ────────
+
+test.describe("goal card — authenticated", () => {
+  test.beforeEach(async ({ page }) => {
+    test.skip(!TOKEN, "COPILOT_GITHUB_TOKEN is required for this test");
+    await page.goto("/");
+  });
+
+  test("save_goal tool invocation renders goal card in chat", async ({ page }) => {
+    await authenticateAndSelectModel(page);
+
+    const input = page.locator("#message-input");
+
+    // Send a message that instructs the agent to call save_goal with all required fields.
+    // The prompt is explicit so the LLM reliably uses the planning tool.
+    await input.fill(
+      "Use the save_goal tool to save a goal with exactly these values — " +
+      "intent: 'E2E test goal intent', " +
+      "goal: 'E2E test refined goal', " +
+      "problemStatement: 'E2E test problem', " +
+      "businessValue: 'E2E test value', " +
+      "targetOutcome: 'E2E test outcome', " +
+      "successCriteria: ['E2E criterion one'], " +
+      "assumptions: [], constraints: [], risks: []. " +
+      "Call the tool now and confirm when done."
+    );
+    await page.locator("#send-btn").click();
+
+    // Wait for the goal card to appear (tool invocations take time)
+    const card = page.locator(".goal-card").last();
+    await expect(card).toBeVisible({ timeout: 90_000 });
+
+    // Verify the card contains expected text from the saved goal
+    await expect(card.locator(".goal-card-header")).toHaveText("🎯 Goal Defined");
+    await expect(card.locator(".goal-card-body")).toContainText("E2E test goal intent");
+    await expect(card.locator(".goal-card-body")).toContainText("E2E test refined goal");
+  });
+});
