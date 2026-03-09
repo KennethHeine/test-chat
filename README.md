@@ -198,66 +198,62 @@ Get the user's premium request quota. Requires `Authorization: Bearer <token>` h
 
 Tests use `gpt-4.1` which costs **0 premium requests** on paid plans, so they are safe to run repeatedly.
 
-### Storage Unit Tests (`npm run test:storage`)
-
-Fast, offline tests for the session storage module. No external services needed.
-
 ```bash
-npm run test:storage
+npm run test:storage          # Storage unit tests (offline, no token)
+npm test                      # Integration tests (requires COPILOT_GITHUB_TOKEN)
+npm run test:e2e:local        # E2E tests against local server
+npm run test:e2e:prod         # E2E tests against production
 ```
 
-### Integration Tests (`npm test`)
+See the [Testing Documentation](#documentation) for full details.
 
-SDK-level and HTTP API tests against the Copilot API. Requires `COPILOT_GITHUB_TOKEN`.
+## Documentation
 
-```bash
-npm test
-```
+All detailed documentation lives in the [`docs/`](docs/) directory:
 
-### E2E Tests (`npm run test:e2e`)
-
-Playwright browser tests that run against the live production site. They enter the token via the UI, load models, send chat messages, and verify streamed responses — exactly like a real user.
-
-```bash
-COPILOT_GITHUB_TOKEN=github_pat_... npm run test:e2e
-```
-
-| Test | What it verifies |
-|------|------------------|
-| **page loads and shows connected status** | Site is up, status dot is green |
-| **save token and load models** | Token input works, model dropdown populates with GPT models |
-| **send message and receive streamed response** | Full chat round-trip with SSE streaming |
-| **multi-turn conversation retains context** | Session memory works across turns |
-| **new chat button clears conversation** | UI resets correctly |
-
-See **[TESTING.md](TESTING.md)** for full details on prerequisites, CI setup, configuration, and debugging.
+| Document | Description |
+|----------|-------------|
+| [**Architecture**](docs/architecture.md) | System overview, data flow, infrastructure, and dependencies |
+| [**Frontend**](docs/frontend.md) | UI components, state management, session persistence, SSE handling |
+| [**Backend**](docs/backend.md) | Express server, API endpoints, SDK integration, storage, custom tools |
+| [**Frontend Testing**](docs/frontend-testing.md) | Playwright E2E browser tests |
+| [**Backend Testing**](docs/backend-testing.md) | Storage unit tests and integration tests |
+| [**Regression Testing**](docs/regression-testing.md) | Full regression test strategy and CI/CD workflows |
+| [**Deployment**](docs/deployment.md) | Azure infrastructure, deployment guide, and scaling configuration |
+| [**SDK Reference**](docs/sdk-reference.md) | Copilot SDK deep dive and feature inventory |
+| [**Roadmap**](docs/roadmap.md) | Optimization plan and future phases |
 
 ## File Structure
 
 ```
 test-chat/
-├── server.ts              # Express backend — CopilotClient, session management, SSE streaming
-├── tools.ts               # GitHub API tools factory — 5 tools (list_repos, get_repo_structure, read_repo_file, list_issues, search_code) using user's token
-├── storage.ts             # Storage abstraction — Azure Table/Blob Storage + in-memory fallback
+├── server.ts              # Express backend — API routes, SDK integration, SSE streaming
+├── tools.ts               # GitHub API tools factory — 5 tools using user's token
+├── storage.ts             # Storage abstraction — Azure Table/Blob + in-memory fallback
 ├── storage.test.ts        # Unit tests for storage module (15 tests)
-├── test.ts                # Integration tests — SDK direct + server HTTP tests (16 tests)
+├── test.ts                # Integration tests — SDK + server HTTP tests (16 tests)
 ├── e2e/
-│   └── chat.spec.ts       # Playwright E2E tests — browser tests against live site
-├── playwright.config.ts   # Playwright configuration (base URL, timeouts, browser)
+│   └── chat.spec.ts       # Playwright E2E tests — browser tests
+├── playwright.config.ts   # Playwright configuration
 ├── public/
 │   ├── index.html         # Chat UI — GitHub dark theme, model selector, session sidebar
-│   └── app.js             # Frontend logic — fetch, SSE parsing, streaming render, session mgmt
+│   └── app.js             # Frontend logic — token mgmt, SSE parsing, session mgmt
+├── docs/                  # Documentation
+│   ├── architecture.md    #   System architecture and data flow
+│   ├── frontend.md        #   Frontend documentation
+│   ├── backend.md         #   Backend documentation
+│   ├── frontend-testing.md#   E2E / Playwright tests
+│   ├── backend-testing.md #   Unit + integration tests
+│   ├── regression-testing.md # Regression test strategy
+│   ├── deployment.md      #   Azure deployment + scaling
+│   ├── sdk-reference.md   #   Copilot SDK deep dive
+│   └── roadmap.md         #   Optimization plan
 ├── infra/
-│   └── main.bicep         # Azure infrastructure (Container Apps + SWA + Storage Account)
+│   └── main.bicep         # Azure infrastructure (Container Apps + SWA + Storage)
 ├── package.json           # Dependencies & scripts
 ├── tsconfig.json          # TypeScript config (ES2022, bundler resolution)
 ├── .env.example           # Environment variable template
-├── .env                   # Local config (gitignored)
-├── .gitignore             # node_modules, .env, dist
-├── docs.md                # Detailed project documentation
-├── ARCHITECTURE.md        # Application architecture overview
-├── TESTING.md             # E2E and integration test documentation
-└── README.md              # This file
+└── Dockerfile             # Production container (node:22-alpine)
 ```
 
 ## Available Models

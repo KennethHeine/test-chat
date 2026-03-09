@@ -43,9 +43,16 @@ If `COPILOT_GITHUB_TOKEN` is not available, run `npx tsc --noEmit` at minimum.
 
 ## Documentation Expectations
 
-- **README.md:** User-facing setup, API docs, troubleshooting
-- **TESTING.md:** How to run tests, CI configuration, debugging
-- **AZURE_DEPLOYMENT.md:** Azure infrastructure and deployment
-- **SCALING.md:** Container App scaling configuration
-- **docs.md:** Detailed technical documentation
+Documentation lives in the `docs/` directory, organized by topic:
+
+- **`docs/architecture.md`:** System architecture and data flow
+- **`docs/frontend.md`:** Frontend UI and state management
+- **`docs/backend.md`:** Backend server, API endpoints, SDK integration
+- **`docs/frontend-testing.md`:** Playwright E2E browser tests
+- **`docs/backend-testing.md`:** Storage unit tests and integration tests
+- **`docs/regression-testing.md`:** Regression test strategy and CI workflows
+- **`docs/deployment.md`:** Azure deployment and scaling configuration
+- **`docs/sdk-reference.md`:** Copilot SDK deep dive
+- **`docs/roadmap.md`:** Optimization plan and future phases
+- **`README.md`:** User-facing setup, API docs, troubleshooting (root level)
 - Update the relevant doc when behavior, configuration, or workflow changes
