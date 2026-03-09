@@ -183,10 +183,16 @@ export function createPlanningTools(token: string, planningStore: PlanningStore)
         if (err) return { error: err };
       }
 
-      // Validate array fields
+      // Validate array fields — each element must be a non-empty string
       for (const arrayField of ["successCriteria", "assumptions", "constraints", "risks"] as const) {
         if (!Array.isArray(args[arrayField])) {
           return { error: `${arrayField} must be an array` };
+        }
+        for (let i = 0; i < (args[arrayField] as unknown[]).length; i++) {
+          const element = (args[arrayField] as unknown[])[i];
+          if (typeof element !== "string" || element.trim().length === 0) {
+            return { error: `${arrayField}[${i}] must be a non-empty string` };
+          }
         }
       }
 
@@ -218,13 +224,17 @@ export function createPlanningTools(token: string, planningStore: PlanningStore)
 
   /**
    * get_goal: Retrieves a goal by its ID from the PlanningStore.
-   * Returns the Goal object, or an error message if the goal is not found.
+   * Requires the caller's sessionId to match the goal's sessionId, preventing
+   * cross-session information disclosure.
+   * Returns the Goal object, or "Goal not found" if the ID is missing or the
+   * sessionId does not match.
    */
   const getGoal: Tool = {
     name: "get_goal",
     description:
       "Retrieve a saved goal by its ID from the planning store. " +
-      "Returns the full Goal object or an error message if the ID is not found.",
+      "Requires sessionId to match the goal's owner session. " +
+      "Returns the full Goal object or an error message if the ID is not found or access is denied.",
     parameters: {
       type: "object",
       properties: {
@@ -232,15 +242,24 @@ export function createPlanningTools(token: string, planningStore: PlanningStore)
           type: "string",
           description: "The unique identifier of the goal to retrieve.",
         },
+        sessionId: {
+          type: "string",
+          description:
+            "The session identifier of the caller. Must match the goal's sessionId or the goal will not be returned.",
+        },
       },
-      required: ["goalId"],
+      required: ["goalId", "sessionId"],
     },
     handler: async (args: any) => {
       const goalIdErr = validateStringField(args.goalId, "goalId", 256);
       if (goalIdErr) return { error: goalIdErr };
 
+      const sessionIdErr = validateStringField(args.sessionId, "sessionId", MAX_SESSION_ID_LENGTH);
+      if (sessionIdErr) return { error: sessionIdErr };
+
       const goal = await planningStore.getGoal(args.goalId);
-      if (!goal) {
+      if (!goal || goal.sessionId !== args.sessionId) {
+        // Do not reveal whether the goal exists if the sessionId does not match.
         return { error: `Goal not found: ${args.goalId}` };
       }
       return { goal };

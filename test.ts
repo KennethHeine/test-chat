@@ -485,6 +485,14 @@ async function testSaveGoalArrayFieldNotArrayReturnsError(): Promise<void> {
   const saveGoal = tools.find((t) => t.name === "save_goal")!;
   const result: any = await saveGoal.handler(makeValidSaveGoalArgs({ successCriteria: "not an array" }), STUB_INVOCATION);
   if (!result.error) throw new Error("Expected error for non-array successCriteria");
+
+  // Array element is a non-string
+  const result2: any = await saveGoal.handler(makeValidSaveGoalArgs({ assumptions: [42] }), STUB_INVOCATION);
+  if (!result2.error) throw new Error("Expected error for non-string array element in assumptions");
+
+  // Array element is an empty string
+  const result3: any = await saveGoal.handler(makeValidSaveGoalArgs({ risks: [""] }), STUB_INVOCATION);
+  if (!result3.error) throw new Error("Expected error for empty-string element in risks");
 }
 
 async function testGetGoalExistingIdReturnsGoal(): Promise<void> {
@@ -495,18 +503,34 @@ async function testGetGoalExistingIdReturnsGoal(): Promise<void> {
 
   const saved: any = await saveGoal.handler(makeValidSaveGoalArgs(), STUB_INVOCATION);
   const goalId = saved.goal.id;
+  const sessionId = saved.goal.sessionId;
 
-  const result: any = await getGoal.handler({ goalId }, STUB_INVOCATION);
+  const result: any = await getGoal.handler({ goalId, sessionId }, STUB_INVOCATION);
   if (!result.goal) throw new Error("Expected goal in get_goal result");
   if (result.goal.id !== goalId) throw new Error("Retrieved goal ID does not match saved ID");
   if (result.goal.intent !== makeValidSaveGoalArgs().intent) throw new Error("Retrieved goal intent mismatch");
+}
+
+async function testGetGoalWrongSessionIdReturnsError(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const tools = createPlanningTools("test-token", store);
+  const saveGoal = tools.find((t) => t.name === "save_goal")!;
+  const getGoal = tools.find((t) => t.name === "get_goal")!;
+
+  const saved: any = await saveGoal.handler(makeValidSaveGoalArgs(), STUB_INVOCATION);
+  const goalId = saved.goal.id;
+
+  // Different sessionId — should not reveal the goal exists
+  const result: any = await getGoal.handler({ goalId, sessionId: "different-session" }, STUB_INVOCATION);
+  if (!result.error) throw new Error("Expected error when sessionId does not match");
+  if (result.goal) throw new Error("Should not return goal data for wrong sessionId");
 }
 
 async function testGetGoalNonExistentIdReturnsError(): Promise<void> {
   const store = new InMemoryPlanningStore();
   const tools = createPlanningTools("test-token", store);
   const getGoal = tools.find((t) => t.name === "get_goal")!;
-  const result: any = await getGoal.handler({ goalId: "nonexistent-uuid-1234" }, STUB_INVOCATION);
+  const result: any = await getGoal.handler({ goalId: "nonexistent-uuid-1234", sessionId: "any-session" }, STUB_INVOCATION);
   if (!result.error) throw new Error("Expected error for non-existent goal ID");
   if (!result.error.includes("nonexistent-uuid-1234")) {
     throw new Error(`Expected error to mention the goal ID, got: ${result.error}`);
@@ -517,7 +541,7 @@ async function testGetGoalEmptyIdReturnsError(): Promise<void> {
   const store = new InMemoryPlanningStore();
   const tools = createPlanningTools("test-token", store);
   const getGoal = tools.find((t) => t.name === "get_goal")!;
-  const result: any = await getGoal.handler({ goalId: "" }, STUB_INVOCATION);
+  const result: any = await getGoal.handler({ goalId: "", sessionId: "any-session" }, STUB_INVOCATION);
   if (!result.error) throw new Error("Expected error for empty goalId");
 }
 
@@ -598,7 +622,8 @@ async function main() {
   await run("save_goal: valid data returns goal with generated ID and timestamps", testSaveGoalValidDataReturnsGoalWithId);
   await run("save_goal: missing required string field returns validation error", testSaveGoalMissingRequiredFieldReturnsError);
   await run("save_goal: non-array successCriteria returns validation error", testSaveGoalArrayFieldNotArrayReturnsError);
-  await run("get_goal: existing ID returns correct goal", testGetGoalExistingIdReturnsGoal);
+  await run("get_goal: existing ID with correct sessionId returns correct goal", testGetGoalExistingIdReturnsGoal);
+  await run("get_goal: wrong sessionId returns error (ownership check)", testGetGoalWrongSessionIdReturnsError);
   await run("get_goal: non-existent ID returns error", testGetGoalNonExistentIdReturnsError);
   await run("get_goal: empty goalId returns validation error", testGetGoalEmptyIdReturnsError);
 
