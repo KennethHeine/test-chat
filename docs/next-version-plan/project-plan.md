@@ -27,15 +27,18 @@
 
 ## Vision Summary
 
-Transform the current chat application into an **AI-powered project management and delivery orchestration platform** that uses GitHub as the execution backend.
+Transform the current chat application into an **orchestration tool built on top of GitHub** that helps users plan, research, and execute multi-stage software builds using GitHub as the execution backend.
 
-**Core workflow:** User defines a goal → system conducts research → creates milestone plan → generates implementation-ready GitHub issues → orchestrates GitHub Copilot coding agent to execute work issue by issue.
+**Core principle:** This is not a replacement for GitHub project management — it is an orchestration layer that leverages GitHub's native features (Projects, Issues, Milestones, Branches, PRs, Labels, Actions). All features available in GitHub should be preferred over building custom alternatives. The app organizes planning and research before a big task starts, then splits execution into multiple issues across multiple steps.
+
+**Core workflow:** User defines a goal → system conducts research → creates GitHub milestone plan → generates implementation-ready GitHub issues → orchestrates GitHub Copilot coding agent to execute work issue by issue — all tracked via GitHub Projects and Issues.
 
 **MVP success criteria** (from [mvp-scope.md](./mvp-scope.md)):
 1. A user can define a product/system goal in chat
 2. The system generates a research-backed milestone plan
-3. Each milestone gets detailed issue drafts
-4. The output is good enough to start implementation in GitHub with minimal manual rewriting
+3. Each milestone gets detailed issue drafts created as real GitHub Issues
+4. Work is tracked via GitHub Projects and Milestones — not custom dashboards
+5. The output is good enough to start implementation in GitHub with minimal manual rewriting
 
 ---
 
@@ -68,44 +71,54 @@ The **next version** builds on this foundation to add the planning workflow desc
 
 | Decision | Rationale |
 |----------|-----------|
-| Web-based product | Accessible, no install required |
+| **GitHub-first** | Use GitHub Projects, Issues, Milestones, Labels, and Actions natively — don't rebuild what GitHub already provides |
+| Web-based orchestration tool | Accessible, no install required — sits on top of GitHub |
 | Azure-first architecture | Enterprise support, managed identity, compliance |
 | GitHub as execution backend | Issues, milestones, branches, PRs, workflows, code review |
 | Per-user GitHub identity | Users authenticate with their own PAT and Copilot subscription |
 | Research before coding | High-quality planning prevents bad implementation |
 | Milestone branch model | Issue-by-issue control, traceability, lower risk |
+| Multi-step task splitting | Big tasks are broken into multiple GitHub Issues, each a step in a larger build |
 
 ### New Components Required
 
+**Design principle:** Prefer GitHub native features over custom implementations. The app is an orchestration layer — planning and research happen in the app, but all execution artifacts (issues, milestones, projects, branches, PRs) live in GitHub.
+
 ```
 ┌──────────────────────────────────┐
-│  Browser — Planning Dashboard    │
+│  Browser — Orchestration UI      │
 │  ├─ Chat Interface (existing)    │
-│  ├─ Goal Editor (new)            │
-│  ├─ Research Tracker (new)       │
-│  ├─ Milestone Planner (new)      │
-│  └─ Issue Preview (new)          │
+│  ├─ Goal & Research Editor (new) │
+│  └─ GitHub Preview (new)         │
+│     (preview before creating     │
+│      GitHub Issues/Milestones)   │
 └────────────┬─────────────────────┘
              │ HTTP/SSE
 ┌────────────▼─────────────────────┐
 │  Express Server — Orchestrator   │
 │  ├─ Planning API (new)           │
-│  ├─ Goal Storage (new)           │
-│  ├─ Research Storage (new)       │
-│  ├─ Milestone Storage (new)      │
+│  ├─ PlanningStore (new)          │
+│  │  (goals, research, drafts —   │
+│  │   pre-GitHub planning data)   │
 │  ├─ GitHub Write Tools (new)     │
 │  └─ Existing chat + tools        │
 └────────────┬─────────────────────┘
              │ GitHub REST API
 ┌────────────▼─────────────────────┐
-│  GitHub — Execution Backend      │
-│  ├─ Issues (create/update)       │
-│  ├─ Milestones (create)          │
-│  ├─ Branches (create)            │
-│  ├─ Labels (manage)              │
-│  └─ Projects (optional)          │
+│  GitHub — Source of Truth        │
+│  ├─ Projects (task tracking)     │
+│  ├─ Issues (implementation tasks)│
+│  ├─ Milestones (delivery phases) │
+│  ├─ Branches (code isolation)    │
+│  ├─ Labels (categorization)      │
+│  └─ Actions (CI/CD, automation)  │
 └──────────────────────────────────┘
 ```
+
+**What lives where:**
+- **In the app (PlanningStore):** Goals, research checklists, issue drafts — pre-GitHub planning data that hasn't been pushed to GitHub yet
+- **In GitHub (source of truth):** Issues, Milestones, Projects, Branches, PRs, Labels — once created, GitHub is the authoritative source
+- **Not built custom:** Task boards (use GitHub Projects), progress dashboards (use GitHub Projects), issue management (use GitHub Issues)
 
 ---
 
@@ -117,7 +130,7 @@ Each stage is designed to be **independently valuable**, testable, and deployabl
 
 > **Goal:** Define and implement the core data model for goals, research, milestones, and issues.
 >
-> **Effort:** Small — 1-2 issues
+> **Effort:** Small — 3 issues
 >
 > **Prerequisite:** None
 
@@ -126,7 +139,7 @@ Each stage is designed to be **independently valuable**, testable, and deployabl
 | # | Task | Type |
 |---|------|------|
 | 0.1 | Define TypeScript interfaces for Goal, Research, Milestone, IssueDraft | Code |
-| 0.2 | Extend SessionStore interface with goal/milestone CRUD methods | Code |
+| 0.2 | Define PlanningStore interface with goal/milestone CRUD methods (separate from SessionStore) | Code |
 | 0.3 | Implement InMemoryPlanningStore with full CRUD | Code |
 | 0.4 | Unit tests for InMemoryPlanningStore (all CRUD operations) | Tests |
 | 0.5 | Document data model in `docs/next-version-plan/data-model.md` | Docs |
@@ -335,7 +348,7 @@ Each milestone includes: name, goal, scope, dependencies, acceptance criteria, e
 
 ### Stage 4: GitHub Issue Generation
 
-> **Goal:** Generate implementation-ready issue drafts for each milestone.
+> **Goal:** Generate implementation-ready issue drafts and push them to GitHub as real Issues, Milestones, and Project items.
 >
 > **Effort:** Medium-Large — 3-4 issues
 >
@@ -350,9 +363,14 @@ Each milestone includes: name, goal, scope, dependencies, acceptance criteria, e
 | 4.3 | Create `GET /api/milestones/:id/issues` endpoint | Code |
 | 4.4 | Add `create_issue` GitHub API tool in tools.ts — creates real GitHub issue from draft | Code |
 | 4.5 | Add `create_milestone` GitHub API tool — creates GitHub milestone | Code |
-| 4.6 | Integration tests for issue generation tools and GitHub API tools | Tests |
-| 4.7 | Frontend: issue preview cards with approve/edit/create workflow | Code |
-| 4.8 | Document issue generation in `docs/next-version-plan/issue-generation.md` | Docs |
+| 4.6 | Add `create_project` GitHub API tool — creates GitHub Project and adds issues to it | Code |
+| 4.7 | Integration tests for issue generation tools and GitHub API tools | Tests |
+| 4.8 | Frontend: issue preview cards with approve/edit/create workflow | Code |
+| 4.9 | Document issue generation in `docs/next-version-plan/issue-generation.md` | Docs |
+
+#### GitHub-First Principle
+
+Once issue drafts are approved, they become **real GitHub Issues** tracked in a **GitHub Project** with a **GitHub Milestone**. The app does not maintain its own task board or progress dashboard — GitHub Projects is the task tracking UI. The app is the orchestration layer that creates and manages these GitHub resources.
 
 #### Issue Quality (from [planning-workflow.md](./planning-workflow.md), Phase 5)
 
@@ -390,7 +408,7 @@ Each issue contains: title, purpose, problem to solve, expected outcome, scope b
 | 5.3 | Create execution plan generator — produces branch naming, issue ordering, label scheme | Code |
 | 5.4 | Create `GET /api/milestones/:id/execution-plan` endpoint | Code |
 | 5.5 | Integration tests for GitHub structure tools | Tests |
-| 5.6 | Frontend: execution plan preview with branch strategy visualization | Code |
+| 5.6 | Frontend: execution plan preview with links to GitHub Project/Milestone views | Code |
 | 5.7 | Document execution structure in `docs/next-version-plan/execution-structure.md` | Docs |
 
 #### Branch Model (from [github-execution-model.md](./github-execution-model.md))
@@ -433,7 +451,7 @@ Each issue contains: title, purpose, problem to solve, expected outcome, scope b
 | 6.4 | Implement AI-assisted PR review classification (valid/optional/irrelevant) | Code |
 | 6.5 | Create milestone completion flow — validate, summarize, final PR | Code |
 | 6.6 | Integration tests for orchestration workflow | Tests |
-| 6.7 | Frontend: execution dashboard with progress tracking | Code |
+| 6.7 | Frontend: orchestration controls with links to GitHub Project for progress tracking | Code |
 | 6.8 | Document orchestration in `docs/next-version-plan/orchestration.md` | Docs |
 
 #### Execution Sequence (from [github-execution-model.md](./github-execution-model.md))
@@ -464,7 +482,7 @@ These questions (from [open-questions.md](./open-questions.md)) must be resolved
 
 | Question | Recommended Resolution | Resolve By |
 |----------|----------------------|------------|
-| Should the platform create GitHub Projects automatically or optionally? | **Optionally** — start without GitHub Projects, add later based on user feedback | Stage 4 |
+| Should the platform create GitHub Projects automatically or optionally? | **Yes, create GitHub Projects** — the platform is an orchestration layer on top of GitHub; Projects are the native way to track work | Stage 4 |
 | Should milestone execution always be sequential? | **Yes for v1** — sequential execution is simpler and safer | Stage 3 |
 | Should one milestone be limited to one repository in v1? | **Yes** — single repo per milestone in v1, multi-repo in future | Stage 3 |
 | Should users approve milestone plans before issue creation? | **Yes** — explicit approval required at every stage | Stage 4 |
@@ -511,7 +529,7 @@ These questions (from [open-questions.md](./open-questions.md)) must be resolved
 
 **Cross-cutting security principles:**
 - All data scoped to the authenticated user's session and token
-- No server-side token storage (existing pattern preserved)
+- No persistent server-side token storage; tokens only exist in browser localStorage and in-memory Maps during active sessions
 - All GitHub API calls use the user's own PAT
 - All GitHub write operations require explicit user approval
 - Input validation on all user-provided data

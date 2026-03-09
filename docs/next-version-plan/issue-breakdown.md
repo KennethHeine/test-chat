@@ -3,6 +3,8 @@
 > **Parent issue:** Research and Planning for Next Version Vision: Stepwise Build, Feedback, and Maintenance
 >
 > Each issue below is designed to be assigned to a GitHub Copilot coding agent. Issues are ordered by dependency and grouped by stage. All issues reference the parent planning issue.
+>
+> **GitHub-first principle:** This app is an orchestration tool built on top of GitHub. All features available in GitHub (Projects, Issues, Milestones, Labels, Actions) should be preferred over building custom alternatives. The app handles planning and research; GitHub handles execution and tracking.
 
 ---
 
@@ -23,7 +25,7 @@
 | 11 | 3 | Create milestone API endpoints | Code + Tests | #2 |
 | 12 | 3 | Frontend milestone timeline view | Code + Tests | #11 |
 | 13 | 4 | Create issue generation tools | Code + Tests | #10 |
-| 14 | 4 | Add GitHub write tools (create_issue, create_milestone) | Code + Tests | #2 |
+| 14 | 4 | Add GitHub write tools (create_issue, create_milestone, create_project) | Code + Tests | #2 |
 | 15 | 4 | Create issue draft API endpoints | Code + Tests | #2 |
 | 16 | 4 | Frontend issue preview and approval workflow | Code + Tests | #15 |
 | 17 | 5 | Add GitHub structure tools (create_branch, manage_labels) | Code + Tests | #14 |
@@ -32,7 +34,7 @@
 | 20 | 6 | Research Copilot coding agent integration | Research | None |
 | 21 | 6 | Implement orchestration workflow | Code + Tests | #17, #18, #20 |
 | 22 | 6 | Implement AI-assisted PR review | Code + Tests | #21 |
-| 23 | 6 | Frontend execution dashboard | Code + Tests | #21 |
+| 23 | 6 | Frontend orchestration controls | Code + Tests | #21 |
 
 ---
 
@@ -445,27 +447,30 @@
 
 ---
 
-### Issue 14: Add GitHub write tools (create_issue, create_milestone)
+### Issue 14: Add GitHub write tools (create_issue, create_milestone, create_project)
 
-**Purpose:** Enable the platform to create real GitHub issues and milestones from approved drafts.
+**Purpose:** Enable the platform to create real GitHub Issues, Milestones, and Projects from approved drafts. These are the core GitHub-first tools — once planning is done in the app, everything moves to GitHub.
 
 **Expected outcome:**
 - `create_issue` tool in `tools.ts` — creates a GitHub issue using the REST API
 - `create_milestone` tool in `tools.ts` — creates a GitHub milestone
-- Both require explicit parameters (no auto-creation)
+- `create_project` tool in `tools.ts` — creates a GitHub Project and adds issues to it
+- All require explicit parameters (no auto-creation)
 
 **Dependencies:**
 - Issue #2 (planning store for tracking created issues)
 
 **Acceptance criteria:**
-- [ ] Tools create correct GitHub resources
+- [ ] Tools create correct GitHub resources (Issues, Milestones, Projects)
 - [ ] Created issue/milestone numbers stored back in draft records
+- [ ] GitHub Project created with correct issue associations
 - [ ] Tools handle GitHub API errors gracefully
 - [ ] Tools validate user has write access before attempting creation
 
 **Testing expectations:**
 - Integration tests with real GitHub API calls (requires token with repo scope)
 - Test error handling for permission denied
+- Test Project creation and issue linking
 
 **Security checklist:**
 - [ ] User's own PAT used for all API calls
@@ -682,26 +687,28 @@
 
 ---
 
-### Issue 23: Frontend execution dashboard
+### Issue 23: Frontend orchestration controls
 
-**Purpose:** Real-time visibility into milestone execution progress.
+**Purpose:** Provide controls for starting/stopping orchestration and link to GitHub Project for progress tracking. Progress visibility is handled by GitHub Projects — the app only provides orchestration controls.
 
 **Expected outcome:**
-- Dashboard showing issue execution status
-- Real-time updates via SSE
-- Drill-down into individual issue logs
+- Start/stop/pause orchestration controls in chat
+- Links to GitHub Project board for progress tracking
+- Status summary showing which issues are in progress
+- Deep links to GitHub Issues and PRs being worked on
 
 **Dependencies:**
 - Issue #21 (orchestration workflow)
 
 **Acceptance criteria:**
-- [ ] Shows all issues with current status
-- [ ] Updates in real-time
-- [ ] Can drill into individual issue details
+- [ ] Can start and stop orchestration from the UI
+- [ ] Links to GitHub Project for full progress view
+- [ ] Shows current orchestration status (running/paused/idle)
+- [ ] Deep links to active GitHub Issues and PRs
 
 **Testing expectations:**
-- E2E test for dashboard rendering
-- Test real-time updates
+- E2E test for orchestration controls
+- Test GitHub link generation
 
 **Security checklist:**
 - [ ] No token data displayed

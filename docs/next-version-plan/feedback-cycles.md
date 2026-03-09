@@ -12,6 +12,7 @@
 2. **No stage advances without passing its feedback checkpoint** — defined per stage in [project-plan.md](./project-plan.md).
 3. **Fast feedback over perfect feedback** — prefer automated checks that run in seconds over manual reviews that take days.
 4. **Feedback is actionable** — every feedback item results in a specific change or an explicit decision to defer.
+5. **GitHub-first tracking** — work is tracked via GitHub Issues and Projects, not custom dashboards. Use GitHub's native features for progress visibility.
 
 ---
 
