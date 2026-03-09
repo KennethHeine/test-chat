@@ -6,6 +6,8 @@ import { config } from "dotenv";
 import path from "path";
 import { createSessionStore, hashToken, AzureSessionStore, InMemorySessionStore, type SessionStore } from "./storage.js";
 import { createGitHubTools, GITHUB_TOOL_NAMES } from "./tools.js";
+import { InMemoryPlanningStore, type PlanningStore } from "./planning-store.js";
+import { createPlanningTools, PLANNING_TOOL_NAMES } from "./planning-tools.js";
 
 // --- System Message for Agent Orchestration ---
 const ORCHESTRATOR_SYSTEM_MESSAGE = `You are a coding task orchestrator. Your role is to help users research codebases, plan coding tasks, and coordinate work across repositories.
@@ -37,6 +39,11 @@ const PORT = parseInt(process.env.PORT || "3000", 10);
 
 const storageAccountName = process.env.AZURE_STORAGE_ACCOUNT_NAME || "";
 let sessionStore: SessionStore = createSessionStore(storageAccountName || undefined);
+
+// --- Planning Store ---
+// Goals are created via planning tools (planning-tools.ts), not through API endpoints.
+// This store is shared with the tool factory once planning tools are wired in.
+const planningStore: PlanningStore = new InMemoryPlanningStore();
 
 // --- Per-user Copilot Clients ---
 
@@ -98,7 +105,7 @@ function buildSessionConfig(token: string, model: string): SessionConfig {
     systemMessage: {
       content: ORCHESTRATOR_SYSTEM_MESSAGE,
     },
-    tools: createGitHubTools(token),
+    tools: [...createGitHubTools(token), ...createPlanningTools(token, planningStore)],
     hooks: {
       onPreToolUse: async (input) => {
         console.log(`[hook] pre-tool: ${input.toolName}`);
@@ -513,6 +520,81 @@ app.get("/api/quota", async (req: Request, res: Response) => {
     res.status(500).json({ error: err.message || "Failed to fetch quota" });
   }
 });
+
+// --- Goal API Endpoints ---
+
+// List all goals for the authenticated user across all their sessions
+app.get("/api/goals", async (req: Request, res: Response) => {
+  const token = extractToken(req);
+  if (!token) {
+    res.status(401).json({ error: "Missing token. Provide Authorization: Bearer <token> header." });
+    return;
+  }
+
+  try {
+    const tHash = await hashToken(token);
+    // Gather all sessions belonging to this user, then collect goals from each.
+    // TODO: Consider adding listGoalsForSessions(sessionIds) for efficiency as sessions grow.
+    const userSessions = await sessionStore.listSessions(tHash);
+    const goalArrays = await Promise.all(
+      userSessions.map((s) => planningStore.listGoals(s.id))
+    );
+    const goals = goalArrays.flat();
+    res.json({ goals });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Failed to list goals" });
+  }
+});
+
+// Get a specific goal by ID, scoped to the authenticated user
+app.get("/api/goals/:id", async (req: Request, res: Response) => {
+  const token = extractToken(req);
+  if (!token) {
+    res.status(401).json({ error: "Missing token. Provide Authorization: Bearer <token> header." });
+    return;
+  }
+
+  const goalId = req.params.id as string;
+
+  try {
+    const goal = await planningStore.getGoal(goalId);
+    if (!goal) {
+      res.status(404).json({ error: "Goal not found" });
+      return;
+    }
+
+    // Verify the goal belongs to the authenticated user by checking session ownership
+    const tHash = await hashToken(token);
+    const userSessions = await sessionStore.listSessions(tHash);
+    const userSessionIds = new Set(userSessions.map((s) => s.id));
+    if (!userSessionIds.has(goal.sessionId)) {
+      res.status(404).json({ error: "Goal not found" });
+      return;
+    }
+
+    res.json(goal);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Failed to get goal" });
+  }
+});
+
+// Test-only: seed a goal directly into the planning store (only active when ENABLE_GOAL_SEED=true)
+if (process.env.ENABLE_GOAL_SEED === "true") {
+  app.post("/api/test/seed-goal", async (req: Request, res: Response) => {
+    const token = extractToken(req);
+    if (!token) {
+      res.status(401).json({ error: "Missing token. Provide Authorization: Bearer <token> header." });
+      return;
+    }
+    try {
+      const goal = req.body as import("./planning-types.js").Goal;
+      const created = await planningStore.createGoal(goal);
+      res.status(201).json(created);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Failed to seed goal" });
+    }
+  });
+}
 
 // --- Start Server ---
 
