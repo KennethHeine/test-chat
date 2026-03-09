@@ -201,3 +201,54 @@ test.describe("authenticated tests", () => {
     await expect(sidebar).toBeVisible();
   });
 });
+
+// ─── Goal Card ─────────────────────────────────────────────────
+
+test("goal card renders with correct fields when renderGoalCard is called", async ({ page }) => {
+  await page.goto("/");
+
+  const mockGoal = {
+    id: "test-goal-e2e",
+    sessionId: "test-session",
+    intent: "Build a simple task tracking API",
+    goal: "Deliver a minimal REST API for task management",
+    problemStatement: "No existing task tracking solution fits our workflow",
+    businessValue: "Increases team productivity by 20%",
+    targetOutcome: "A working API used by all team members",
+    successCriteria: ["All CRUD endpoints respond in < 200ms", "API handles 100 concurrent requests"],
+    assumptions: ["Team has Node.js experience"],
+    constraints: ["Must use existing infrastructure"],
+    risks: ["Team bandwidth may be limited"],
+    createdAt: "2025-01-01T00:00:00Z",
+    updatedAt: "2025-01-01T00:00:00Z",
+  };
+
+  // Directly call renderGoalCard via page.evaluate to test card rendering without a real API call
+  await page.evaluate((goal) => {
+    // @ts-ignore — renderGoalCard is defined in app.js global scope
+    renderGoalCard(goal);
+  }, mockGoal);
+
+  // The goal card should appear in the messages area
+  const card = page.locator(".goal-card").first();
+  await expect(card).toBeVisible();
+
+  // Verify the header shows the correct title
+  await expect(card.locator(".goal-card-header")).toHaveText("🎯 Goal Defined");
+
+  // Verify key fields are displayed
+  await expect(card.locator(".goal-card-value").first()).toContainText("Build a simple task tracking API");
+  await expect(card.locator(".goal-card-body")).toContainText("Deliver a minimal REST API for task management");
+  await expect(card.locator(".goal-card-body")).toContainText("No existing task tracking solution fits our workflow");
+
+  // Verify success criteria items appear
+  await expect(card.locator(".goal-card-list li").first()).toContainText("All CRUD endpoints respond in < 200ms");
+
+  // Verify the counts are shown
+  await expect(card.locator(".goal-card-counts")).toContainText("Assumptions: 1");
+  await expect(card.locator(".goal-card-counts")).toContainText("Constraints: 1");
+  await expect(card.locator(".goal-card-counts")).toContainText("Risks: 1");
+
+  // Verify goal ID is attached to the card element
+  await expect(card).toHaveAttribute("data-goal-id", "test-goal-e2e");
+});
