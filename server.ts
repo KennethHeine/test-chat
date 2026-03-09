@@ -7,6 +7,7 @@ import path from "path";
 import { createSessionStore, hashToken, AzureSessionStore, InMemorySessionStore, type SessionStore } from "./storage.js";
 import { createGitHubTools, GITHUB_TOOL_NAMES } from "./tools.js";
 import { InMemoryPlanningStore, type PlanningStore } from "./planning-store.js";
+import { createPlanningTools, PLANNING_TOOL_NAMES } from "./planning-tools.js";
 
 // --- System Message for Agent Orchestration ---
 const ORCHESTRATOR_SYSTEM_MESSAGE = `You are a coding task orchestrator. Your role is to help users research codebases, plan coding tasks, and coordinate work across repositories.
@@ -104,7 +105,7 @@ function buildSessionConfig(token: string, model: string): SessionConfig {
     systemMessage: {
       content: ORCHESTRATOR_SYSTEM_MESSAGE,
     },
-    tools: createGitHubTools(token),
+    tools: [...createGitHubTools(token), ...createPlanningTools(token, planningStore)],
     hooks: {
       onPreToolUse: async (input) => {
         console.log(`[hook] pre-tool: ${input.toolName}`);

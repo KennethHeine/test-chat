@@ -1,6 +1,8 @@
 import { CopilotClient, approveAll } from "@github/copilot-sdk";
 import { execSync, spawn, ChildProcess } from "child_process";
 import { config } from "dotenv";
+import { InMemoryPlanningStore } from "./planning-store.js";
+import { createPlanningTools, PLANNING_TOOL_NAMES } from "./planning-tools.js";
 
 config(); // load .env
 
@@ -488,6 +490,158 @@ async function testGoalSeedAndRetrieve(): Promise<void> {
 }
 
 // ============================================================
+// 6. Planning tools tests (direct handler invocation)
+// ============================================================
+
+/** Stub ToolInvocation required by the SDK ToolHandler signature. The fields are unused by our handlers. */
+const STUB_INVOCATION = {
+  sessionId: "test-session",
+  toolCallId: "test-call-id",
+  toolName: "test-tool",
+  arguments: {},
+};
+
+function makeValidSaveGoalArgs(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    sessionId: "test-session-abc",
+    intent: "Build a task planning feature for the chat app",
+    goal: "Enable structured goal definition in the chat UI",
+    problemStatement: "Users have no way to define structured goals through chat",
+    businessValue: "Helps users plan projects systematically",
+    targetOutcome: "Users can save and retrieve structured goals via chat",
+    successCriteria: ["Goal can be saved", "Goal can be retrieved by ID"],
+    assumptions: ["Users have a valid session"],
+    constraints: ["Must not break existing chat flow"],
+    risks: ["In-memory store resets on restart"],
+    ...overrides,
+  };
+}
+
+async function testPlanningToolRegistration(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const tools = createPlanningTools("test-token", store);
+  if (tools.length !== PLANNING_TOOL_NAMES.length) {
+    throw new Error(`Expected ${PLANNING_TOOL_NAMES.length} planning tools, got ${tools.length}`);
+  }
+  const names = tools.map((t) => t.name);
+  for (const name of PLANNING_TOOL_NAMES) {
+    if (!names.includes(name)) throw new Error(`Missing tool: ${name}`);
+  }
+}
+
+async function testDefineGoalReturnsTemplate(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const tools = createPlanningTools("test-token", store);
+  const defineGoal = tools.find((t) => t.name === "define_goal")!;
+  const result: any = await defineGoal.handler({ intent: "I want to build a project planning tool" }, STUB_INVOCATION);
+  if (!result.template) throw new Error("Expected template in result");
+  if (result.template.intent !== "I want to build a project planning tool") {
+    throw new Error("Template intent does not match input");
+  }
+  if (!result.instructions) throw new Error("Expected instructions in result");
+}
+
+async function testDefineGoalEmptyIntentReturnsError(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const tools = createPlanningTools("test-token", store);
+  const defineGoal = tools.find((t) => t.name === "define_goal")!;
+  const result: any = await defineGoal.handler({ intent: "" }, STUB_INVOCATION);
+  if (!result.error) throw new Error("Expected error for empty intent");
+}
+
+async function testSaveGoalValidDataReturnsGoalWithId(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const tools = createPlanningTools("test-token", store);
+  const saveGoal = tools.find((t) => t.name === "save_goal")!;
+  const result: any = await saveGoal.handler(makeValidSaveGoalArgs(), STUB_INVOCATION);
+  if (!result.goal) throw new Error("Expected goal in result");
+  if (!result.goal.id) throw new Error("Expected generated id on saved goal");
+  if (!result.goal.createdAt) throw new Error("Expected createdAt on saved goal");
+  if (!result.goal.updatedAt) throw new Error("Expected updatedAt on saved goal");
+  if (result.goal.sessionId !== "test-session-abc") throw new Error("sessionId mismatch");
+}
+
+async function testSaveGoalMissingRequiredFieldReturnsError(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const tools = createPlanningTools("test-token", store);
+  const saveGoal = tools.find((t) => t.name === "save_goal")!;
+
+  // Missing goal field
+  const result: any = await saveGoal.handler(makeValidSaveGoalArgs({ goal: "" }), STUB_INVOCATION);
+  if (!result.error) throw new Error("Expected validation error for empty goal field");
+
+  // Missing problemStatement
+  const result2: any = await saveGoal.handler(makeValidSaveGoalArgs({ problemStatement: "   " }), STUB_INVOCATION);
+  if (!result2.error) throw new Error("Expected validation error for whitespace-only problemStatement");
+}
+
+async function testSaveGoalArrayFieldNotArrayReturnsError(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const tools = createPlanningTools("test-token", store);
+  const saveGoal = tools.find((t) => t.name === "save_goal")!;
+  const result: any = await saveGoal.handler(makeValidSaveGoalArgs({ successCriteria: "not an array" }), STUB_INVOCATION);
+  if (!result.error) throw new Error("Expected error for non-array successCriteria");
+
+  // Array element is a non-string
+  const result2: any = await saveGoal.handler(makeValidSaveGoalArgs({ assumptions: [42] }), STUB_INVOCATION);
+  if (!result2.error) throw new Error("Expected error for non-string array element in assumptions");
+
+  // Array element is an empty string
+  const result3: any = await saveGoal.handler(makeValidSaveGoalArgs({ risks: [""] }), STUB_INVOCATION);
+  if (!result3.error) throw new Error("Expected error for empty-string element in risks");
+}
+
+async function testGetGoalExistingIdReturnsGoal(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const tools = createPlanningTools("test-token", store);
+  const saveGoal = tools.find((t) => t.name === "save_goal")!;
+  const getGoal = tools.find((t) => t.name === "get_goal")!;
+
+  const saved: any = await saveGoal.handler(makeValidSaveGoalArgs(), STUB_INVOCATION);
+  const goalId = saved.goal.id;
+  const sessionId = saved.goal.sessionId;
+
+  const result: any = await getGoal.handler({ goalId, sessionId }, STUB_INVOCATION);
+  if (!result.goal) throw new Error("Expected goal in get_goal result");
+  if (result.goal.id !== goalId) throw new Error("Retrieved goal ID does not match saved ID");
+  if (result.goal.intent !== makeValidSaveGoalArgs().intent) throw new Error("Retrieved goal intent mismatch");
+}
+
+async function testGetGoalWrongSessionIdReturnsError(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const tools = createPlanningTools("test-token", store);
+  const saveGoal = tools.find((t) => t.name === "save_goal")!;
+  const getGoal = tools.find((t) => t.name === "get_goal")!;
+
+  const saved: any = await saveGoal.handler(makeValidSaveGoalArgs(), STUB_INVOCATION);
+  const goalId = saved.goal.id;
+
+  // Different sessionId — should not reveal the goal exists
+  const result: any = await getGoal.handler({ goalId, sessionId: "different-session" }, STUB_INVOCATION);
+  if (!result.error) throw new Error("Expected error when sessionId does not match");
+  if (result.goal) throw new Error("Should not return goal data for wrong sessionId");
+}
+
+async function testGetGoalNonExistentIdReturnsError(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const tools = createPlanningTools("test-token", store);
+  const getGoal = tools.find((t) => t.name === "get_goal")!;
+  const result: any = await getGoal.handler({ goalId: "nonexistent-uuid-1234", sessionId: "any-session" }, STUB_INVOCATION);
+  if (!result.error) throw new Error("Expected error for non-existent goal ID");
+  if (!result.error.includes("nonexistent-uuid-1234")) {
+    throw new Error(`Expected error to mention the goal ID, got: ${result.error}`);
+  }
+}
+
+async function testGetGoalEmptyIdReturnsError(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const tools = createPlanningTools("test-token", store);
+  const getGoal = tools.find((t) => t.name === "get_goal")!;
+  const result: any = await getGoal.handler({ goalId: "", sessionId: "any-session" }, STUB_INVOCATION);
+  if (!result.error) throw new Error("Expected error for empty goalId");
+}
+
+// ============================================================
 // Main
 // ============================================================
 
@@ -563,6 +717,20 @@ async function main() {
 
   // Cleanup
   serverProcess.kill();
+
+  // --- Planning tools tests ---
+  console.log("\n── Planning Tools Tests ──\n");
+
+  await run("Planning tools: all 3 tools registered with correct names", testPlanningToolRegistration);
+  await run("define_goal: returns structured template from raw intent", testDefineGoalReturnsTemplate);
+  await run("define_goal: empty intent returns validation error", testDefineGoalEmptyIntentReturnsError);
+  await run("save_goal: valid data returns goal with generated ID and timestamps", testSaveGoalValidDataReturnsGoalWithId);
+  await run("save_goal: missing required string field returns validation error", testSaveGoalMissingRequiredFieldReturnsError);
+  await run("save_goal: non-array successCriteria returns validation error", testSaveGoalArrayFieldNotArrayReturnsError);
+  await run("get_goal: existing ID with correct sessionId returns correct goal", testGetGoalExistingIdReturnsGoal);
+  await run("get_goal: wrong sessionId returns error (ownership check)", testGetGoalWrongSessionIdReturnsError);
+  await run("get_goal: non-existent ID returns error", testGetGoalNonExistentIdReturnsError);
+  await run("get_goal: empty goalId returns validation error", testGetGoalEmptyIdReturnsError);
 
   // --- Summary ---
   console.log("\n═══════════════════════════════════════════════");
