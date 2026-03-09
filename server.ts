@@ -40,7 +40,8 @@ const storageAccountName = process.env.AZURE_STORAGE_ACCOUNT_NAME || "";
 let sessionStore: SessionStore = createSessionStore(storageAccountName || undefined);
 
 // --- Planning Store ---
-
+// Goals are created via planning tools (planning-tools.ts), not through API endpoints.
+// This store is shared with the tool factory once planning tools are wired in.
 const planningStore: PlanningStore = new InMemoryPlanningStore();
 
 // --- Per-user Copilot Clients ---
@@ -531,7 +532,8 @@ app.get("/api/goals", async (req: Request, res: Response) => {
 
   try {
     const tHash = await hashToken(token);
-    // Gather all sessions belonging to this user, then collect goals from each
+    // Gather all sessions belonging to this user, then collect goals from each.
+    // TODO: Consider adding listGoalsForSessions(sessionIds) for efficiency as sessions grow.
     const userSessions = await sessionStore.listSessions(tHash);
     const goalArrays = await Promise.all(
       userSessions.map((s) => planningStore.listGoals(s.id))
@@ -574,6 +576,24 @@ app.get("/api/goals/:id", async (req: Request, res: Response) => {
     res.status(500).json({ error: err.message || "Failed to get goal" });
   }
 });
+
+// Test-only: seed a goal directly into the planning store (only active when ENABLE_GOAL_SEED=true)
+if (process.env.ENABLE_GOAL_SEED === "true") {
+  app.post("/api/test/seed-goal", async (req: Request, res: Response) => {
+    const token = extractToken(req);
+    if (!token) {
+      res.status(401).json({ error: "Missing token. Provide Authorization: Bearer <token> header." });
+      return;
+    }
+    try {
+      const goal = req.body as import("./planning-types.js").Goal;
+      const created = await planningStore.createGoal(goal);
+      res.status(201).json(created);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Failed to seed goal" });
+    }
+  });
+}
 
 // --- Start Server ---
 
