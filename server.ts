@@ -655,8 +655,8 @@ if (process.env.ENABLE_GOAL_SEED === "true") {
     try {
       const item = req.body as import("./planning-types.js").ResearchItem;
 
-      if (!item.goalId) {
-        res.status(400).json({ error: "goalId is required" });
+      if (typeof item.goalId !== "string" || item.goalId.trim().length === 0) {
+        res.status(400).json({ error: "goalId is required and must be a string" });
         return;
       }
 
@@ -670,11 +670,25 @@ if (process.env.ENABLE_GOAL_SEED === "true") {
         return;
       }
 
+      // Normalize sourceUrl: must be a string http/https URL if provided; otherwise strip it
+      let normalizedSourceUrl: string | undefined;
+      if (typeof (item as any).sourceUrl === "string") {
+        try {
+          const parsed = new URL((item as any).sourceUrl);
+          if (parsed.protocol === "http:" || parsed.protocol === "https:") {
+            normalizedSourceUrl = (item as any).sourceUrl;
+          }
+        } catch {
+          // Invalid URL — omit sourceUrl
+        }
+      }
+
       // Default missing findings/decision to empty strings
       const normalizedItem: import("./planning-types.js").ResearchItem = {
         ...item,
         findings: typeof item.findings === "string" ? item.findings : "",
         decision: typeof item.decision === "string" ? item.decision : "",
+        ...(normalizedSourceUrl !== undefined ? { sourceUrl: normalizedSourceUrl } : {}),
       };
 
       const goal = await getOwnedGoal(token, normalizedItem.goalId);
