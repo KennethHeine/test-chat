@@ -30,7 +30,8 @@ This repo includes helper scripts in `scripts/orchestrator/` that automate the p
 |--------|---------|-------|
 | `scripts/orchestrator/wait-for-agent.sh` | Wait for coding agent to finish on an issue | `./scripts/orchestrator/wait-for-agent.sh <owner> <repo> <issue_number>` |
 | `scripts/orchestrator/wait-for-review.sh` | Wait for Copilot review to complete on a PR | `./scripts/orchestrator/wait-for-review.sh <owner> <repo> <pr_number>` |
-| `scripts/orchestrator/trigger-and-wait-ci.sh` | Trigger CI workflows and wait for completion | `./scripts/orchestrator/trigger-and-wait-ci.sh <owner> <repo> <branch> <workflow1> [workflow2...]` |
+| `scripts/orchestrator/trigger-ci-label.sh` | Add CI labels to a PR and wait for workflows to complete | `./scripts/orchestrator/trigger-ci-label.sh <owner> <repo> <pr_number> [--e2e] [--ephemeral] [--all]` |
+| `scripts/orchestrator/trigger-and-wait-ci.sh` | Trigger CI via `workflow_dispatch` (fallback) | `./scripts/orchestrator/trigger-and-wait-ci.sh <owner> <repo> <branch> <workflow1> [workflow2...]` |
 | `scripts/orchestrator/get-ci-failure-summary.sh` | Get logs from failed CI runs and format a summary | `./scripts/orchestrator/get-ci-failure-summary.sh <owner> <repo> <run_id>` |
 
 ---
@@ -191,11 +192,11 @@ If the review contains actionable feedback:
 
 **Do not start CI validation until review fixes are complete.**
 
-1. Run the CI trigger-and-wait script:
+1. Run the CI label trigger script to add labels and wait for workflows:
    ```bash
-   ./scripts/orchestrator/trigger-and-wait-ci.sh <owner> <repo> <branch> e2e-local.yml deploy-ephemeral.yml
+   ./scripts/orchestrator/trigger-ci-label.sh <owner> <repo> <pr_number> --all
    ```
-   This triggers both workflows via `workflow_dispatch` and polls until all complete.
+   This adds the `run-e2e` and `deploy-ephemeral` labels to the PR, which triggers the E2E local tests and ephemeral environment deploy + E2E tests. The script polls until all workflows complete.
 
 2. If the script exits with failure, get the failure summary:
    ```bash
@@ -204,9 +205,15 @@ If the review contains actionable feedback:
 
 3. Post the failure summary as a `@copilot` comment on the PR, then wait for fixes and re-trigger.
 
-#### Why `run_workflow` Instead of Waiting for PR-Triggered Runs
+#### Why Labels Instead of `workflow_dispatch`
 
-Workflow runs triggered by bot PRs often get `action_required` status. The MCP tools have no `approve_workflow_run` method. Triggering via `workflow_dispatch` directly runs workflows under the orchestrator's own authority — no approval needed.
+Label-based triggers use `pull_request_target` events, which give the workflow direct access to the PR context (number, head SHA, base branch) without extra configuration. This means:
+- The ephemeral deploy automatically knows which PR number to use for naming
+- The checkout uses the correct PR head commit
+- No need for the orchestrator to pass branch refs manually
+- Re-triggering is as simple as re-adding the label
+
+Labels also provide a visible signal on the PR that CI was requested.
 
 #### CI Failure Handling Loop
 
@@ -221,9 +228,9 @@ If any workflow fails:
    ```bash
    ./scripts/orchestrator/wait-for-agent.sh <owner> <repo> <issue_number>
    ```
-4. Re-trigger CI:
+4. Re-trigger CI by adding labels again:
    ```bash
-   ./scripts/orchestrator/trigger-and-wait-ci.sh <owner> <repo> <branch> e2e-local.yml deploy-ephemeral.yml
+   ./scripts/orchestrator/trigger-ci-label.sh <owner> <repo> <pr_number> --all
    ```
 5. **Repeat** until all workflows pass
 
@@ -247,7 +254,7 @@ After all issues in the stage are merged to the stage branch:
 3. Address any review comments using the same `@copilot` fix flow (Steps 6–7)
 4. Trigger CI on the full-stage PR:
    ```bash
-   ./scripts/orchestrator/trigger-and-wait-ci.sh <owner> <repo> <branch> e2e-local.yml deploy-ephemeral.yml
+   ./scripts/orchestrator/trigger-ci-label.sh <owner> <repo> <pr_number> --all
    ```
 5. **Notify the user** that the stage PR is ready for final review and manual merge
 
@@ -296,7 +303,7 @@ When reviewing issues and PRs, verify these conventions are followed:
 | `pull_request_read` (get_reviews) | Check if Copilot review is complete |
 | `pull_request_read` (get_review_comments) | Read inline review feedback |
 | `add_issue_comment` | Post `@copilot` fix instructions on PRs |
-| `actions_run_trigger` (run_workflow) | Trigger CI workflows on PR branch via `workflow_dispatch` |
+| `issue_write` (update) | Add labels (`run-e2e`, `deploy-ephemeral`) to PRs to trigger CI |
 | `actions_list` (list_workflow_runs) | Check CI workflow status |
 | `actions_get` (get_workflow_run) | Get details of a specific workflow run |
 | `get_job_logs` | Read logs from failing CI jobs for error context |
@@ -324,21 +331,26 @@ These observations come from orchestrating Stage 0 (3 issues, 3 PRs):
 
 ---
 
-## CI Workflow Configuration Requirement
+## CI Workflow Configuration
 
-Before running a stage, verify CI workflows support `workflow_dispatch`. The Copilot bot's PR-triggered runs often get `action_required` status — triggering via `workflow_dispatch` bypasses this.
+CI workflows are triggered by adding labels to PRs. This avoids the `action_required` approval issue with bot-triggered `workflow_dispatch` runs and gives workflows direct access to the PR context.
 
-Required workflows must include:
-```yaml
-on:
-  pull_request:
-    branches: [main, 'stage-*/**']
-  workflow_dispatch:  # Required for orchestrator to trigger directly
-```
+### Labels
 
-Workflows that need `workflow_dispatch`:
-- `e2e-local.yml` — validates functionality
-- `deploy-ephemeral.yml` — deploys ephemeral container and runs E2E tests
+| Label | Workflow | Trigger |
+|-------|----------|---------|
+| `run-e2e` | `e2e-local.yml` | Runs local E2E tests against the PR's head commit |
+| `deploy-ephemeral` | `deploy-ephemeral.yml` | Deploys ephemeral env + runs E2E tests against it |
 
-Workflows that don't need it (deploy only on main merges):
-- `deploy-app.yml`, `deploy-infra.yml`
+Both labels are automatically removed after the workflow completes, so they can be re-added to re-trigger.
+
+### Automatic triggers
+
+- `e2e-local.yml` also runs automatically on PRs to `main` (no label needed)
+- `deploy-ephemeral.yml` teardown runs automatically when a PR is closed/merged
+
+### Required label setup
+
+Ensure these labels exist in the repository before running a stage:
+- `run-e2e` — triggers local E2E tests
+- `deploy-ephemeral` — triggers ephemeral environment deploy + E2E tests

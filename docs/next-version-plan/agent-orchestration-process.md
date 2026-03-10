@@ -18,27 +18,21 @@ This document defines the end-to-end process for using a **Copilot Chat agent as
 
 Before using this process, ensure the repository is configured correctly:
 
-### CI Workflows Must Support `workflow_dispatch`
+### CI Labels Must Exist
 
-The Copilot coding agent runs as a GitHub App bot. Workflow runs triggered by bot PRs often have `action_required` status, requiring manual approval in the GitHub UI. The MCP GitHub Actions tools **do not support approving pending workflow runs** — there is no `approve_workflow_run` method.
+The orchestrator triggers CI workflows by adding labels to PRs. Ensure these labels exist in the repository:
 
-**Solution:** Add `workflow_dispatch` as a trigger to all CI workflows that need to run on PRs. This allows the orchestrator to trigger workflows directly on the PR's head branch using `run_workflow`, bypassing the approval requirement entirely.
+| Label | Workflow | Purpose |
+|-------|----------|---------|
+| `run-e2e` | `e2e-local.yml` | Triggers local E2E tests against the PR's head commit |
+| `deploy-ephemeral` | `deploy-ephemeral.yml` | Triggers ephemeral env deploy + E2E tests |
 
-```yaml
-# Example: add workflow_dispatch to your CI workflow
-on:
-  pull_request:
-    branches: [main, 'stage-*/**']
-  workflow_dispatch:  # ← Required for orchestrator to trigger directly
-```
+Both labels are automatically removed after the workflow completes, allowing them to be re-added to re-trigger.
 
-Workflows that the orchestrator needs to trigger directly:
-- **E2E tests** (`e2e-local.yml`) — validates functionality
-- **Any test/lint workflows** — validates code quality
+### Automatic CI Triggers
 
-Workflows that don't need `workflow_dispatch` (deployment-only):
-- **Deploy workflows** — only run on main branch merges
-- **Ephemeral environment deploys** (`deploy-ephemeral.yml`) — triggers on PRs to `main` and `stage-*/**` branches. Includes an automatic E2E test job (`e2e-ephemeral`) that runs Playwright tests against the deployed ephemeral container after deploy completes. The orchestrator should trigger this via `workflow_dispatch` and monitor the E2E results alongside local E2E tests.
+- `e2e-local.yml` runs automatically on PRs targeting `main` (no label needed)
+- `deploy-ephemeral.yml` teardown runs automatically when a PR is closed or merged
 
 ---
 
@@ -146,17 +140,21 @@ If the review has no actionable comments, skip to CI validation.
 
 After review fixes are applied:
 
-1. **Trigger CI workflows directly** using `run_workflow` on the PR's head branch
-   - `e2e-local.yml` — runs E2E tests against a local server
-   - `deploy-ephemeral.yml` — deploys an ephemeral container and runs E2E tests against it (validates Docker build, Azure config, and routing)
-   - Use the workflow file name and the PR's head branch ref
-   - This avoids the `action_required` approval issue with bot-triggered PRs
+1. **Add CI labels to the PR** to trigger workflows:
+   - Add `run-e2e` label → triggers `e2e-local.yml` (local E2E tests)
+   - Add `deploy-ephemeral` label → triggers `deploy-ephemeral.yml` (ephemeral env deploy + E2E tests)
+   - Or use the helper script: `./scripts/orchestrator/trigger-ci-label.sh <owner> <repo> <pr_number> --all`
+   - Labels are automatically removed after the workflow runs, so they can be re-added to re-trigger
 2. **Monitor workflow status** by polling `list_workflow_runs` filtered to the branch
 3. **Wait until all triggered workflows complete** — both local and ephemeral E2E tests must pass
 
-#### Why `run_workflow` Instead of Waiting for PR-Triggered Runs
+#### Why Labels Instead of `workflow_dispatch`
 
-Workflow runs triggered by the Copilot bot's PR pushes often get `action_required` status (GitHub requires approval for first-time contributor/bot workflows). The MCP tools have no `approve_workflow_run` method. By triggering workflows via `workflow_dispatch` directly, the orchestrator runs them under its own authority — no approval needed.
+Label-based triggers use `pull_request_target` events, which give the workflow direct access to the PR context (number, head SHA, base branch). This means:
+- The ephemeral deploy automatically knows which PR to use for naming
+- The checkout uses the correct PR head commit
+- Re-triggering is as simple as re-adding the label
+- Labels provide a visible signal on the PR that CI was requested
 
 #### Handling CI Failures
 
@@ -175,7 +173,7 @@ If any workflow fails:
    Check the workflow logs for the specific error and apply a fix.
    ```
 4. **Wait for the coding agent** to apply fixes
-5. **Re-trigger CI** using `run_workflow` after fixes are pushed
+5. **Re-trigger CI** by re-adding the labels (`run-e2e`, `deploy-ephemeral`) after fixes are pushed
 6. **Repeat** until all workflows pass
 
 This ensures problems are caught and fixed quickly within each PR, before they compound.
@@ -197,7 +195,7 @@ After all issues in the stage are merged to the stage branch:
 2. **Request Copilot review** on the full-stage PR
    - This gives a holistic review of all changes together, catching cross-cutting issues that per-issue reviews might miss
 3. **Address any review comments** using the same `@copilot` fix flow
-4. **Trigger CI** on the full-stage PR using `run_workflow` (all tests should pass against the combined changes)
+4. **Trigger CI** on the full-stage PR by adding labels (`run-e2e`, `deploy-ephemeral`) — all tests should pass against the combined changes
 5. **Hand off to user for manual merge** — the orchestrator notifies the user that the stage PR is ready for final review and merge. The user merges to `main` manually (merge commit, not squash, to preserve stage history)
 
 > **Why manual merge to main?** The final merge to `main` is a high-impact, hard-to-reverse operation that affects the production branch. The user should make this decision after reviewing the full-stage PR summary, Copilot review results, and CI status.
@@ -328,7 +326,7 @@ The orchestrator uses these GitHub MCP tools:
 | `pull_request_read` (get_reviews) | Check if review is complete |
 | `pull_request_read` (get_review_comments) | Read inline review feedback |
 | `add_issue_comment` | Post `@copilot` fix instructions on PRs |
-| `actions_run_trigger` (run_workflow) | Trigger CI workflows on PR branch via `workflow_dispatch` |
+| `issue_write` (update) | Add labels (`run-e2e`, `deploy-ephemeral`) to PRs to trigger CI |
 | `actions_list` (list_workflow_runs) | Check CI workflow status |
 | `actions_get` (get_workflow_run) | Get details of a specific run |
 | `get_job_logs` | Get logs from failing CI jobs for error context |
