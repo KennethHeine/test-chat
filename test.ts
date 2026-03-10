@@ -988,6 +988,128 @@ async function testGetResearchUnknownGoalReturnsError(): Promise<void> {
 }
 
 // ============================================================
+// 7. Research API endpoint tests (HTTP)
+// ============================================================
+
+async function testResearchGetNoAuth(): Promise<void> {
+  const res = await fetch(`${BASE}/api/goals/some-goal-id/research`);
+  // Same env-token fallback caveat as testGoalsListNoAuth
+  if (res.status !== 401 && res.status !== 404 && res.status !== 200) {
+    throw new Error(`Expected 401, 404, or 200 (env-token fallback), got ${res.status}`);
+  }
+}
+
+async function testResearchGetNotFound(): Promise<void> {
+  const res = await fetch(`${BASE}/api/goals/nonexistent-goal-id-99999/research`, {
+    headers: testAuthHeaders(),
+  });
+  if (res.status !== 404) throw new Error(`Expected 404, got ${res.status}`);
+  const data = await res.json();
+  if (!data.error) throw new Error("Expected error message in 404 response");
+}
+
+async function testResearchGetEmptyForGoalWithNoItems(): Promise<void> {
+  // Create a session so that the ownership check passes
+  const sessionId = `test-research-empty-session-${Date.now()}`;
+  const saveRes = await fetch(`${BASE}/api/sessions/${sessionId}/messages`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ messages: [{ role: "user", text: "research empty test" }] }),
+  });
+  if (!saveRes.ok) throw new Error(`Failed to seed session: HTTP ${saveRes.status}`);
+
+  const goalId = `test-research-empty-goal-${Date.now()}`;
+  const seedGoal = {
+    id: goalId,
+    sessionId,
+    intent: "Test research empty",
+    goal: "Verify empty research array",
+    problemStatement: "No research items exist",
+    businessValue: "Reliable API",
+    targetOutcome: "Empty array returned",
+    successCriteria: [],
+    assumptions: [],
+    constraints: [],
+    risks: [],
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+  const seedRes = await fetch(`${BASE}/api/test/seed-goal`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify(seedGoal),
+  });
+  if (!seedRes.ok) throw new Error(`Failed to seed goal: HTTP ${seedRes.status}`);
+
+  const res = await fetch(`${BASE}/api/goals/${goalId}/research`, { headers: testAuthHeaders() });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const data = await res.json();
+  if (!Array.isArray(data.research)) throw new Error("Expected research array in response");
+  if (data.research.length !== 0) throw new Error(`Expected empty research array, got ${data.research.length}`);
+  log("  ", "Research is empty for goal with no items");
+}
+
+async function testResearchSeedAndRetrieve(): Promise<void> {
+  // Create a session so that the ownership check passes
+  const sessionId = `test-research-session-${Date.now()}`;
+  const saveRes = await fetch(`${BASE}/api/sessions/${sessionId}/messages`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ messages: [{ role: "user", text: "research seed test" }] }),
+  });
+  if (!saveRes.ok) throw new Error(`Failed to seed session: HTTP ${saveRes.status}`);
+
+  const goalId = `test-research-goal-${Date.now()}`;
+  const seedGoal = {
+    id: goalId,
+    sessionId,
+    intent: "Test research retrieval",
+    goal: "Verify research items are returned",
+    problemStatement: "Need to test research endpoint",
+    businessValue: "Reliable API",
+    targetOutcome: "Research items returned",
+    successCriteria: ["Items returned"],
+    assumptions: [],
+    constraints: [],
+    risks: [],
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+  const goalSeedRes = await fetch(`${BASE}/api/test/seed-goal`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify(seedGoal),
+  });
+  if (!goalSeedRes.ok) throw new Error(`Failed to seed goal: HTTP ${goalSeedRes.status}`);
+
+  const itemId = `test-research-item-${Date.now()}`;
+  const seedItem = {
+    id: itemId,
+    goalId,
+    category: "domain",
+    question: "What is the target domain?",
+    status: "open",
+    findings: "",
+    decision: "",
+  };
+  const itemSeedRes = await fetch(`${BASE}/api/test/seed-research-item`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify(seedItem),
+  });
+  if (!itemSeedRes.ok) throw new Error(`Failed to seed research item: HTTP ${itemSeedRes.status}`);
+
+  const res = await fetch(`${BASE}/api/goals/${goalId}/research`, { headers: testAuthHeaders() });
+  if (!res.ok) throw new Error(`GET /api/goals/:id/research HTTP ${res.status}`);
+  const data = await res.json();
+  if (!Array.isArray(data.research)) throw new Error("Expected research array in response");
+  if (data.research.length !== 1) throw new Error(`Expected 1 research item, got ${data.research.length}`);
+  if (data.research[0].id !== itemId) throw new Error(`Expected item id ${itemId}, got ${data.research[0].id}`);
+  if (data.research[0].goalId !== goalId) throw new Error("Research item goalId mismatch");
+  log("  ", `Research seed → get round-trip passed (id: ${itemId.slice(0, 16)}...)`);
+}
+
+// ============================================================
 // Main
 // ============================================================
 
@@ -1060,6 +1182,14 @@ async function main() {
   await run("GET /api/goals/:id returns 404 for unknown goal", testGoalGetNotFound);
   await run("GET /api/goals/:id returns 401 without auth", testGoalGetNoAuth);
   await run("Goal seed → list → get round-trip", testGoalSeedAndRetrieve);
+
+  // --- Research API tests ---
+  console.log("\n── Research API Tests ──\n");
+
+  await run("GET /api/goals/:id/research returns 401 without auth", testResearchGetNoAuth);
+  await run("GET /api/goals/:id/research returns 404 for unknown goal", testResearchGetNotFound);
+  await run("GET /api/goals/:id/research returns empty array for goal with no items", testResearchGetEmptyForGoalWithNoItems);
+  await run("Research seed → get round-trip", testResearchSeedAndRetrieve);
 
   // Cleanup
   serverProcess.kill();

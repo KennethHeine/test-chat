@@ -24,6 +24,9 @@ The backend is a single Express.js server written in TypeScript (`server.ts`), e
 | `POST` | `/api/chat/abort` | Bearer token | Aborts a streaming response mid-stream |
 | `POST` | `/api/chat/model` | Bearer token | Switches the model for an active session via `session.setModel()` |
 | `GET` | `/api/quota` | Bearer token | Returns the user's premium request quota via `client.rpc.account.getQuota()` |
+| `GET` | `/api/goals` | Bearer token | Lists all goals for the authenticated user across all their sessions |
+| `GET` | `/api/goals/:id` | Bearer token | Gets a specific goal by ID, scoped to the authenticated user |
+| `GET` | `/api/goals/:id/research` | Bearer token | Lists all research items for a goal, scoped to the authenticated user |
 
 ### `POST /api/chat` — Chat with Streaming
 
