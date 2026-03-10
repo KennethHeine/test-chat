@@ -383,7 +383,8 @@ export function createPlanningTools(token: string, planningStore: PlanningStore)
       );
 
       if (missingCategories.length === 0) {
-        return { items: existing, count: existing.length, generatedAt: null, alreadyExisted: true };
+        const earliest = existing.reduce((a, b) => (a.createdAt ?? '') < (b.createdAt ?? '') ? a : b);
+        return { items: existing, count: existing.length, generatedAt: earliest.createdAt ?? new Date().toISOString(), alreadyExisted: true };
       }
 
       const now = new Date().toISOString();
@@ -398,6 +399,7 @@ export function createPlanningTools(token: string, planningStore: PlanningStore)
           status: "open",
           findings: "",
           decision: "",
+          createdAt: now,
         };
         try {
           await planningStore.createResearchItem(item);
