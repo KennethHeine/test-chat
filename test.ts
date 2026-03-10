@@ -641,6 +641,352 @@ async function testGetGoalEmptyIdReturnsError(): Promise<void> {
   if (!result.error) throw new Error("Expected error for empty goalId");
 }
 
+// ── Research tool tests ──────────────────────────────────────────────────────
+
+async function seedGoal(store: InMemoryPlanningStore): Promise<string> {
+  const tools = createPlanningTools("test-token", store);
+  const saveGoal = tools.find((t) => t.name === "save_goal")!;
+  const saved: any = await saveGoal.handler(makeValidSaveGoalArgs(), STUB_INVOCATION);
+  return saved.goal.id;
+}
+
+async function testGenerateResearchChecklistReturns8Items(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const goalId = await seedGoal(store);
+  const tools = createPlanningTools("test-token", store);
+  const gen = tools.find((t) => t.name === "generate_research_checklist")!;
+
+  const result: any = await gen.handler(
+    { goalId, sessionId: makeValidSaveGoalArgs().sessionId },
+    STUB_INVOCATION
+  );
+  if (!result.items) throw new Error("Expected items in result");
+  if (result.items.length !== 8) throw new Error(`Expected 8 research items, got ${result.items.length}`);
+
+  const categories = result.items.map((i: any) => i.category).sort();
+  const expected = [
+    "architecture", "data_model", "domain", "infrastructure",
+    "integration", "operational", "security", "ux",
+  ].sort();
+  for (let i = 0; i < 8; i++) {
+    if (categories[i] !== expected[i]) {
+      throw new Error(`Missing category: expected ${expected[i]}, got ${categories[i]}`);
+    }
+  }
+}
+
+async function testGenerateResearchChecklistAllItemsHaveOpenStatus(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const goalId = await seedGoal(store);
+  const tools = createPlanningTools("test-token", store);
+  const gen = tools.find((t) => t.name === "generate_research_checklist")!;
+
+  const result: any = await gen.handler(
+    { goalId, sessionId: makeValidSaveGoalArgs().sessionId },
+    STUB_INVOCATION
+  );
+  for (const item of result.items) {
+    if (item.status !== "open") {
+      throw new Error(`Expected status 'open', got '${item.status}' for category ${item.category}`);
+    }
+    if (!item.id) throw new Error("Research item missing id");
+    if (item.goalId !== goalId) throw new Error("Research item goalId mismatch");
+  }
+}
+
+async function testGenerateResearchChecklistUnknownGoalReturnsError(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const tools = createPlanningTools("test-token", store);
+  const gen = tools.find((t) => t.name === "generate_research_checklist")!;
+  const result: any = await gen.handler(
+    { goalId: "nonexistent-goal-id", sessionId: "any-session" },
+    STUB_INVOCATION
+  );
+  if (!result.error) throw new Error("Expected error for unknown goalId");
+}
+
+async function testGenerateResearchChecklistWrongSessionReturnsError(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const goalId = await seedGoal(store);
+  const tools = createPlanningTools("test-token", store);
+  const gen = tools.find((t) => t.name === "generate_research_checklist")!;
+  const result: any = await gen.handler(
+    { goalId, sessionId: "wrong-session-id" },
+    STUB_INVOCATION
+  );
+  if (!result.error) throw new Error("Expected error for wrong sessionId");
+}
+
+async function testUpdateResearchItemOpenToResearching(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const goalId = await seedGoal(store);
+  const tools = createPlanningTools("test-token", store);
+  const gen = tools.find((t) => t.name === "generate_research_checklist")!;
+  const update = tools.find((t) => t.name === "update_research_item")!;
+
+  const genResult: any = await gen.handler(
+    { goalId, sessionId: makeValidSaveGoalArgs().sessionId },
+    STUB_INVOCATION
+  );
+  const itemId = genResult.items[0].id;
+
+  const result: any = await update.handler(
+    { itemId, goalId, sessionId: makeValidSaveGoalArgs().sessionId, status: "researching" },
+    STUB_INVOCATION
+  );
+  if (!result.item) throw new Error("Expected item in update result");
+  if (result.item.status !== "researching") {
+    throw new Error(`Expected status 'researching', got '${result.item.status}'`);
+  }
+}
+
+async function testUpdateResearchItemResolvingRequiresFindings(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const goalId = await seedGoal(store);
+  const tools = createPlanningTools("test-token", store);
+  const gen = tools.find((t) => t.name === "generate_research_checklist")!;
+  const update = tools.find((t) => t.name === "update_research_item")!;
+
+  const genResult: any = await gen.handler(
+    { goalId, sessionId: makeValidSaveGoalArgs().sessionId },
+    STUB_INVOCATION
+  );
+  const itemId = genResult.items[0].id;
+
+  // First advance to 'researching' so the transition to 'resolved' is valid.
+  await update.handler(
+    { itemId, goalId, sessionId: makeValidSaveGoalArgs().sessionId, status: "researching" },
+    STUB_INVOCATION
+  );
+
+  // Now try to resolve without providing findings — the findings-required guard should fire.
+  const result: any = await update.handler(
+    { itemId, goalId, sessionId: makeValidSaveGoalArgs().sessionId, status: "resolved" },
+    STUB_INVOCATION
+  );
+  if (!result.error) throw new Error("Expected error when resolving without findings");
+}
+
+async function testUpdateResearchItemFullLifecycle(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const goalId = await seedGoal(store);
+  const tools = createPlanningTools("test-token", store);
+  const gen = tools.find((t) => t.name === "generate_research_checklist")!;
+  const update = tools.find((t) => t.name === "update_research_item")!;
+
+  const genResult: any = await gen.handler(
+    { goalId, sessionId: makeValidSaveGoalArgs().sessionId },
+    STUB_INVOCATION
+  );
+  const itemId = genResult.items[0].id;
+
+  // open → researching
+  await update.handler(
+    { itemId, goalId, sessionId: makeValidSaveGoalArgs().sessionId, status: "researching" },
+    STUB_INVOCATION
+  );
+
+  // researching → resolved with findings
+  const resolveResult: any = await update.handler(
+    {
+      itemId,
+      goalId,
+      sessionId: makeValidSaveGoalArgs().sessionId,
+      status: "resolved",
+      findings: "We found that REST is sufficient for this use case.",
+      decision: "Use REST API.",
+    },
+    STUB_INVOCATION
+  );
+  if (!resolveResult.item) throw new Error("Expected item in resolve result");
+  if (resolveResult.item.status !== "resolved") {
+    throw new Error(`Expected status 'resolved', got '${resolveResult.item.status}'`);
+  }
+  if (!resolveResult.item.findings) throw new Error("Expected findings on resolved item");
+  if (!resolveResult.item.resolvedAt) throw new Error("Expected resolvedAt on resolved item");
+}
+
+async function testUpdateResearchItemSanitizesFindings(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const goalId = await seedGoal(store);
+  const tools = createPlanningTools("test-token", store);
+  const gen = tools.find((t) => t.name === "generate_research_checklist")!;
+  const update = tools.find((t) => t.name === "update_research_item")!;
+
+  const genResult: any = await gen.handler(
+    { goalId, sessionId: makeValidSaveGoalArgs().sessionId },
+    STUB_INVOCATION
+  );
+  const itemId = genResult.items[0].id;
+
+  // Advance to researching first.
+  await update.handler(
+    { itemId, goalId, sessionId: makeValidSaveGoalArgs().sessionId, status: "researching" },
+    STUB_INVOCATION
+  );
+
+  const result: any = await update.handler(
+    {
+      itemId,
+      goalId,
+      sessionId: makeValidSaveGoalArgs().sessionId,
+      status: "resolved",
+      findings: "<script>alert('xss')</script> Real finding here.",
+    },
+    STUB_INVOCATION
+  );
+  if (!result.item) throw new Error("Expected item in result");
+  if (result.item.findings.includes("<script>")) {
+    throw new Error("Findings should not contain raw HTML tags");
+  }
+  if (!result.item.findings.includes("&lt;script&gt;")) {
+    throw new Error("Expected HTML entities in sanitized findings");
+  }
+}
+
+async function testUpdateResearchItemInvalidStatusTransitionReturnsError(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const goalId = await seedGoal(store);
+  const tools = createPlanningTools("test-token", store);
+  const gen = tools.find((t) => t.name === "generate_research_checklist")!;
+  const update = tools.find((t) => t.name === "update_research_item")!;
+
+  const genResult: any = await gen.handler(
+    { goalId, sessionId: makeValidSaveGoalArgs().sessionId },
+    STUB_INVOCATION
+  );
+  const itemId = genResult.items[0].id;
+
+  // Skip researching and go straight to resolved — invalid.
+  const result: any = await update.handler(
+    {
+      itemId,
+      goalId,
+      sessionId: makeValidSaveGoalArgs().sessionId,
+      status: "resolved",
+      findings: "Some findings",
+    },
+    STUB_INVOCATION
+  );
+  if (!result.error) throw new Error("Expected error for invalid status transition open → resolved");
+}
+
+async function testUpdateResearchItemInvalidSourceUrlReturnsError(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const goalId = await seedGoal(store);
+  const tools = createPlanningTools("test-token", store);
+  const gen = tools.find((t) => t.name === "generate_research_checklist")!;
+  const update = tools.find((t) => t.name === "update_research_item")!;
+
+  const genResult: any = await gen.handler(
+    { goalId, sessionId: makeValidSaveGoalArgs().sessionId },
+    STUB_INVOCATION
+  );
+  const itemId = genResult.items[0].id;
+
+  // Advance to researching first.
+  await update.handler(
+    { itemId, goalId, sessionId: makeValidSaveGoalArgs().sessionId, status: "researching" },
+    STUB_INVOCATION
+  );
+
+  // Try to resolve with an invalid sourceUrl.
+  const result: any = await update.handler(
+    {
+      itemId,
+      goalId,
+      sessionId: makeValidSaveGoalArgs().sessionId,
+      status: "resolved",
+      findings: "Some findings",
+      sourceUrl: "not-a-valid-url",
+    },
+    STUB_INVOCATION
+  );
+  if (!result.error) throw new Error("Expected error for invalid sourceUrl");
+}
+
+async function testUpdateResearchItemValidSourceUrlIsPersisted(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const goalId = await seedGoal(store);
+  const tools = createPlanningTools("test-token", store);
+  const gen = tools.find((t) => t.name === "generate_research_checklist")!;
+  const update = tools.find((t) => t.name === "update_research_item")!;
+
+  const genResult: any = await gen.handler(
+    { goalId, sessionId: makeValidSaveGoalArgs().sessionId },
+    STUB_INVOCATION
+  );
+  const itemId = genResult.items[0].id;
+
+  // Advance to researching.
+  await update.handler(
+    { itemId, goalId, sessionId: makeValidSaveGoalArgs().sessionId, status: "researching" },
+    STUB_INVOCATION
+  );
+
+  // Resolve with a valid sourceUrl.
+  const result: any = await update.handler(
+    {
+      itemId,
+      goalId,
+      sessionId: makeValidSaveGoalArgs().sessionId,
+      status: "resolved",
+      findings: "Documented in the RFC.",
+      sourceUrl: "https://example.com/rfc-1234",
+    },
+    STUB_INVOCATION
+  );
+  if (!result.item) throw new Error("Expected item in result");
+  if (result.item.sourceUrl !== "https://example.com/rfc-1234") {
+    throw new Error(`Expected sourceUrl to be persisted, got: ${result.item.sourceUrl}`);
+  }
+}
+
+async function testGetResearchReturnsItems(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const goalId = await seedGoal(store);
+  const tools = createPlanningTools("test-token", store);
+  const gen = tools.find((t) => t.name === "generate_research_checklist")!;
+  const getResearch = tools.find((t) => t.name === "get_research")!;
+
+  await gen.handler(
+    { goalId, sessionId: makeValidSaveGoalArgs().sessionId },
+    STUB_INVOCATION
+  );
+
+  const result: any = await getResearch.handler(
+    { goalId, sessionId: makeValidSaveGoalArgs().sessionId },
+    STUB_INVOCATION
+  );
+  if (!result.items) throw new Error("Expected items in get_research result");
+  if (result.items.length !== 8) {
+    throw new Error(`Expected 8 research items, got ${result.items.length}`);
+  }
+}
+
+async function testGetResearchWrongSessionReturnsError(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const goalId = await seedGoal(store);
+  const tools = createPlanningTools("test-token", store);
+  const getResearch = tools.find((t) => t.name === "get_research")!;
+  const result: any = await getResearch.handler(
+    { goalId, sessionId: "wrong-session" },
+    STUB_INVOCATION
+  );
+  if (!result.error) throw new Error("Expected error for wrong sessionId");
+}
+
+async function testGetResearchUnknownGoalReturnsError(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const tools = createPlanningTools("test-token", store);
+  const getResearch = tools.find((t) => t.name === "get_research")!;
+  const result: any = await getResearch.handler(
+    { goalId: "nonexistent-id", sessionId: "any-session" },
+    STUB_INVOCATION
+  );
+  if (!result.error) throw new Error("Expected error for unknown goalId");
+}
+
 // ============================================================
 // Main
 // ============================================================
@@ -721,7 +1067,7 @@ async function main() {
   // --- Planning tools tests ---
   console.log("\n── Planning Tools Tests ──\n");
 
-  await run("Planning tools: all 3 tools registered with correct names", testPlanningToolRegistration);
+  await run("Planning tools: all 6 tools registered with correct names", testPlanningToolRegistration);
   await run("define_goal: returns structured template from raw intent", testDefineGoalReturnsTemplate);
   await run("define_goal: empty intent returns validation error", testDefineGoalEmptyIntentReturnsError);
   await run("save_goal: valid data returns goal with generated ID and timestamps", testSaveGoalValidDataReturnsGoalWithId);
@@ -731,6 +1077,24 @@ async function main() {
   await run("get_goal: wrong sessionId returns error (ownership check)", testGetGoalWrongSessionIdReturnsError);
   await run("get_goal: non-existent ID returns error", testGetGoalNonExistentIdReturnsError);
   await run("get_goal: empty goalId returns validation error", testGetGoalEmptyIdReturnsError);
+
+  // --- Research tools tests ---
+  console.log("\n── Research Tools Tests ──\n");
+
+  await run("generate_research_checklist: returns 8 categorized items", testGenerateResearchChecklistReturns8Items);
+  await run("generate_research_checklist: all items have 'open' status and correct goalId", testGenerateResearchChecklistAllItemsHaveOpenStatus);
+  await run("generate_research_checklist: unknown goalId returns error", testGenerateResearchChecklistUnknownGoalReturnsError);
+  await run("generate_research_checklist: wrong sessionId returns error", testGenerateResearchChecklistWrongSessionReturnsError);
+  await run("update_research_item: open → researching transition succeeds", testUpdateResearchItemOpenToResearching);
+  await run("update_research_item: resolving without findings returns error", testUpdateResearchItemResolvingRequiresFindings);
+  await run("update_research_item: full open → researching → resolved lifecycle", testUpdateResearchItemFullLifecycle);
+  await run("update_research_item: findings are sanitized before storage", testUpdateResearchItemSanitizesFindings);
+  await run("update_research_item: invalid status transition returns error", testUpdateResearchItemInvalidStatusTransitionReturnsError);
+  await run("update_research_item: invalid sourceUrl returns error", testUpdateResearchItemInvalidSourceUrlReturnsError);
+  await run("update_research_item: valid sourceUrl is persisted", testUpdateResearchItemValidSourceUrlIsPersisted);
+  await run("get_research: returns all items for goal", testGetResearchReturnsItems);
+  await run("get_research: wrong sessionId returns error", testGetResearchWrongSessionReturnsError);
+  await run("get_research: unknown goalId returns error", testGetResearchUnknownGoalReturnsError);
 
   // --- Summary ---
   console.log("\n═══════════════════════════════════════════════");
