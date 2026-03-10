@@ -396,7 +396,7 @@ export function createPlanningTools(token: string, planningStore: PlanningStore)
         return { error: `Goal not found: ${args.goalId}` };
       }
 
-      const goalSummary = goal.goal.slice(0, 100);
+      const goalSummary = sanitizeText(goal.goal.slice(0, 100));
       const createdItems: ResearchItem[] = [];
 
       for (const { category, defaultQuestion } of RESEARCH_CATEGORIES) {
