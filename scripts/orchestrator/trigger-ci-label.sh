@@ -104,9 +104,10 @@ while true; do
 
   for wf in "${WORKFLOWS[@]}"; do
     # Get recent runs for this workflow on this branch, skip any with 'skipped' conclusion
-    run_json=$(gh run list --repo "${OWNER}/${REPO}" --workflow "${wf}" --branch "${pr_branch}" --limit 5 --json databaseId,status,conclusion,createdAt --jq '
-      [.[] | select(.conclusion != "skipped")] | .[0]
-    ' 2>/dev/null || echo "")
+    # and only consider runs created after labels were added
+    run_json=$(gh run list --repo "${OWNER}/${REPO}" --workflow "${wf}" --branch "${pr_branch}" --limit 5 --json databaseId,status,conclusion,createdAt --jq "
+      [.[] | select(.conclusion != \"skipped\" and .createdAt >= \"${start_time}\")] | .[0]
+    " 2>/dev/null || echo "")
 
     if [ -z "$run_json" ] || [ "$run_json" = "null" ]; then
       all_done=false
