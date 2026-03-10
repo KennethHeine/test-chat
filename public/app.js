@@ -869,6 +869,7 @@ const CATEGORY_LABELS = {
   operational: "Operational",
   ux: "UX",
 };
+const VALID_STATUSES = ["open", "researching", "resolved"];
 
 /**
  * Renders a categorized research checklist card in the chat flow.
@@ -921,7 +922,6 @@ function renderResearchChecklist(items) {
       itemEl.className = "research-item";
 
       const statusEl = document.createElement("span");
-      const VALID_STATUSES = ["open", "researching", "resolved"];
       const status = VALID_STATUSES.includes(item.status) ? item.status : "open";
       statusEl.className = "research-item-status status-" + status;
       statusEl.textContent = status;
