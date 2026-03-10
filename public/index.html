@@ -532,6 +532,93 @@
         flex-wrap: wrap;
       }
     }
+    /* Goal Summary Card */
+    .goal-card {
+      align-self: flex-start;
+      max-width: 80%;
+      border: 1px solid var(--color-accent);
+      border-radius: 10px;
+      overflow: hidden;
+      font-size: 14px;
+      line-height: 1.5;
+      word-wrap: break-word;
+    }
+
+    .goal-card-header {
+      background: var(--color-accent-emphasis);
+      color: #fff;
+      padding: 8px 14px;
+      font-weight: 600;
+      font-size: 14px;
+      letter-spacing: 0.2px;
+    }
+
+    .goal-card-body {
+      background: var(--color-assistant-bubble);
+      padding: 12px 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .goal-card-field {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .goal-card-label {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--color-text-muted);
+    }
+
+    .goal-card-value {
+      color: var(--color-text);
+    }
+
+    .goal-card-list-section {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .goal-card-list {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .goal-card-list li {
+      color: var(--color-success);
+      padding-left: 4px;
+    }
+
+    .goal-card-counts {
+      font-size: 12px;
+      color: var(--color-text-muted);
+      border-top: 1px solid var(--color-border);
+      padding-top: 8px;
+      margin-top: 2px;
+    }
+
+    @media (max-width: 768px) {
+      .goal-card {
+        max-width: 92%;
+      }
+    }
+
+    @media (max-width: 480px) {
+      .goal-card {
+        max-width: 96%;
+        font-size: 13px;
+      }
+    }
   </style>
 </head>
 <body>
