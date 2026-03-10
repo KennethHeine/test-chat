@@ -373,16 +373,23 @@ export function createPlanningTools(token: string, planningStore: PlanningStore)
         return { error: `Goal not found: ${args.goalId}` };
       }
 
-      // Idempotency: return existing items if a checklist has already been generated
+      // Idempotency: only create items for categories that don't already exist.
+      // This handles both full re-invocation (all 8 present → return early) and
+      // partial-failure recovery (some categories missing → fill in the gaps).
       const existing = await planningStore.listResearchItems(args.goalId);
-      if (existing.length > 0) {
+      const existingCategories = new Set(existing.map((item) => item.category));
+      const missingCategories = VALID_RESEARCH_CATEGORIES.filter(
+        (c) => !existingCategories.has(c)
+      );
+
+      if (missingCategories.length === 0) {
         return { items: existing, count: existing.length, generatedAt: null, alreadyExisted: true };
       }
 
       const now = new Date().toISOString();
       const created: ResearchItem[] = [];
 
-      for (const category of VALID_RESEARCH_CATEGORIES) {
+      for (const category of missingCategories) {
         const question = generateQuestionForCategory(category, goal.goal);
         const item: ResearchItem = {
           id: crypto.randomUUID(),
@@ -401,7 +408,8 @@ export function createPlanningTools(token: string, planningStore: PlanningStore)
         }
       }
 
-      return { items: created, count: created.length, generatedAt: now };
+      const all = await planningStore.listResearchItems(args.goalId);
+      return { items: all, count: all.length, generatedAt: now };
     },
   };
 

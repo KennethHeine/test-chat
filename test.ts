@@ -822,7 +822,7 @@ async function testGenerateResearchChecklistIdempotent(): Promise<void> {
   if (first.count !== 8) throw new Error(`Expected 8 items on first call, got ${first.count}`);
   if (first.alreadyExisted) throw new Error("Should not be marked alreadyExisted on first call");
 
-  // Second invocation — should return existing items, not create duplicates
+  // Second invocation — all 8 categories present, should return existing items unchanged
   const second: any = await generateChecklist.handler({ goalId, sessionId }, STUB_INVOCATION);
   if (second.count !== 8) throw new Error(`Expected 8 items on second call, got ${second.count}`);
   if (!second.alreadyExisted) throw new Error("Expected alreadyExisted=true on re-invocation");
@@ -832,6 +832,35 @@ async function testGenerateResearchChecklistIdempotent(): Promise<void> {
   const secondIds = second.items.map((i: any) => i.id).sort();
   if (JSON.stringify(firstIds) !== JSON.stringify(secondIds)) {
     throw new Error("Re-invocation created new items instead of returning existing ones");
+  }
+}
+
+async function testGenerateResearchChecklistPartialRecovery(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const tools = createPlanningTools("test-token", store);
+  const saveGoal = tools.find((t) => t.name === "save_goal")!;
+  const generateChecklist = tools.find((t) => t.name === "generate_research_checklist")!;
+
+  const saved: any = await saveGoal.handler(makeValidSaveGoalArgs(), STUB_INVOCATION);
+  const { id: goalId, sessionId } = saved.goal;
+
+  // Simulate a partial failure by pre-seeding only 3 of the 8 categories directly in the store
+  await store.createResearchItem({ id: crypto.randomUUID(), goalId, category: "domain", question: "q", status: "open", findings: "", decision: "" });
+  await store.createResearchItem({ id: crypto.randomUUID(), goalId, category: "security", question: "q", status: "open", findings: "", decision: "" });
+  await store.createResearchItem({ id: crypto.randomUUID(), goalId, category: "ux", question: "q", status: "open", findings: "", decision: "" });
+
+  // Invoke the tool — should add the 5 missing categories without duplicating existing ones
+  const result: any = await generateChecklist.handler({ goalId, sessionId }, STUB_INVOCATION);
+  if (result.error) throw new Error(`Unexpected error: ${result.error}`);
+  if (result.count !== 8) throw new Error(`Expected 8 items after recovery, got ${result.count}`);
+
+  // Verify each category appears exactly once
+  const categories: string[] = result.items.map((i: any) => i.category);
+  const unique = new Set(categories);
+  if (unique.size !== 8) throw new Error(`Expected 8 unique categories, got ${unique.size}`);
+  const allExpected = ["domain", "architecture", "security", "infrastructure", "integration", "data_model", "operational", "ux"];
+  for (const cat of allExpected) {
+    if (!unique.has(cat)) throw new Error(`Missing category after recovery: ${cat}`);
   }
 }
 
@@ -1026,6 +1055,7 @@ async function main() {
 
   await run("generate_research_checklist: generates items for all 8 categories", testGenerateResearchChecklistAllCategories);
   await run("generate_research_checklist: idempotent — returns existing items on re-invocation", testGenerateResearchChecklistIdempotent);
+  await run("generate_research_checklist: partial recovery — fills in missing categories only", testGenerateResearchChecklistPartialRecovery);
   await run("generate_research_checklist: wrong sessionId returns error", testGenerateResearchChecklistWrongSessionReturnsError);
   await run("generate_research_checklist: non-existent goal returns error", testGenerateResearchChecklistNonExistentGoalReturnsError);
   await run("generate_research_checklist: empty goalId returns validation error", testGenerateResearchChecklistEmptyGoalIdReturnsError);
