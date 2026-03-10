@@ -739,6 +739,12 @@ async function testUpdateResearchItemStatusTransition(): Promise<void> {
   if (!r2.item.resolvedAt) throw new Error("Expected resolvedAt to be set when status is 'resolved'");
   if (r2.item.findings !== "We need REST APIs") throw new Error("findings mismatch");
   if (r2.item.decision !== "Use OpenAPI spec") throw new Error("decision mismatch");
+
+  // Transition back to 'researching' — resolvedAt should be cleared
+  const r3: any = await updateItem.handler({ itemId, sessionId, status: "researching" }, STUB_INVOCATION);
+  if (r3.error) throw new Error(`Unexpected error: ${r3.error}`);
+  if (r3.item.status !== "researching") throw new Error(`Expected status 'researching', got '${r3.item.status}'`);
+  if (r3.item.resolvedAt !== undefined) throw new Error("Expected resolvedAt to be cleared when moving away from resolved");
 }
 
 async function testUpdateResearchItemSanitizesContent(): Promise<void> {
@@ -763,9 +769,9 @@ async function testUpdateResearchItemSanitizesContent(): Promise<void> {
 
   if (result.error) throw new Error(`Unexpected error: ${result.error}`);
   if (result.item.findings.includes("<script>")) throw new Error("HTML not escaped in findings");
-  if (result.item.decision.includes("&&")) throw new Error("Ampersand not escaped in decision");
-  // Verify the escaped versions are present
   if (!result.item.findings.includes("&lt;script&gt;")) throw new Error("Expected escaped script tag in findings");
+  if (!result.item.decision.includes("&amp;")) throw new Error("Ampersand not escaped in decision");
+  if (result.item.decision.includes("Use & not &&")) throw new Error("Unescaped ampersand present in decision");
 }
 
 async function testUpdateResearchItemWrongSessionReturnsError(): Promise<void> {
@@ -802,42 +808,31 @@ async function testUpdateResearchItemInvalidStatusReturnsError(): Promise<void> 
   if (!result.error) throw new Error("Expected error for invalid status 'done'");
 }
 
-async function testUpdateResearchItemInvalidSourceUrlReturnsError(): Promise<void> {
+async function testGenerateResearchChecklistIdempotent(): Promise<void> {
   const store = new InMemoryPlanningStore();
   const tools = createPlanningTools("test-token", store);
   const saveGoal = tools.find((t) => t.name === "save_goal")!;
   const generateChecklist = tools.find((t) => t.name === "generate_research_checklist")!;
-  const updateItem = tools.find((t) => t.name === "update_research_item")!;
 
   const saved: any = await saveGoal.handler(makeValidSaveGoalArgs(), STUB_INVOCATION);
   const { id: goalId, sessionId } = saved.goal;
 
-  const generated: any = await generateChecklist.handler({ goalId, sessionId }, STUB_INVOCATION);
-  const itemId: string = generated.items[0].id;
+  // First invocation — should create 8 items
+  const first: any = await generateChecklist.handler({ goalId, sessionId }, STUB_INVOCATION);
+  if (first.count !== 8) throw new Error(`Expected 8 items on first call, got ${first.count}`);
+  if (first.alreadyExisted) throw new Error("Should not be marked alreadyExisted on first call");
 
-  // javascript: protocol should be rejected
-  const result: any = await updateItem.handler({
-    itemId,
-    sessionId,
-    sourceUrl: "javascript:alert(1)",
-  }, STUB_INVOCATION);
-  if (!result.error) throw new Error("Expected error for javascript: URL");
+  // Second invocation — should return existing items, not create duplicates
+  const second: any = await generateChecklist.handler({ goalId, sessionId }, STUB_INVOCATION);
+  if (second.count !== 8) throw new Error(`Expected 8 items on second call, got ${second.count}`);
+  if (!second.alreadyExisted) throw new Error("Expected alreadyExisted=true on re-invocation");
 
-  // Invalid URL should be rejected
-  const result2: any = await updateItem.handler({
-    itemId,
-    sessionId,
-    sourceUrl: "not-a-url",
-  }, STUB_INVOCATION);
-  if (!result2.error) throw new Error("Expected error for invalid URL");
-
-  // Valid https URL should be accepted
-  const result3: any = await updateItem.handler({
-    itemId,
-    sessionId,
-    sourceUrl: "https://docs.example.com/reference",
-  }, STUB_INVOCATION);
-  if (result3.error) throw new Error(`Unexpected error for valid https URL: ${result3.error}`);
+  // IDs must be the same — no new items created
+  const firstIds = first.items.map((i: any) => i.id).sort();
+  const secondIds = second.items.map((i: any) => i.id).sort();
+  if (JSON.stringify(firstIds) !== JSON.stringify(secondIds)) {
+    throw new Error("Re-invocation created new items instead of returning existing ones");
+  }
 }
 
 async function testGetResearchReturnsItems(): Promise<void> {
@@ -1030,6 +1025,7 @@ async function main() {
   console.log("\n── Research Tools Tests ──\n");
 
   await run("generate_research_checklist: generates items for all 8 categories", testGenerateResearchChecklistAllCategories);
+  await run("generate_research_checklist: idempotent — returns existing items on re-invocation", testGenerateResearchChecklistIdempotent);
   await run("generate_research_checklist: wrong sessionId returns error", testGenerateResearchChecklistWrongSessionReturnsError);
   await run("generate_research_checklist: non-existent goal returns error", testGenerateResearchChecklistNonExistentGoalReturnsError);
   await run("generate_research_checklist: empty goalId returns validation error", testGenerateResearchChecklistEmptyGoalIdReturnsError);
@@ -1037,7 +1033,6 @@ async function main() {
   await run("update_research_item: findings and decision are sanitized", testUpdateResearchItemSanitizesContent);
   await run("update_research_item: wrong sessionId returns error", testUpdateResearchItemWrongSessionReturnsError);
   await run("update_research_item: invalid status returns error", testUpdateResearchItemInvalidStatusReturnsError);
-  await run("update_research_item: invalid sourceUrl returns error", testUpdateResearchItemInvalidSourceUrlReturnsError);
   await run("get_research: returns all items for goal", testGetResearchReturnsItems);
   await run("get_research: empty list for goal with no items", testGetResearchEmptyForNewGoal);
   await run("get_research: wrong sessionId returns error", testGetResearchWrongSessionReturnsError);

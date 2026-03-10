@@ -66,22 +66,6 @@ function validateStringField(value: unknown, fieldName: string, maxLength: numbe
 }
 
 /**
- * Validates a URL string is a valid http/https URL.
- * Returns an error message string or null if valid.
- */
-function validateUrl(value: string, fieldName: string): string | null {
-  try {
-    const url = new URL(value);
-    if (url.protocol !== "https:" && url.protocol !== "http:") {
-      return `${fieldName} must use http or https protocol`;
-    }
-    return null;
-  } catch {
-    return `${fieldName} must be a valid URL`;
-  }
-}
-
-/**
  * Sanitizes user-supplied text content by escaping HTML entities.
  * Prevents stored content from being interpreted as markup.
  */
@@ -389,6 +373,12 @@ export function createPlanningTools(token: string, planningStore: PlanningStore)
         return { error: `Goal not found: ${args.goalId}` };
       }
 
+      // Idempotency: return existing items if a checklist has already been generated
+      const existing = await planningStore.listResearchItems(args.goalId);
+      if (existing.length > 0) {
+        return { items: existing, count: existing.length, generatedAt: null, alreadyExisted: true };
+      }
+
       const now = new Date().toISOString();
       const created: ResearchItem[] = [];
 
@@ -418,7 +408,8 @@ export function createPlanningTools(token: string, planningStore: PlanningStore)
   /**
    * update_research_item: Updates the status, findings, and/or decision of a
    * research item. Sanitizes text content before persisting. Automatically sets
-   * resolvedAt when status transitions to "resolved".
+   * resolvedAt when status transitions to "resolved" and clears it when moving
+   * to a non-resolved status.
    */
   const updateResearchItem: Tool = {
     name: "update_research_item",
@@ -452,10 +443,6 @@ export function createPlanningTools(token: string, planningStore: PlanningStore)
           type: "string",
           description: "The decision or conclusion reached based on the findings. Max 1000 chars.",
         },
-        sourceUrl: {
-          type: "string",
-          description: "Optional URL of a source consulted during research. Must be a valid http/https URL.",
-        },
       },
       required: ["itemId", "sessionId"],
     },
@@ -484,22 +471,18 @@ export function createPlanningTools(token: string, planningStore: PlanningStore)
 
       if (args.findings !== undefined) {
         if (typeof args.findings !== "string") return { error: "findings must be a string" };
-        if (args.findings.length > MAX_FINDINGS_LENGTH) {
-          return { error: `findings must be at most ${MAX_FINDINGS_LENGTH} characters` };
+        const sanitized = sanitizeText(args.findings);
+        if (sanitized.length > MAX_FINDINGS_LENGTH) {
+          return { error: `findings must be at most ${MAX_FINDINGS_LENGTH} characters after sanitization` };
         }
       }
 
       if (args.decision !== undefined) {
         if (typeof args.decision !== "string") return { error: "decision must be a string" };
-        if (args.decision.length > MAX_DECISION_LENGTH) {
-          return { error: `decision must be at most ${MAX_DECISION_LENGTH} characters` };
+        const sanitized = sanitizeText(args.decision);
+        if (sanitized.length > MAX_DECISION_LENGTH) {
+          return { error: `decision must be at most ${MAX_DECISION_LENGTH} characters after sanitization` };
         }
-      }
-
-      if (args.sourceUrl !== undefined) {
-        if (typeof args.sourceUrl !== "string") return { error: "sourceUrl must be a string" };
-        const urlErr = validateUrl(args.sourceUrl, "sourceUrl");
-        if (urlErr) return { error: urlErr };
       }
 
       const updates: Partial<Omit<ResearchItem, "id" | "goalId">> = {};
@@ -508,6 +491,9 @@ export function createPlanningTools(token: string, planningStore: PlanningStore)
         updates.status = args.status;
         if (args.status === "resolved") {
           updates.resolvedAt = new Date().toISOString();
+        } else {
+          // Clear resolvedAt when moving to a non-resolved status
+          updates.resolvedAt = undefined;
         }
       }
 
@@ -537,7 +523,7 @@ export function createPlanningTools(token: string, planningStore: PlanningStore)
   const getResearch: Tool = {
     name: "get_research",
     description:
-      "Retrieve all research items for a goal, grouped by their current state. " +
+      "Retrieve all research items for a goal as a flat list, along with a total count. " +
       "Requires sessionId to match the goal's owner session. " +
       "Returns the list of ResearchItems or an error if access is denied.",
     parameters: {
