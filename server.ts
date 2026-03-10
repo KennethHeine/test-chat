@@ -662,12 +662,17 @@ if (process.env.ENABLE_GOAL_SEED === "true") {
 
       const goal = await getOwnedGoal(token, item.goalId);
       if (!goal) {
-        res.status(400).json({ error: "Referenced goal does not exist or does not belong to the authenticated user" });
+        res.status(404).json({ error: "Referenced goal does not exist or does not belong to the authenticated user" });
         return;
       }
 
-      const created = await planningStore.createResearchItem(item);
-      res.status(201).json(created);
+      try {
+        const created = await planningStore.createResearchItem(item);
+        res.status(201).json(created);
+      } catch (err: any) {
+        // planningStore.createResearchItem throws on validation errors (invalid/missing fields)
+        res.status(400).json({ error: err.message || "Invalid research item" });
+      }
     } catch (err: any) {
       res.status(500).json({ error: err.message || "Failed to seed research item" });
     }
