@@ -671,7 +671,14 @@ if (process.env.ENABLE_GOAL_SEED === "true") {
       const created = await planningStore.createResearchItem(item);
       res.status(201).json(created);
     } catch (err: any) {
-      res.status(500).json({ error: err.message || "Failed to seed research item" });
+      const msg = err.message || "Failed to seed research item";
+      const msgLower = msg.toLowerCase();
+      // Validation errors (missing fields, invalid values) should be 400, not 500
+      if (msgLower.includes("required") || msgLower.includes("invalid") || msgLower.includes("must")) {
+        res.status(400).json({ error: msg });
+      } else {
+        res.status(500).json({ error: msg });
+      }
     }
   });
 }
