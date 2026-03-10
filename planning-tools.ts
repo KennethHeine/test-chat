@@ -1,10 +1,10 @@
 // Planning tools for the next-version planning workflow.
-// Provides three tools that enable the Copilot agent to guide users through
-// structured goal definition: define_goal, save_goal, and get_goal.
+// Provides tools that enable the Copilot agent to guide users through
+// structured goal definition and research workflow.
 
 import type { Tool } from "@github/copilot-sdk";
 import type { PlanningStore } from "./planning-store.js";
-import type { Goal } from "./planning-types.js";
+import type { Goal, ResearchItem } from "./planning-types.js";
 
 // --- Exported tool names for permission handler reference ---
 
@@ -12,6 +12,9 @@ export const PLANNING_TOOL_NAMES = [
   "define_goal",
   "save_goal",
   "get_goal",
+  "generate_research_checklist",
+  "update_research_item",
+  "get_research",
 ] as const;
 
 // --- Max field lengths (from planning-types.ts JSDoc) ---
@@ -22,6 +25,29 @@ const MAX_PROBLEM_STATEMENT_LENGTH = 1000;
 const MAX_BUSINESS_VALUE_LENGTH = 500;
 const MAX_TARGET_OUTCOME_LENGTH = 500;
 const MAX_SESSION_ID_LENGTH = 256;
+
+// Research-specific max lengths
+const MAX_RESEARCH_QUESTION_LENGTH = 500;
+const MAX_RESEARCH_FINDINGS_LENGTH = 2000;
+const MAX_RESEARCH_DECISION_LENGTH = 1000;
+
+// Valid research category and status values
+const VALID_RESEARCH_CATEGORIES: ReadonlyArray<ResearchItem["category"]> = [
+  "domain",
+  "architecture",
+  "security",
+  "infrastructure",
+  "integration",
+  "data_model",
+  "operational",
+  "ux",
+];
+
+const VALID_RESEARCH_STATUSES: ReadonlyArray<ResearchItem["status"]> = [
+  "open",
+  "researching",
+  "resolved",
+];
 
 // --- Validation helper ---
 
@@ -39,6 +65,17 @@ function validateStringField(value: unknown, fieldName: string, maxLength: numbe
   return null;
 }
 
+/**
+ * Sanitizes text content by stripping HTML tags and control characters.
+ * Preserves newlines and tabs for multi-line content.
+ */
+function sanitizeText(text: string): string {
+  return text
+    .replace(/<[^>]*>/g, "")
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "")
+    .trim();
+}
+
 // --- Tool factory ---
 
 /**
@@ -47,8 +84,8 @@ function validateStringField(value: unknown, fieldName: string, maxLength: numbe
  * and may be used by future tools that call GitHub APIs.
  *
  * @param token - The user's GitHub PAT (reserved for future use)
- * @param planningStore - The PlanningStore instance for persisting goals
- * @returns Array of Tool objects [defineGoal, saveGoal, getGoal]
+ * @param planningStore - The PlanningStore instance for persisting goals and research items
+ * @returns Array of Tool objects [defineGoal, saveGoal, getGoal, generateResearchChecklist, updateResearchItem, getResearch]
  */
 export function createPlanningTools(token: string, planningStore: PlanningStore): Tool[] {
   /**
@@ -274,5 +311,228 @@ export function createPlanningTools(token: string, planningStore: PlanningStore)
     },
   };
 
-  return [defineGoal, saveGoal, getGoal];
+  /**
+   * generate_research_checklist: Accepts a goal ID and an array of research items
+   * (one or more per category) covering all 8 research categories. Validates that
+   * every required category is represented, then persists the items via PlanningStore.
+   * Returns the complete list of created ResearchItem objects.
+   */
+  const generateResearchChecklist: Tool = {
+    name: "generate_research_checklist",
+    description:
+      "Analyze a goal and generate a structured research checklist covering all 8 research categories " +
+      "(domain, architecture, security, infrastructure, integration, data_model, operational, ux). " +
+      "Provide one or more questions per category. All 8 categories must be represented. " +
+      "Items are persisted to the planning store and returned with generated IDs.",
+    parameters: {
+      type: "object",
+      properties: {
+        goalId: {
+          type: "string",
+          description: "The ID of the goal to generate research items for.",
+        },
+        sessionId: {
+          type: "string",
+          description: "The session ID of the caller. Must match the goal's sessionId.",
+        },
+        items: {
+          type: "array",
+          description:
+            "Array of research items to create. Must cover all 8 categories: " +
+            "domain, architecture, security, infrastructure, integration, data_model, operational, ux.",
+          items: {
+            type: "object",
+            properties: {
+              category: {
+                type: "string",
+                enum: ["domain", "architecture", "security", "infrastructure", "integration", "data_model", "operational", "ux"],
+                description: "The research category this item belongs to.",
+              },
+              question: {
+                type: "string",
+                description: "The specific question to investigate. Max 500 chars.",
+              },
+            },
+            required: ["category", "question"],
+          },
+        },
+      },
+      required: ["goalId", "sessionId", "items"],
+    },
+    handler: async (args: any) => {
+      const goalIdErr = validateStringField(args.goalId, "goalId", 256);
+      if (goalIdErr) return { error: goalIdErr };
+
+      const sessionIdErr = validateStringField(args.sessionId, "sessionId", MAX_SESSION_ID_LENGTH);
+      if (sessionIdErr) return { error: sessionIdErr };
+
+      // Verify goal exists and belongs to the caller's session
+      const goal = await planningStore.getGoal(args.goalId);
+      if (!goal || goal.sessionId !== args.sessionId) {
+        return { error: `Goal not found: ${args.goalId}` };
+      }
+
+      if (!Array.isArray(args.items) || args.items.length === 0) {
+        return { error: "items must be a non-empty array" };
+      }
+
+      // Validate all 8 categories are covered
+      const providedCategories = new Set<string>(
+        (args.items as any[]).map((item: any) => item.category)
+      );
+      const missingCategories = VALID_RESEARCH_CATEGORIES.filter((c) => !providedCategories.has(c));
+      if (missingCategories.length > 0) {
+        return { error: `Missing research categories: ${missingCategories.join(", ")}` };
+      }
+
+      // Validate and create each item
+      const createdItems: ResearchItem[] = [];
+      for (let i = 0; i < (args.items as any[]).length; i++) {
+        const item = (args.items as any[])[i];
+
+        if (!VALID_RESEARCH_CATEGORIES.includes(item.category)) {
+          return { error: `items[${i}].category must be one of: ${VALID_RESEARCH_CATEGORIES.join(", ")}` };
+        }
+
+        const questionErr = validateStringField(item.question, `items[${i}].question`, MAX_RESEARCH_QUESTION_LENGTH);
+        if (questionErr) return { error: questionErr };
+
+        const newItem: ResearchItem = {
+          id: crypto.randomUUID(),
+          goalId: args.goalId,
+          category: item.category,
+          question: item.question.trim(),
+          status: "open",
+          findings: "",
+          decision: "",
+        };
+
+        try {
+          const created = await planningStore.createResearchItem(newItem);
+          createdItems.push(created);
+        } catch (err: any) {
+          return { error: err.message ?? `Failed to create research item at index ${i}` };
+        }
+      }
+
+      return { items: createdItems, count: createdItems.length };
+    },
+  };
+
+  /**
+   * update_research_item: Transitions a research item's status and records findings.
+   * Sanitizes findings and decision content before persisting.
+   * When status is "resolved", findings must be provided and resolvedAt is set automatically.
+   */
+  const updateResearchItem: Tool = {
+    name: "update_research_item",
+    description:
+      "Update the status and findings of a research item. " +
+      "Status transitions: open → researching → resolved. " +
+      "When resolving an item, findings must be provided. " +
+      "An optional decision can record the conclusion reached.",
+    parameters: {
+      type: "object",
+      properties: {
+        itemId: {
+          type: "string",
+          description: "The unique identifier of the research item to update.",
+        },
+        status: {
+          type: "string",
+          enum: ["open", "researching", "resolved"],
+          description: "The new status for the research item.",
+        },
+        findings: {
+          type: "string",
+          description: "The findings gathered during investigation. Required when status is 'resolved'. Max 2000 chars.",
+        },
+        decision: {
+          type: "string",
+          description: "The decision or conclusion reached based on the findings. Max 1000 chars.",
+        },
+      },
+      required: ["itemId", "status"],
+    },
+    handler: async (args: any) => {
+      const itemIdErr = validateStringField(args.itemId, "itemId", 256);
+      if (itemIdErr) return { error: itemIdErr };
+
+      if (!VALID_RESEARCH_STATUSES.includes(args.status)) {
+        return { error: `status must be one of: ${VALID_RESEARCH_STATUSES.join(", ")}` };
+      }
+
+      const updates: Partial<Omit<ResearchItem, "id" | "goalId">> = {
+        status: args.status,
+      };
+
+      if (args.findings !== undefined) {
+        if (typeof args.findings !== "string") {
+          return { error: "findings must be a string" };
+        }
+        const sanitized = sanitizeText(args.findings);
+        if (sanitized.length > MAX_RESEARCH_FINDINGS_LENGTH) {
+          return { error: `findings must be at most ${MAX_RESEARCH_FINDINGS_LENGTH} characters` };
+        }
+        updates.findings = sanitized;
+      }
+
+      if (args.decision !== undefined) {
+        if (typeof args.decision !== "string") {
+          return { error: "decision must be a string" };
+        }
+        const sanitized = sanitizeText(args.decision);
+        if (sanitized.length > MAX_RESEARCH_DECISION_LENGTH) {
+          return { error: `decision must be at most ${MAX_RESEARCH_DECISION_LENGTH} characters` };
+        }
+        updates.decision = sanitized;
+      }
+
+      // Resolved items require findings
+      if (args.status === "resolved") {
+        const findingsValue = updates.findings;
+        if (findingsValue === undefined || findingsValue.trim().length === 0) {
+          return { error: "findings must be provided when status is resolved" };
+        }
+        updates.resolvedAt = new Date().toISOString();
+      }
+
+      const updated = await planningStore.updateResearchItem(args.itemId, updates);
+      if (!updated) {
+        return { error: `Research item not found: ${args.itemId}` };
+      }
+
+      return { item: updated };
+    },
+  };
+
+  /**
+   * get_research: Retrieves all research items for a given goal.
+   * Returns items in the order they were created.
+   */
+  const getResearch: Tool = {
+    name: "get_research",
+    description:
+      "Retrieve all research items for a goal. " +
+      "Returns items grouped by category with their current status and any recorded findings.",
+    parameters: {
+      type: "object",
+      properties: {
+        goalId: {
+          type: "string",
+          description: "The ID of the goal whose research items should be retrieved.",
+        },
+      },
+      required: ["goalId"],
+    },
+    handler: async (args: any) => {
+      const goalIdErr = validateStringField(args.goalId, "goalId", 256);
+      if (goalIdErr) return { error: goalIdErr };
+
+      const items = await planningStore.listResearchItems(args.goalId);
+      return { items, count: items.length };
+    },
+  };
+
+  return [defineGoal, saveGoal, getGoal, generateResearchChecklist, updateResearchItem, getResearch];
 }
