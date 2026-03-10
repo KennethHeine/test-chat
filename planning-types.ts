@@ -96,6 +96,9 @@ export interface ResearchItem {
   /** The decision or conclusion reached based on the findings. Empty string until resolved. Max 1000 chars. */
   decision: string;
 
+  /** ISO 8601 timestamp of when this item was created. */
+  createdAt?: string;
+
   /** ISO 8601 timestamp of when this item was resolved. Only set when status is `resolved`. Undefined otherwise. */
   resolvedAt?: string;
 }
