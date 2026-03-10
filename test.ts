@@ -753,7 +753,13 @@ async function testUpdateResearchItemResolvingRequiresFindings(): Promise<void> 
   );
   const itemId = genResult.items[0].id;
 
-  // Try to resolve without findings — should fail.
+  // First advance to 'researching' so the transition to 'resolved' is valid.
+  await update.handler(
+    { itemId, goalId, sessionId: makeValidSaveGoalArgs().sessionId, status: "researching" },
+    STUB_INVOCATION
+  );
+
+  // Now try to resolve without providing findings — the findings-required guard should fire.
   const result: any = await update.handler(
     { itemId, goalId, sessionId: makeValidSaveGoalArgs().sessionId, status: "resolved" },
     STUB_INVOCATION
@@ -897,6 +903,43 @@ async function testUpdateResearchItemInvalidSourceUrlReturnsError(): Promise<voi
     STUB_INVOCATION
   );
   if (!result.error) throw new Error("Expected error for invalid sourceUrl");
+}
+
+async function testUpdateResearchItemValidSourceUrlIsPersisted(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const goalId = await seedGoal(store);
+  const tools = createPlanningTools("test-token", store);
+  const gen = tools.find((t) => t.name === "generate_research_checklist")!;
+  const update = tools.find((t) => t.name === "update_research_item")!;
+
+  const genResult: any = await gen.handler(
+    { goalId, sessionId: makeValidSaveGoalArgs().sessionId },
+    STUB_INVOCATION
+  );
+  const itemId = genResult.items[0].id;
+
+  // Advance to researching.
+  await update.handler(
+    { itemId, goalId, sessionId: makeValidSaveGoalArgs().sessionId, status: "researching" },
+    STUB_INVOCATION
+  );
+
+  // Resolve with a valid sourceUrl.
+  const result: any = await update.handler(
+    {
+      itemId,
+      goalId,
+      sessionId: makeValidSaveGoalArgs().sessionId,
+      status: "resolved",
+      findings: "Documented in the RFC.",
+      sourceUrl: "https://example.com/rfc-1234",
+    },
+    STUB_INVOCATION
+  );
+  if (!result.item) throw new Error("Expected item in result");
+  if (result.item.sourceUrl !== "https://example.com/rfc-1234") {
+    throw new Error(`Expected sourceUrl to be persisted, got: ${result.item.sourceUrl}`);
+  }
 }
 
 async function testGetResearchReturnsItems(): Promise<void> {
@@ -1048,6 +1091,7 @@ async function main() {
   await run("update_research_item: findings are sanitized before storage", testUpdateResearchItemSanitizesFindings);
   await run("update_research_item: invalid status transition returns error", testUpdateResearchItemInvalidStatusTransitionReturnsError);
   await run("update_research_item: invalid sourceUrl returns error", testUpdateResearchItemInvalidSourceUrlReturnsError);
+  await run("update_research_item: valid sourceUrl is persisted", testUpdateResearchItemValidSourceUrlIsPersisted);
   await run("get_research: returns all items for goal", testGetResearchReturnsItems);
   await run("get_research: wrong sessionId returns error", testGetResearchWrongSessionReturnsError);
   await run("get_research: unknown goalId returns error", testGetResearchUnknownGoalReturnsError);

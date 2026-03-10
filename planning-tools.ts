@@ -75,6 +75,54 @@ function validateUrl(value: string, fieldName: string): string | null {
   }
 }
 
+// --- Research category definitions (module-scoped; does not depend on factory parameters) ---
+
+const RESEARCH_CATEGORIES: ReadonlyArray<{
+  readonly category: ResearchItem["category"];
+  readonly defaultQuestion: (goalSummary: string) => string;
+}> = [
+  {
+    category: "domain",
+    defaultQuestion: (g) =>
+      `What domain-specific knowledge, terminology, or business rules must be understood to implement: "${g}"?`,
+  },
+  {
+    category: "architecture",
+    defaultQuestion: (g) =>
+      `What system design decisions or architectural patterns are needed for: "${g}"?`,
+  },
+  {
+    category: "security",
+    defaultQuestion: (g) =>
+      `What security requirements, threat vectors, or access-control rules apply to: "${g}"?`,
+  },
+  {
+    category: "infrastructure",
+    defaultQuestion: (g) =>
+      `What hosting, deployment, scaling, or operational infrastructure is required for: "${g}"?`,
+  },
+  {
+    category: "integration",
+    defaultQuestion: (g) =>
+      `What external services, APIs, or third-party systems must be integrated to achieve: "${g}"?`,
+  },
+  {
+    category: "data_model",
+    defaultQuestion: (g) =>
+      `What data structures, storage schemas, or persistence strategies are needed for: "${g}"?`,
+  },
+  {
+    category: "operational",
+    defaultQuestion: (g) =>
+      `What monitoring, logging, alerting, or on-call requirements exist for: "${g}"?`,
+  },
+  {
+    category: "ux",
+    defaultQuestion: (g) =>
+      `What user experience, accessibility, or interface design considerations apply to: "${g}"?`,
+  },
+];
+
 // --- Tool factory ---
 
 /**
@@ -310,54 +358,6 @@ export function createPlanningTools(token: string, planningStore: PlanningStore)
     },
   };
 
-  // --- Research category definitions ---
-
-  const RESEARCH_CATEGORIES: Array<{
-    category: ResearchItem["category"];
-    defaultQuestion: (goalSummary: string) => string;
-  }> = [
-    {
-      category: "domain",
-      defaultQuestion: (g) =>
-        `What domain-specific knowledge, terminology, or business rules must be understood to implement: "${g}"?`,
-    },
-    {
-      category: "architecture",
-      defaultQuestion: (g) =>
-        `What system design decisions or architectural patterns are needed for: "${g}"?`,
-    },
-    {
-      category: "security",
-      defaultQuestion: (g) =>
-        `What security requirements, threat vectors, or access-control rules apply to: "${g}"?`,
-    },
-    {
-      category: "infrastructure",
-      defaultQuestion: (g) =>
-        `What hosting, deployment, scaling, or operational infrastructure is required for: "${g}"?`,
-    },
-    {
-      category: "integration",
-      defaultQuestion: (g) =>
-        `What external services, APIs, or third-party systems must be integrated to achieve: "${g}"?`,
-    },
-    {
-      category: "data_model",
-      defaultQuestion: (g) =>
-        `What data structures, storage schemas, or persistence strategies are needed for: "${g}"?`,
-    },
-    {
-      category: "operational",
-      defaultQuestion: (g) =>
-        `What monitoring, logging, alerting, or on-call requirements exist for: "${g}"?`,
-    },
-    {
-      category: "ux",
-      defaultQuestion: (g) =>
-        `What user experience, accessibility, or interface design considerations apply to: "${g}"?`,
-    },
-  ];
-
   /**
    * generate_research_checklist: Analyzes a saved goal and creates one
    * ResearchItem per category (8 total) in the planning store.
@@ -535,6 +535,10 @@ export function createPlanningTools(token: string, planningStore: PlanningStore)
 
       if (typeof args.decision === "string" && args.decision.trim().length > 0) {
         updates.decision = sanitizeText(args.decision);
+      }
+
+      if (typeof args.sourceUrl === "string" && args.sourceUrl.trim().length > 0) {
+        updates.sourceUrl = args.sourceUrl;
       }
 
       // 'resolved' is a terminal state — no transitions out of it are permitted.
