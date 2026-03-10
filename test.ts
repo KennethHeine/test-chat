@@ -991,9 +991,10 @@ async function testGetResearchUnknownGoalReturnsError(): Promise<void> {
 // 7. Research API endpoint tests (HTTP)
 // ============================================================
 
-async function testResearchGetNoAuth(): Promise<void> {
+async function testResearchGetNoAuthHeaderIsHandled(): Promise<void> {
   const res = await fetch(`${BASE}/api/goals/some-goal-id/research`);
-  // Same env-token fallback caveat as testGoalsListNoAuth
+  // Same env-token fallback caveat as testGoalsListNoAuth: missing Authorization
+  // header may be satisfied by an env-based token, so 401/404/200 are all acceptable.
   if (res.status !== 401 && res.status !== 404 && res.status !== 200) {
     throw new Error(`Expected 401, 404, or 200 (env-token fallback), got ${res.status}`);
   }
@@ -1186,7 +1187,7 @@ async function main() {
   // --- Research API tests ---
   console.log("\n── Research API Tests ──\n");
 
-  await run("GET /api/goals/:id/research returns 401 without auth", testResearchGetNoAuth);
+  await run("GET /api/goals/:id/research — no Authorization header is handled", testResearchGetNoAuthHeaderIsHandled);
   await run("GET /api/goals/:id/research returns 404 for unknown goal", testResearchGetNotFound);
   await run("GET /api/goals/:id/research returns empty array for goal with no items", testResearchGetEmptyForGoalWithNoItems);
   await run("Research seed → get round-trip", testResearchSeedAndRetrieve);
