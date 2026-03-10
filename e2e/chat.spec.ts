@@ -372,3 +372,98 @@ test.describe("goal card — authenticated", () => {
     await expect(card.locator(".goal-card-body")).toContainText("E2E test refined goal");
   });
 });
+
+// ─── Research Checklist Card ────────────────────────────────────
+
+test("research checklist card renders with correct categories and status badges", async ({ page }) => {
+  await page.goto("/");
+
+  const mockItems = [
+    { id: "r1", goalId: "g1", category: "domain", question: "What is the target user base?", status: "open", findings: "", decision: "" },
+    { id: "r2", goalId: "g1", category: "domain", question: "What regulations apply?", status: "resolved", findings: "GDPR", decision: "Implement consent flow" },
+    { id: "r3", goalId: "g1", category: "architecture", question: "Which database should we use?", status: "researching", findings: "Evaluating options", decision: "" },
+    { id: "r4", goalId: "g1", category: "security", question: "How should authentication work?", status: "open", findings: "", decision: "" },
+  ];
+
+  // Call renderResearchChecklist directly to test card rendering without a real API call
+  await page.evaluate((items) => {
+    // @ts-ignore — renderResearchChecklist is defined in app.js global scope
+    renderResearchChecklist(items);
+  }, mockItems);
+
+  // The research card should appear in the messages area
+  const card = page.locator(".research-card").first();
+  await expect(card).toBeVisible();
+
+  // Verify the header
+  await expect(card.locator(".research-card-header")).toHaveText("🔬 Research Checklist");
+
+  // Verify categories are grouped
+  const categoryGroups = card.locator(".research-category-group");
+  await expect(categoryGroups).toHaveCount(3); // domain, architecture, security
+
+  // Verify category headers
+  const catHeaders = card.locator(".research-category-header");
+  await expect(catHeaders.nth(0)).toHaveText("Domain");
+  await expect(catHeaders.nth(1)).toHaveText("Architecture");
+  await expect(catHeaders.nth(2)).toHaveText("Security");
+
+  // Verify status badges appear correctly
+  await expect(card.locator(".research-item-status.status-open").first()).toHaveText("open");
+  await expect(card.locator(".research-item-status.status-resolved").first()).toHaveText("resolved");
+  await expect(card.locator(".research-item-status.status-researching").first()).toHaveText("researching");
+
+  // Verify question text is rendered
+  await expect(card.locator(".research-item-question").first()).toContainText("What is the target user base?");
+
+  // Verify summary line
+  await expect(card.locator(".research-card-summary")).toContainText("Open: 2");
+  await expect(card.locator(".research-card-summary")).toContainText("Researching: 1");
+  await expect(card.locator(".research-card-summary")).toContainText("Resolved: 1");
+});
+
+test("SSE tool_complete event for generate_research_checklist renders checklist via handleToolComplete", async ({ page }) => {
+  await page.goto("/");
+
+  const mockResult = {
+    items: [
+      { id: "ri1", goalId: "g1", category: "architecture", question: "Should we use microservices?", status: "open", findings: "", decision: "" },
+      { id: "ri2", goalId: "g1", category: "security", question: "How to handle secrets?", status: "open", findings: "", decision: "" },
+    ],
+  };
+
+  // Simulate the SSE dispatch path: call handleToolComplete with a generate_research_checklist result
+  await page.evaluate((result) => {
+    // @ts-ignore — handleToolComplete is defined in app.js global scope
+    handleToolComplete({ type: "tool_complete", tool: "generate_research_checklist", result });
+  }, mockResult);
+
+  // The research card should be rendered
+  const card = page.locator(".research-card").first();
+  await expect(card).toBeVisible();
+  await expect(card.locator(".research-card-header")).toHaveText("🔬 Research Checklist");
+  await expect(card.locator(".research-category-header").first()).toHaveText("Architecture");
+  await expect(card.locator(".research-item-question").first()).toContainText("Should we use microservices?");
+});
+
+test("research checklist XSS prevention: question text is escaped before rendering", async ({ page }) => {
+  await page.goto("/");
+
+  const maliciousItems = [
+    { id: "xss1", goalId: "g1", category: "domain", question: '<script>window.__xss_executed=true</script>Malicious question', status: "open", findings: "", decision: "" },
+  ];
+
+  await page.evaluate((items) => {
+    // @ts-ignore
+    renderResearchChecklist(items);
+  }, maliciousItems);
+
+  // XSS script should NOT have executed
+  const xssExecuted = await page.evaluate(() => (window as any).__xss_executed);
+  expect(xssExecuted).toBeFalsy();
+
+  // The raw text content should appear escaped (not executed) in the DOM
+  const card = page.locator(".research-card").first();
+  await expect(card).toBeVisible();
+  await expect(card.locator(".research-item-question").first()).toContainText("Malicious question");
+});

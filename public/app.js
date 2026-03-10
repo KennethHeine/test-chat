@@ -442,6 +442,7 @@ function hideToolActivity() {
  * Extracted so it can be called from both the streaming loop and tests.
  * For save_goal, renders the goal summary card using the result data when present,
  * or falls back to fetching the latest goal from the API.
+ * For generate_research_checklist, renders the categorized research checklist.
  * @param {Object} event - The parsed tool_complete SSE event
  */
 function handleToolComplete(event) {
@@ -452,6 +453,12 @@ function handleToolComplete(event) {
     } else {
       // Fallback: fetch the latest goal if result wasn't included in the event
       fetchAndRenderLatestGoal();
+    }
+  }
+  // When generate_research_checklist completes, render the research checklist
+  if (event.tool === "generate_research_checklist") {
+    if (event.result && Array.isArray(event.result.items)) {
+      renderResearchChecklist(event.result.items);
     }
   }
   hideToolActivity();
@@ -849,4 +856,103 @@ async function fetchAndRenderLatestGoal() {
   } catch (err) {
     console.warn("Failed to fetch goal for card rendering:", err);
   }
+}
+
+/** Human-readable labels for each research category. */
+const CATEGORY_LABELS = {
+  domain: "Domain",
+  architecture: "Architecture",
+  security: "Security",
+  infrastructure: "Infrastructure",
+  integration: "Integration",
+  data_model: "Data Model",
+  operational: "Operational",
+  ux: "UX",
+};
+
+/**
+ * Renders a categorized research checklist card in the chat flow.
+ * All user-supplied content is inserted via textContent to prevent XSS.
+ * @param {Array} items - Array of ResearchItem objects
+ */
+function renderResearchChecklist(items) {
+  if (!items || items.length === 0) return;
+
+  const card = document.createElement("div");
+  card.className = "research-card";
+
+  // Header
+  const header = document.createElement("div");
+  header.className = "research-card-header";
+  const headerTitle = document.createElement("span");
+  headerTitle.textContent = "🔬 Research Checklist";
+  header.appendChild(headerTitle);
+  card.appendChild(header);
+
+  // Body
+  const body = document.createElement("div");
+  body.className = "research-card-body";
+
+  // Group items by category (preserving defined order)
+  const categoryOrder = ["domain", "architecture", "security", "infrastructure", "integration", "data_model", "operational", "ux"];
+  /** @type {Map<string, Array>} */
+  const grouped = new Map();
+  for (const item of items) {
+    const cat = item.category || "domain";
+    if (!grouped.has(cat)) grouped.set(cat, []);
+    grouped.get(cat).push(item);
+  }
+
+  // Render categories in defined order, then any unexpected categories
+  const orderedKeys = [...categoryOrder.filter(c => grouped.has(c)), ...Array.from(grouped.keys()).filter(c => !categoryOrder.includes(c))];
+
+  for (const category of orderedKeys) {
+    const categoryItems = grouped.get(category);
+    const group = document.createElement("div");
+    group.className = "research-category-group";
+
+    const catHeader = document.createElement("div");
+    catHeader.className = "research-category-header";
+    catHeader.textContent = CATEGORY_LABELS[category] || "Other";
+    group.appendChild(catHeader);
+
+    for (const item of categoryItems) {
+      const itemEl = document.createElement("div");
+      itemEl.className = "research-item";
+
+      const statusEl = document.createElement("span");
+      const VALID_STATUSES = ["open", "researching", "resolved"];
+      const status = VALID_STATUSES.includes(item.status) ? item.status : "open";
+      statusEl.className = "research-item-status status-" + status;
+      statusEl.textContent = status;
+      itemEl.appendChild(statusEl);
+
+      const questionEl = document.createElement("span");
+      questionEl.className = "research-item-question";
+      questionEl.textContent = item.question || "";
+      itemEl.appendChild(questionEl);
+
+      group.appendChild(itemEl);
+    }
+
+    body.appendChild(group);
+  }
+
+  // Summary line
+  const total = items.length;
+  const resolved = items.filter(i => i.status === "resolved").length;
+  const researching = items.filter(i => i.status === "researching").length;
+  const open = total - resolved - researching;
+  const summaryParts = [];
+  if (open > 0) summaryParts.push(`Open: ${open}`);
+  if (researching > 0) summaryParts.push(`Researching: ${researching}`);
+  if (resolved > 0) summaryParts.push(`Resolved: ${resolved}`);
+  const summaryEl = document.createElement("div");
+  summaryEl.className = "research-card-summary";
+  summaryEl.textContent = summaryParts.join(" · ");
+  body.appendChild(summaryEl);
+
+  card.appendChild(body);
+  messagesEl.appendChild(card);
+  messagesEl.scrollTop = messagesEl.scrollHeight;
 }
