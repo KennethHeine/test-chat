@@ -641,6 +641,224 @@ async function testGetGoalEmptyIdReturnsError(): Promise<void> {
   if (!result.error) throw new Error("Expected error for empty goalId");
 }
 
+async function testGenerateResearchChecklistSavesAllCategories(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const tools = createPlanningTools("test-token", store);
+  const saveGoal = tools.find((t) => t.name === "save_goal")!;
+  const generateChecklist = tools.find((t) => t.name === "generate_research_checklist")!;
+
+  // First save a goal to get a valid goalId
+  const savedGoalResult: any = await saveGoal.handler(makeValidSaveGoalArgs(), STUB_INVOCATION);
+  const goalId = savedGoalResult.goal.id;
+  const sessionId = savedGoalResult.goal.sessionId;
+
+  const allCategories = ["domain", "architecture", "security", "infrastructure", "integration", "data_model", "operational", "ux"];
+  const items = allCategories.map((cat) => ({ category: cat, question: `What are the ${cat} concerns?` }));
+
+  const result: any = await generateChecklist.handler({ goalId, sessionId, items }, STUB_INVOCATION);
+  if (!result.items) throw new Error("Expected items in result");
+  if (result.items.length !== 8) throw new Error(`Expected 8 items, got ${result.items.length}`);
+
+  const savedCategories = result.items.map((i: any) => i.category).sort();
+  const expectedCategories = [...allCategories].sort();
+  if (JSON.stringify(savedCategories) !== JSON.stringify(expectedCategories)) {
+    throw new Error(`Category mismatch. Got: ${savedCategories}`);
+  }
+
+  // Verify all items have status "open"
+  for (const item of result.items) {
+    if (item.status !== "open") throw new Error(`Expected status "open", got "${item.status}"`);
+    if (!item.id) throw new Error("Expected generated id on research item");
+    if (item.goalId !== goalId) throw new Error("goalId mismatch on research item");
+  }
+}
+
+async function testGenerateResearchChecklistFlagsSecurityItems(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const tools = createPlanningTools("test-token", store);
+  const saveGoal = tools.find((t) => t.name === "save_goal")!;
+  const generateChecklist = tools.find((t) => t.name === "generate_research_checklist")!;
+
+  const savedGoalResult: any = await saveGoal.handler(makeValidSaveGoalArgs(), STUB_INVOCATION);
+  const goalId = savedGoalResult.goal.id;
+  const sessionId = savedGoalResult.goal.sessionId;
+
+  const items = [
+    { category: "security", question: "What authentication mechanism should be used?" },
+    { category: "domain", question: "What is the target user base?" },
+  ];
+
+  const result: any = await generateChecklist.handler({ goalId, sessionId, items }, STUB_INVOCATION);
+  if (!result.securityReviewRequired) throw new Error("Expected securityReviewRequired flag");
+  if (!Array.isArray(result.securityItemIds) || result.securityItemIds.length !== 1) {
+    throw new Error("Expected exactly 1 security item ID");
+  }
+  if (!result.securityNote) throw new Error("Expected securityNote in result");
+}
+
+async function testGenerateResearchChecklistWrongSessionReturnsError(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const tools = createPlanningTools("test-token", store);
+  const saveGoal = tools.find((t) => t.name === "save_goal")!;
+  const generateChecklist = tools.find((t) => t.name === "generate_research_checklist")!;
+
+  const savedGoalResult: any = await saveGoal.handler(makeValidSaveGoalArgs(), STUB_INVOCATION);
+  const goalId = savedGoalResult.goal.id;
+
+  const items = [{ category: "domain", question: "What is the domain?" }];
+  const result: any = await generateChecklist.handler({ goalId, sessionId: "wrong-session", items }, STUB_INVOCATION);
+  if (!result.error) throw new Error("Expected error for wrong sessionId");
+}
+
+async function testGenerateResearchChecklistInvalidCategoryReturnsError(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const tools = createPlanningTools("test-token", store);
+  const saveGoal = tools.find((t) => t.name === "save_goal")!;
+  const generateChecklist = tools.find((t) => t.name === "generate_research_checklist")!;
+
+  const savedGoalResult: any = await saveGoal.handler(makeValidSaveGoalArgs(), STUB_INVOCATION);
+  const goalId = savedGoalResult.goal.id;
+  const sessionId = savedGoalResult.goal.sessionId;
+
+  const items = [{ category: "invalid_category", question: "Some question?" }];
+  const result: any = await generateChecklist.handler({ goalId, sessionId, items }, STUB_INVOCATION);
+  if (!result.error) throw new Error("Expected error for invalid category");
+}
+
+async function testUpdateResearchItemStatusTransition(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const tools = createPlanningTools("test-token", store);
+  const saveGoal = tools.find((t) => t.name === "save_goal")!;
+  const generateChecklist = tools.find((t) => t.name === "generate_research_checklist")!;
+  const updateItem = tools.find((t) => t.name === "update_research_item")!;
+
+  const savedGoalResult: any = await saveGoal.handler(makeValidSaveGoalArgs(), STUB_INVOCATION);
+  const goalId = savedGoalResult.goal.id;
+  const sessionId = savedGoalResult.goal.sessionId;
+
+  const genResult: any = await generateChecklist.handler({
+    goalId,
+    sessionId,
+    items: [{ category: "domain", question: "What is the domain?" }],
+  }, STUB_INVOCATION);
+  const itemId = genResult.items[0].id;
+
+  // Transition open → researching
+  const researchingResult: any = await updateItem.handler(
+    { researchItemId: itemId, goalId, sessionId, status: "researching" },
+    STUB_INVOCATION
+  );
+  if (!researchingResult.item) throw new Error("Expected item in result");
+  if (researchingResult.item.status !== "researching") throw new Error("Expected status researching");
+
+  // Transition researching → resolved with findings
+  const resolvedResult: any = await updateItem.handler(
+    {
+      researchItemId: itemId,
+      goalId,
+      sessionId,
+      status: "resolved",
+      findings: "The domain is task management for software teams.",
+      decision: "Proceed with a Kanban-style approach.",
+    },
+    STUB_INVOCATION
+  );
+  if (!resolvedResult.item) throw new Error("Expected item in result");
+  if (resolvedResult.item.status !== "resolved") throw new Error("Expected status resolved");
+  if (!resolvedResult.item.findings) throw new Error("Expected findings on resolved item");
+  if (!resolvedResult.item.decision) throw new Error("Expected decision on resolved item");
+  if (!resolvedResult.item.resolvedAt) throw new Error("Expected resolvedAt on resolved item");
+}
+
+async function testUpdateResearchItemWrongSessionReturnsError(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const tools = createPlanningTools("test-token", store);
+  const saveGoal = tools.find((t) => t.name === "save_goal")!;
+  const generateChecklist = tools.find((t) => t.name === "generate_research_checklist")!;
+  const updateItem = tools.find((t) => t.name === "update_research_item")!;
+
+  const savedGoalResult: any = await saveGoal.handler(makeValidSaveGoalArgs(), STUB_INVOCATION);
+  const goalId = savedGoalResult.goal.id;
+  const sessionId = savedGoalResult.goal.sessionId;
+
+  const genResult: any = await generateChecklist.handler({
+    goalId,
+    sessionId,
+    items: [{ category: "domain", question: "What is the domain?" }],
+  }, STUB_INVOCATION);
+  const itemId = genResult.items[0].id;
+
+  const result: any = await updateItem.handler(
+    { researchItemId: itemId, goalId, sessionId: "wrong-session", status: "researching" },
+    STUB_INVOCATION
+  );
+  if (!result.error) throw new Error("Expected error for wrong sessionId");
+}
+
+async function testUpdateResearchItemInvalidStatusReturnsError(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const tools = createPlanningTools("test-token", store);
+  const saveGoal = tools.find((t) => t.name === "save_goal")!;
+  const generateChecklist = tools.find((t) => t.name === "generate_research_checklist")!;
+  const updateItem = tools.find((t) => t.name === "update_research_item")!;
+
+  const savedGoalResult: any = await saveGoal.handler(makeValidSaveGoalArgs(), STUB_INVOCATION);
+  const goalId = savedGoalResult.goal.id;
+  const sessionId = savedGoalResult.goal.sessionId;
+
+  const genResult: any = await generateChecklist.handler({
+    goalId,
+    sessionId,
+    items: [{ category: "domain", question: "What is the domain?" }],
+  }, STUB_INVOCATION);
+  const itemId = genResult.items[0].id;
+
+  const result: any = await updateItem.handler(
+    { researchItemId: itemId, goalId, sessionId, status: "invalid_status" },
+    STUB_INVOCATION
+  );
+  if (!result.error) throw new Error("Expected error for invalid status");
+}
+
+async function testGetResearchReturnsItems(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const tools = createPlanningTools("test-token", store);
+  const saveGoal = tools.find((t) => t.name === "save_goal")!;
+  const generateChecklist = tools.find((t) => t.name === "generate_research_checklist")!;
+  const getResearch = tools.find((t) => t.name === "get_research")!;
+
+  const savedGoalResult: any = await saveGoal.handler(makeValidSaveGoalArgs(), STUB_INVOCATION);
+  const goalId = savedGoalResult.goal.id;
+  const sessionId = savedGoalResult.goal.sessionId;
+
+  await generateChecklist.handler({
+    goalId,
+    sessionId,
+    items: [
+      { category: "domain", question: "What is the domain?" },
+      { category: "architecture", question: "What architecture pattern to use?" },
+    ],
+  }, STUB_INVOCATION);
+
+  const result: any = await getResearch.handler({ goalId, sessionId }, STUB_INVOCATION);
+  if (!result.items) throw new Error("Expected items in result");
+  if (result.items.length !== 2) throw new Error(`Expected 2 items, got ${result.items.length}`);
+  if (result.goalId !== goalId) throw new Error("goalId mismatch in get_research result");
+}
+
+async function testGetResearchWrongSessionReturnsError(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const tools = createPlanningTools("test-token", store);
+  const saveGoal = tools.find((t) => t.name === "save_goal")!;
+  const getResearch = tools.find((t) => t.name === "get_research")!;
+
+  const savedGoalResult: any = await saveGoal.handler(makeValidSaveGoalArgs(), STUB_INVOCATION);
+  const goalId = savedGoalResult.goal.id;
+
+  const result: any = await getResearch.handler({ goalId, sessionId: "wrong-session" }, STUB_INVOCATION);
+  if (!result.error) throw new Error("Expected error for wrong sessionId");
+}
+
 // ============================================================
 // Main
 // ============================================================
@@ -721,7 +939,7 @@ async function main() {
   // --- Planning tools tests ---
   console.log("\n── Planning Tools Tests ──\n");
 
-  await run("Planning tools: all 3 tools registered with correct names", testPlanningToolRegistration);
+  await run("Planning tools: all 6 tools registered with correct names", testPlanningToolRegistration);
   await run("define_goal: returns structured template from raw intent", testDefineGoalReturnsTemplate);
   await run("define_goal: empty intent returns validation error", testDefineGoalEmptyIntentReturnsError);
   await run("save_goal: valid data returns goal with generated ID and timestamps", testSaveGoalValidDataReturnsGoalWithId);
@@ -731,6 +949,15 @@ async function main() {
   await run("get_goal: wrong sessionId returns error (ownership check)", testGetGoalWrongSessionIdReturnsError);
   await run("get_goal: non-existent ID returns error", testGetGoalNonExistentIdReturnsError);
   await run("get_goal: empty goalId returns validation error", testGetGoalEmptyIdReturnsError);
+  await run("generate_research_checklist: saves items across all 8 categories", testGenerateResearchChecklistSavesAllCategories);
+  await run("generate_research_checklist: flags security-category items for human review", testGenerateResearchChecklistFlagsSecurityItems);
+  await run("generate_research_checklist: wrong sessionId returns error", testGenerateResearchChecklistWrongSessionReturnsError);
+  await run("generate_research_checklist: invalid category returns validation error", testGenerateResearchChecklistInvalidCategoryReturnsError);
+  await run("update_research_item: status transition open → researching → resolved with findings", testUpdateResearchItemStatusTransition);
+  await run("update_research_item: wrong sessionId returns error (ownership check)", testUpdateResearchItemWrongSessionReturnsError);
+  await run("update_research_item: invalid status returns validation error", testUpdateResearchItemInvalidStatusReturnsError);
+  await run("get_research: returns all research items for a goal", testGetResearchReturnsItems);
+  await run("get_research: wrong sessionId returns error (ownership check)", testGetResearchWrongSessionReturnsError);
 
   // --- Summary ---
   console.log("\n═══════════════════════════════════════════════");
