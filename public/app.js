@@ -454,6 +454,14 @@ function handleToolComplete(event) {
       fetchAndRenderLatestGoal();
     }
   }
+  // When generate_research_checklist completes, render the research checklist
+  if (event.tool === "generate_research_checklist") {
+    if (event.result && event.result.goalId && event.result.items) {
+      renderResearchChecklist(event.result.goalId, event.result.items);
+    } else if (event.result && event.result.goalId) {
+      fetchAndRenderResearchChecklist(event.result.goalId);
+    }
+  }
   hideToolActivity();
 }
 
@@ -848,5 +856,138 @@ async function fetchAndRenderLatestGoal() {
     }
   } catch (err) {
     console.warn("Failed to fetch goal for card rendering:", err);
+  }
+}
+
+// --- Research Checklist Rendering ---
+
+const RESEARCH_CATEGORY_LABELS = {
+  domain: "Domain",
+  architecture: "Architecture",
+  security: "Security",
+  infrastructure: "Infrastructure",
+  integration: "Integration",
+  data_model: "Data Model",
+  operational: "Operational",
+  ux: "UX",
+};
+
+const RESEARCH_CATEGORY_ORDER = [
+  "domain", "architecture", "security", "infrastructure",
+  "integration", "data_model", "operational", "ux",
+];
+
+/**
+ * Renders a research checklist card in the chat flow.
+ * All user-supplied content is inserted via textContent to prevent XSS.
+ * @param {string} goalId - The goal ID this checklist belongs to
+ * @param {Array} items - Array of ResearchItem objects
+ */
+function renderResearchChecklist(goalId, items) {
+  const card = document.createElement("div");
+  card.className = "research-checklist-card";
+  card.setAttribute("data-goal-id", goalId || "");
+
+  // Header
+  const header = document.createElement("div");
+  header.className = "research-checklist-header";
+  const headerTitle = document.createElement("span");
+  headerTitle.textContent = "🔬 Research Checklist";
+  header.appendChild(headerTitle);
+  const headerCount = document.createElement("span");
+  headerCount.className = "research-checklist-count";
+  headerCount.textContent = `${items.length} item${items.length === 1 ? "" : "s"}`;
+  header.appendChild(headerCount);
+  card.appendChild(header);
+
+  // Body
+  const body = document.createElement("div");
+  body.className = "research-checklist-body";
+
+  // Group items by category
+  const grouped = {};
+  for (const item of items) {
+    if (!grouped[item.category]) grouped[item.category] = [];
+    grouped[item.category].push(item);
+  }
+
+  // Render each category in the defined order
+  for (const category of RESEARCH_CATEGORY_ORDER) {
+    const categoryItems = grouped[category];
+    if (!categoryItems || categoryItems.length === 0) continue;
+
+    const section = document.createElement("div");
+    section.className = "research-checklist-category";
+
+    const catLabel = document.createElement("div");
+    catLabel.className = "research-checklist-category-label";
+    catLabel.textContent = RESEARCH_CATEGORY_LABELS[category] || category;
+    section.appendChild(catLabel);
+
+    for (const item of categoryItems) {
+      const safeStatus = ["open", "researching", "resolved"].includes(item.status)
+        ? item.status
+        : "open";
+      const itemEl = document.createElement("div");
+      itemEl.className = `research-checklist-item research-checklist-item--${safeStatus}`;
+      itemEl.setAttribute("data-item-id", item.id || "");
+
+      const statusEl = document.createElement("span");
+      statusEl.className = "research-checklist-status";
+      if (safeStatus === "resolved") {
+        statusEl.textContent = "✓";
+        statusEl.setAttribute("aria-label", "Resolved");
+      } else if (safeStatus === "researching") {
+        statusEl.textContent = "◑";
+        statusEl.setAttribute("aria-label", "Researching");
+      } else {
+        statusEl.textContent = "○";
+        statusEl.setAttribute("aria-label", "Open");
+      }
+
+      const questionEl = document.createElement("span");
+      questionEl.className = "research-checklist-question";
+      questionEl.textContent = item.question || "";
+
+      itemEl.appendChild(statusEl);
+      itemEl.appendChild(questionEl);
+
+      // Show findings if present
+      if (item.findings) {
+        const findingsEl = document.createElement("div");
+        findingsEl.className = "research-checklist-findings";
+        findingsEl.textContent = item.findings;
+        itemEl.appendChild(findingsEl);
+      }
+
+      section.appendChild(itemEl);
+    }
+
+    body.appendChild(section);
+  }
+
+  card.appendChild(body);
+  messagesEl.appendChild(card);
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+
+/**
+ * Fetches research items for a goal from the API and renders them as a checklist.
+ * Used as a fallback when the generate_research_checklist tool result isn't in the SSE event.
+ * @param {string} goalId - The goal ID to fetch research items for
+ */
+async function fetchAndRenderResearchChecklist(goalId) {
+  if (!goalId) return;
+  try {
+    const res = await fetch(`/api/goals/${encodeURIComponent(goalId)}/research`, {
+      headers: authHeaders(),
+    });
+    if (!res.ok) return;
+    const data = await res.json();
+    if (data.items && data.items.length > 0) {
+      renderResearchChecklist(goalId, data.items);
+    }
+  } catch (err) {
+    console.warn("Failed to fetch research checklist:", err);
   }
 }

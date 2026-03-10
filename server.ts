@@ -396,6 +396,21 @@ app.post("/api/chat", async (req: Request, res: Response) => {
             // result content isn't JSON — skip enrichment
           }
         }
+        // For generate_research_checklist, parse the result to extract items + goalId for the frontend checklist
+        if (toolName === "generate_research_checklist" && event.data?.result?.content) {
+          try {
+            const parsed = JSON.parse(event.data.result.content) as {
+              items?: Array<{ goalId?: string }>;
+              error?: string;
+            };
+            if (Array.isArray(parsed.items) && parsed.items.length > 0 && !parsed.error) {
+              const goalId = parsed.items[0].goalId ?? null;
+              payload.result = { goalId, items: parsed.items };
+            }
+          } catch {
+            // result content isn't JSON — skip enrichment
+          }
+        }
         res.write(`data: ${JSON.stringify(payload)}\n\n`);
       })
     );

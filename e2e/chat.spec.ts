@@ -372,3 +372,162 @@ test.describe("goal card — authenticated", () => {
     await expect(card.locator(".goal-card-body")).toContainText("E2E test refined goal");
   });
 });
+
+// ─── Research Checklist ────────────────────────────────────────
+
+test("research checklist renders with status indicators when renderResearchChecklist is called", async ({ page }) => {
+  await page.goto("/");
+
+  const mockItems = [
+    {
+      id: "ri-domain-1",
+      goalId: "goal-e2e-research",
+      category: "domain",
+      question: "What are the main business domain entities?",
+      status: "open",
+      findings: "",
+      decision: "",
+    },
+    {
+      id: "ri-arch-1",
+      goalId: "goal-e2e-research",
+      category: "architecture",
+      question: "What is the preferred system architecture?",
+      status: "researching",
+      findings: "Evaluating microservices vs monolith",
+      decision: "",
+    },
+    {
+      id: "ri-security-1",
+      goalId: "goal-e2e-research",
+      category: "security",
+      question: "What authentication mechanism is required?",
+      status: "resolved",
+      findings: "OAuth2 is the standard in the org",
+      decision: "Use OAuth2 with JWT tokens",
+    },
+  ];
+
+  // Directly call renderResearchChecklist via page.evaluate to test rendering without a real API call
+  await page.evaluate(({ goalId, items }) => {
+    // @ts-ignore — renderResearchChecklist is defined in app.js global scope
+    renderResearchChecklist(goalId, items);
+  }, { goalId: "goal-e2e-research", items: mockItems });
+
+  // The research checklist card should appear in the messages area
+  const card = page.locator(".research-checklist-card").first();
+  await expect(card).toBeVisible();
+
+  // Verify the header title and item count
+  await expect(card.locator(".research-checklist-header")).toContainText("🔬 Research Checklist");
+  await expect(card.locator(".research-checklist-count")).toContainText("3 items");
+
+  // Verify goal ID is attached to the card element
+  await expect(card).toHaveAttribute("data-goal-id", "goal-e2e-research");
+
+  // Verify category labels appear (domain first in the defined order)
+  const categoryLabels = card.locator(".research-checklist-category-label");
+  await expect(categoryLabels.first()).toContainText("Domain");
+
+  // Verify open status indicator
+  const openItem = card.locator(".research-checklist-item--open").first();
+  await expect(openItem).toBeVisible();
+  await expect(openItem.locator(".research-checklist-status")).toContainText("○");
+  await expect(openItem.locator(".research-checklist-question")).toContainText(
+    "What are the main business domain entities?"
+  );
+
+  // Verify researching status indicator
+  const researchingItem = card.locator(".research-checklist-item--researching").first();
+  await expect(researchingItem).toBeVisible();
+  await expect(researchingItem.locator(".research-checklist-status")).toContainText("◑");
+  await expect(researchingItem.locator(".research-checklist-question")).toContainText(
+    "What is the preferred system architecture?"
+  );
+  // Findings should be shown for in-progress item
+  await expect(researchingItem.locator(".research-checklist-findings")).toContainText(
+    "Evaluating microservices vs monolith"
+  );
+
+  // Verify resolved status indicator
+  const resolvedItem = card.locator(".research-checklist-item--resolved").first();
+  await expect(resolvedItem).toBeVisible();
+  await expect(resolvedItem.locator(".research-checklist-status")).toContainText("✓");
+  await expect(resolvedItem.locator(".research-checklist-question")).toContainText(
+    "What authentication mechanism is required?"
+  );
+});
+
+test("SSE tool_complete for generate_research_checklist triggers checklist rendering via handleToolComplete", async ({ page }) => {
+  await page.goto("/");
+
+  const mockItems = [
+    {
+      id: "ri-sse-1",
+      goalId: "goal-sse-research",
+      category: "domain",
+      question: "What domain concepts matter most?",
+      status: "open",
+      findings: "",
+      decision: "",
+    },
+    {
+      id: "ri-sse-2",
+      goalId: "goal-sse-research",
+      category: "security",
+      question: "What are the key security requirements?",
+      status: "open",
+      findings: "",
+      decision: "",
+    },
+  ];
+
+  // Simulate the SSE dispatch path: call handleToolComplete with a generate_research_checklist result
+  await page.evaluate(({ items }) => {
+    // @ts-ignore — handleToolComplete is defined in app.js global scope
+    handleToolComplete({
+      type: "tool_complete",
+      tool: "generate_research_checklist",
+      result: { goalId: "goal-sse-research", items },
+    });
+  }, { items: mockItems });
+
+  // The research checklist card should be rendered
+  const card = page.locator(".research-checklist-card[data-goal-id='goal-sse-research']");
+  await expect(card).toBeVisible();
+  await expect(card.locator(".research-checklist-header")).toContainText("🔬 Research Checklist");
+  await expect(card.locator(".research-checklist-count")).toContainText("2 items");
+  await expect(card.locator(".research-checklist-item")).toHaveCount(2);
+});
+
+test("research checklist XSS prevention: content is escaped before rendering", async ({ page }) => {
+  await page.goto("/");
+
+  const xssItems = [
+    {
+      id: "ri-xss-1",
+      goalId: "goal-xss-test",
+      category: "security",
+      question: "<script>window.__xss_executed = true;</script>Malicious question",
+      status: "open",
+      findings: "<img src=x onerror='window.__xss_findings=true'>",
+      decision: "",
+    },
+  ];
+
+  await page.evaluate(({ goalId, items }) => {
+    // @ts-ignore — renderResearchChecklist is defined in app.js global scope
+    renderResearchChecklist(goalId, items);
+  }, { goalId: "goal-xss-test", items: xssItems });
+
+  // Scripts should not have executed
+  const xssExecuted = await page.evaluate(() => (window as any).__xss_executed);
+  const xssFindings = await page.evaluate(() => (window as any).__xss_findings);
+  expect(xssExecuted).toBeFalsy();
+  expect(xssFindings).toBeFalsy();
+
+  // Content should appear as plain text, not parsed HTML
+  const card = page.locator(".research-checklist-card[data-goal-id='goal-xss-test']");
+  await expect(card).toBeVisible();
+  await expect(card.locator(".research-checklist-question")).toContainText("<script>");
+});
