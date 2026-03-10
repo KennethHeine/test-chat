@@ -619,6 +619,112 @@
         font-size: 13px;
       }
     }
+
+    /* Research Checklist Card */
+    .research-card {
+      align-self: flex-start;
+      max-width: 80%;
+      border: 1px solid var(--color-accent);
+      border-radius: 10px;
+      overflow: hidden;
+      font-size: 14px;
+      line-height: 1.5;
+      word-wrap: break-word;
+    }
+
+    .research-card-header {
+      background: var(--color-accent-emphasis);
+      color: #fff;
+      padding: 8px 14px;
+      font-weight: 600;
+      font-size: 14px;
+      letter-spacing: 0.2px;
+    }
+
+    .research-card-body {
+      background: var(--color-assistant-bubble);
+      padding: 12px 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .research-category-group {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .research-category-header {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--color-text-muted);
+      border-bottom: 1px solid var(--color-border);
+      padding-bottom: 4px;
+    }
+
+    .research-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      padding: 4px 0;
+    }
+
+    .research-item-status {
+      flex-shrink: 0;
+      font-size: 11px;
+      font-weight: 600;
+      padding: 2px 6px;
+      border-radius: 4px;
+      text-transform: uppercase;
+      letter-spacing: 0.3px;
+    }
+
+    .research-item-status.status-open {
+      background: var(--color-bg-tertiary);
+      color: var(--color-text-muted);
+      border: 1px solid var(--color-border);
+    }
+
+    .research-item-status.status-researching {
+      background: rgba(88, 166, 255, 0.15);
+      color: var(--color-accent);
+      border: 1px solid var(--color-accent);
+    }
+
+    .research-item-status.status-resolved {
+      background: rgba(63, 185, 80, 0.15);
+      color: var(--color-success);
+      border: 1px solid var(--color-success);
+    }
+
+    .research-item-question {
+      color: var(--color-text);
+      flex: 1;
+    }
+
+    .research-card-summary {
+      font-size: 12px;
+      color: var(--color-text-muted);
+      border-top: 1px solid var(--color-border);
+      padding-top: 8px;
+      margin-top: 2px;
+    }
+
+    @media (max-width: 768px) {
+      .research-card {
+        max-width: 92%;
+      }
+    }
+
+    @media (max-width: 480px) {
+      .research-card {
+        max-width: 96%;
+        font-size: 13px;
+      }
+    }
   </style>
 </head>
 <body>

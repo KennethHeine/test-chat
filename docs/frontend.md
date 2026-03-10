@@ -112,7 +112,7 @@ Buffering handles partial lines that may arrive split across network chunks.
 |------------|-------------------|
 | `delta` | Appends content to the assistant message bubble |
 | `tool_start` | Shows tool activity indicator with tool name |
-| `tool_complete` | Removes tool activity indicator |
+| `tool_complete` | Removes tool activity indicator; for `save_goal` events renders a goal summary card in chat (or fetches the latest goal as fallback); for `generate_research_checklist` events renders a categorized research checklist card with status badges |
 | `title` | Updates session title in sidebar |
 | `usage` | Displays token count (inputTokens + outputTokens) in status bar |
 | `done` | Stores `sessionId`, removes typing indicator, enables send button |
