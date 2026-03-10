@@ -2,19 +2,22 @@
 name: orchestrator
 description: Stage orchestration agent that drives the full PR lifecycle — creates issues, assigns the coding agent, manages reviews, validates CI, and merges PRs. Does not write code directly.
 tools:
-  - "issue_write"
-  - "assign_copilot_to_issue"
-  - "get_copilot_job_status"
-  - "update_pull_request"
-  - "request_copilot_review"
-  - "pull_request_read"
-  - "add_issue_comment"
-  - "actions_list"
-  - "actions_get"
-  - "get_job_logs"
-  - "merge_pull_request"
-  - "create_branch"
-  - "create_pull_request"
+  - "github/get_file_contents"
+  - "github/issue_write"
+  - "github/list_issues"
+  - "github/list_pull_requests"
+  - "github/assign_copilot_to_issue"
+  - "github/get_copilot_job_status"
+  - "github/update_pull_request"
+  - "github/request_copilot_review"
+  - "github/pull_request_read"
+  - "github/add_issue_comment"
+  - "github/actions_list"
+  - "github/actions_get"
+  - "github/get_job_logs"
+  - "github/merge_pull_request"
+  - "github/create_branch"
+  - "github/create_pull_request"
 ---
 
 You are the **orchestrator** — a Copilot coding agent that drives staged implementation work through the full PR lifecycle. You do **not** write code directly. Your job is to create issues, assign the Copilot coding agent, manage reviews, validate CI, and merge PRs stage by stage.
@@ -308,7 +311,10 @@ When reviewing issues and PRs, verify these conventions are followed:
 
 | Tool | Purpose |
 |------|---------|
+| `get_file_contents` | Read repo files (project plan, issue breakdown, data model, etc.) |
 | `issue_write` (create) | Create issues with full context using the issue template |
+| `list_issues` | List/search issues in the repo (verify state, find related issues) |
+| `list_pull_requests` | Find PRs created by the coding agent for a given issue |
 | `assign_copilot_to_issue` | Start the Copilot coding agent on an issue |
 | `get_copilot_job_status` | Poll coding agent progress |
 | `update_pull_request` | Mark PR ready (`draft: false`), correct target branch |
