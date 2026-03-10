@@ -60,6 +60,10 @@ fi
 
 echo "🏷️  Adding CI labels to ${OWNER}/${REPO}#${PR} (branch: ${pr_branch})"
 
+# Record the start time BEFORE adding labels so we don't miss workflow runs
+# that start immediately when the label is added
+start_time=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
 # Track which workflows we're waiting for
 declare -a WORKFLOWS=()
 
@@ -88,9 +92,6 @@ fi
 
 # Short delay to let GitHub register the runs
 sleep 10
-
-# Record the start time (ISO 8601) to filter out stale runs
-start_time=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
 echo "⏳ Waiting for ${#WORKFLOWS[@]} workflow(s) to complete..."
 echo "   Poll interval: ${INTERVAL}s | Timeout: ${TIMEOUT}s"

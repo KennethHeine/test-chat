@@ -34,6 +34,10 @@ TIMEOUT="${POLL_TIMEOUT:-1200}"
 
 echo "🚀 Triggering ${#WORKFLOWS[@]} workflow(s) on ${OWNER}/${REPO} branch: ${BRANCH}"
 
+# Record the start time BEFORE triggering so we don't miss workflow runs
+# that start immediately
+start_time=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
 # Trigger each workflow
 for wf in "${WORKFLOWS[@]}"; do
   echo "   Triggering: ${wf}"
@@ -44,9 +48,6 @@ done
 
 # Short delay to let GitHub register the runs
 sleep 5
-
-# Record the start time (ISO 8601) to filter out stale runs
-start_time=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
 echo "⏳ Waiting for all workflows to complete..."
 echo "   Poll interval: ${INTERVAL}s | Timeout: ${TIMEOUT}s"

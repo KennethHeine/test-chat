@@ -38,13 +38,23 @@ while true; do
 
     if [ -n "$pr_json" ] && [ "$pr_json" != "null" ]; then
       pr_state=$(echo "$pr_json" | jq -r '.state')
+      pr_draft=$(echo "$pr_json" | jq -r '.isDraft')
 
-      if [ "$pr_state" = "OPEN" ] || [ "$pr_state" = "MERGED" ] || [ "$pr_state" = "CLOSED" ]; then
-        echo "✅ Copilot agent created PR #${pr_number} for issue #${ISSUE}"
+      if [ "$pr_state" = "MERGED" ] || [ "$pr_state" = "CLOSED" ]; then
+        echo "✅ PR #${pr_number} already ${pr_state} for issue #${ISSUE}"
+        exit 0
+      fi
+
+      if [ "$pr_state" = "OPEN" ] && [ "$pr_draft" = "false" ]; then
+        echo "✅ Copilot agent finished — PR #${pr_number} is open and ready for issue #${ISSUE}"
         echo "   State: ${pr_state}"
         echo "   Head branch: $(echo "$pr_json" | jq -r '.headRefName')"
-        echo "   Draft: $(echo "$pr_json" | jq -r '.isDraft')"
+        echo "   Draft: false"
         exit 0
+      fi
+
+      if [ "$pr_state" = "OPEN" ] && [ "$pr_draft" = "true" ]; then
+        echo "   ... PR #${pr_number} exists but is still draft (agent working)"
       fi
     fi
   fi
