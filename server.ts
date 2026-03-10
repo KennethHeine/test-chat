@@ -600,6 +600,39 @@ app.get("/api/goals/:id", async (req: Request, res: Response) => {
   }
 });
 
+// Get research items for a specific goal, scoped to the authenticated user
+app.get("/api/goals/:id/research", async (req: Request, res: Response) => {
+  const token = extractToken(req);
+  if (!token) {
+    res.status(401).json({ error: "Missing token. Provide Authorization: Bearer <token> header." });
+    return;
+  }
+
+  const goalId = req.params.id as string;
+
+  try {
+    const goal = await planningStore.getGoal(goalId);
+    if (!goal) {
+      res.status(404).json({ error: "Goal not found" });
+      return;
+    }
+
+    // Verify the goal belongs to the authenticated user by checking session ownership
+    const tHash = await hashToken(token);
+    const userSessions = await sessionStore.listSessions(tHash);
+    const userSessionIds = new Set(userSessions.map((s) => s.id));
+    if (!userSessionIds.has(goal.sessionId)) {
+      res.status(404).json({ error: "Goal not found" });
+      return;
+    }
+
+    const items = await planningStore.listResearchItems(goalId);
+    res.json({ items });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Failed to list research items" });
+  }
+});
+
 // Test-only: seed a goal directly into the planning store (only active when ENABLE_GOAL_SEED=true)
 if (process.env.ENABLE_GOAL_SEED === "true") {
   app.post("/api/test/seed-goal", async (req: Request, res: Response) => {
@@ -614,6 +647,21 @@ if (process.env.ENABLE_GOAL_SEED === "true") {
       res.status(201).json(created);
     } catch (err: any) {
       res.status(500).json({ error: err.message || "Failed to seed goal" });
+    }
+  });
+
+  app.post("/api/test/seed-research-item", async (req: Request, res: Response) => {
+    const token = extractToken(req);
+    if (!token) {
+      res.status(401).json({ error: "Missing token. Provide Authorization: Bearer <token> header." });
+      return;
+    }
+    try {
+      const item = req.body as import("./planning-types.js").ResearchItem;
+      const created = await planningStore.createResearchItem(item);
+      res.status(201).json(created);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Failed to seed research item" });
     }
   });
 }

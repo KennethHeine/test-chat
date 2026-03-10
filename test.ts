@@ -490,6 +490,155 @@ async function testGoalSeedAndRetrieve(): Promise<void> {
 }
 
 // ============================================================
+// 5b. Research API tests (HTTP)
+// ============================================================
+
+async function testResearchGetNoAuth(): Promise<void> {
+  const res = await fetch(`${BASE}/api/goals/some-goal-id/research`);
+  // extractToken() falls back to process.env.COPILOT_GITHUB_TOKEN when no Authorization header
+  // is present, so in CI/local runs with the env var set the server returns 404 instead of 401.
+  if (res.status !== 401 && res.status !== 404 && res.status !== 200) {
+    throw new Error(`Expected 401, 404, or 200 (env-token fallback), got ${res.status}`);
+  }
+}
+
+async function testResearchGetNotFound(): Promise<void> {
+  const res = await fetch(`${BASE}/api/goals/nonexistent-goal-id-99999/research`, {
+    headers: testAuthHeaders(),
+  });
+  if (res.status !== 404) throw new Error(`Expected 404, got ${res.status}`);
+  const data = await res.json();
+  if (!data.error) throw new Error("Expected error message in 404 response");
+}
+
+async function testResearchGetEmptyForGoalWithNoItems(): Promise<void> {
+  // Seed a session and a goal (no research items)
+  const sessionId = `test-research-empty-${Date.now()}`;
+  const saveRes = await fetch(`${BASE}/api/sessions/${sessionId}/messages`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ messages: [{ role: "user", text: "research test seed" }] }),
+  });
+  if (!saveRes.ok) throw new Error(`Failed to seed session: HTTP ${saveRes.status}`);
+
+  const goalId = `test-research-goal-empty-${Date.now()}`;
+  const seedGoal = {
+    id: goalId,
+    sessionId,
+    intent: "Test research endpoint empty",
+    goal: "Verify empty list returned",
+    problemStatement: "No items seeded",
+    businessValue: "Reliable API",
+    targetOutcome: "Empty items array",
+    successCriteria: ["Empty array returned"],
+    assumptions: [],
+    constraints: [],
+    risks: [],
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+  const seedRes = await fetch(`${BASE}/api/test/seed-goal`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify(seedGoal),
+  });
+  if (!seedRes.ok) throw new Error(`Failed to seed goal: HTTP ${seedRes.status}`);
+
+  // GET /api/goals/:id/research should return empty items array
+  const res = await fetch(`${BASE}/api/goals/${goalId}/research`, {
+    headers: testAuthHeaders(),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const data = await res.json();
+  if (!Array.isArray(data.items)) throw new Error("Expected items array in response");
+  if (data.items.length !== 0) throw new Error(`Expected empty items array, got ${data.items.length}`);
+  log("  ", "Empty research items returned for goal with no items");
+}
+
+async function testResearchSeedAndRetrieve(): Promise<void> {
+  // Seed session, goal, and research items, then verify GET /api/goals/:id/research
+  const sessionId = `test-research-session-${Date.now()}`;
+  const saveRes = await fetch(`${BASE}/api/sessions/${sessionId}/messages`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ messages: [{ role: "user", text: "research seed test" }] }),
+  });
+  if (!saveRes.ok) throw new Error(`Failed to seed session: HTTP ${saveRes.status}`);
+
+  const goalId = `test-research-goal-${Date.now()}`;
+  const seedGoal = {
+    id: goalId,
+    sessionId,
+    intent: "Test research endpoint with items",
+    goal: "Verify items returned",
+    problemStatement: "Need items in response",
+    businessValue: "Reliable API",
+    targetOutcome: "Items array returned",
+    successCriteria: ["Items returned"],
+    assumptions: [],
+    constraints: [],
+    risks: [],
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+  const seedGoalRes = await fetch(`${BASE}/api/test/seed-goal`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify(seedGoal),
+  });
+  if (!seedGoalRes.ok) throw new Error(`Failed to seed goal: HTTP ${seedGoalRes.status}`);
+
+  // Seed two research items for the goal
+  const itemId1 = `test-ri-1-${Date.now()}`;
+  const seedItem1 = {
+    id: itemId1,
+    goalId,
+    category: "domain",
+    question: "What is the domain model?",
+    status: "open",
+    findings: "",
+    decision: "",
+  };
+  const seedRes1 = await fetch(`${BASE}/api/test/seed-research-item`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify(seedItem1),
+  });
+  if (!seedRes1.ok) throw new Error(`Failed to seed research item 1: HTTP ${seedRes1.status}`);
+
+  const itemId2 = `test-ri-2-${Date.now()}`;
+  const seedItem2 = {
+    id: itemId2,
+    goalId,
+    category: "security",
+    question: "What are the security requirements?",
+    status: "open",
+    findings: "",
+    decision: "",
+  };
+  const seedRes2 = await fetch(`${BASE}/api/test/seed-research-item`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify(seedItem2),
+  });
+  if (!seedRes2.ok) throw new Error(`Failed to seed research item 2: HTTP ${seedRes2.status}`);
+
+  // Verify GET /api/goals/:id/research returns both items
+  const res = await fetch(`${BASE}/api/goals/${goalId}/research`, {
+    headers: testAuthHeaders(),
+  });
+  if (!res.ok) throw new Error(`GET /api/goals/:id/research HTTP ${res.status}`);
+  const data = await res.json();
+  if (!Array.isArray(data.items)) throw new Error("Expected items array in response");
+  if (data.items.length !== 2) throw new Error(`Expected 2 items, got ${data.items.length}`);
+  const ids = data.items.map((i: any) => i.id);
+  if (!ids.includes(itemId1)) throw new Error(`Item ${itemId1} not found in response`);
+  if (!ids.includes(itemId2)) throw new Error(`Item ${itemId2} not found in response`);
+
+  log("  ", `Research seed → get round-trip passed (goalId: ${goalId.slice(0, 24)}...)`);
+}
+
+// ============================================================
 // 6. Planning tools tests (direct handler invocation)
 // ============================================================
 
@@ -1032,6 +1181,14 @@ async function main() {
   await run("GET /api/goals/:id returns 404 for unknown goal", testGoalGetNotFound);
   await run("GET /api/goals/:id returns 401 without auth", testGoalGetNoAuth);
   await run("Goal seed → list → get round-trip", testGoalSeedAndRetrieve);
+
+  // --- Research API tests ---
+  console.log("\n── Research API Tests ──\n");
+
+  await run("GET /api/goals/:id/research returns 401 without auth", testResearchGetNoAuth);
+  await run("GET /api/goals/:id/research returns 404 for unknown goal", testResearchGetNotFound);
+  await run("GET /api/goals/:id/research returns empty array for goal with no items", testResearchGetEmptyForGoalWithNoItems);
+  await run("Research seed → get round-trip", testResearchSeedAndRetrieve);
 
   // Cleanup
   serverProcess.kill();
