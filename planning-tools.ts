@@ -1,10 +1,10 @@
 // Planning tools for the next-version planning workflow.
-// Provides three tools that enable the Copilot agent to guide users through
-// structured goal definition: define_goal, save_goal, and get_goal.
+// Provides tools that enable the Copilot agent to guide users through
+// structured goal definition and research workflows.
 
 import type { Tool } from "@github/copilot-sdk";
 import type { PlanningStore } from "./planning-store.js";
-import type { Goal } from "./planning-types.js";
+import type { Goal, ResearchItem } from "./planning-types.js";
 
 // --- Exported tool names for permission handler reference ---
 
@@ -12,6 +12,9 @@ export const PLANNING_TOOL_NAMES = [
   "define_goal",
   "save_goal",
   "get_goal",
+  "generate_research_checklist",
+  "update_research_item",
+  "get_research",
 ] as const;
 
 // --- Max field lengths (from planning-types.ts JSDoc) ---
@@ -22,8 +25,31 @@ const MAX_PROBLEM_STATEMENT_LENGTH = 1000;
 const MAX_BUSINESS_VALUE_LENGTH = 500;
 const MAX_TARGET_OUTCOME_LENGTH = 500;
 const MAX_SESSION_ID_LENGTH = 256;
+const MAX_QUESTION_LENGTH = 500;
+const MAX_FINDINGS_LENGTH = 2000;
+const MAX_DECISION_LENGTH = 1000;
+const MAX_ID_LENGTH = 256;
 
-// --- Validation helper ---
+// --- Research category and status constants ---
+
+const VALID_RESEARCH_CATEGORIES: ReadonlyArray<ResearchItem["category"]> = [
+  "domain",
+  "architecture",
+  "security",
+  "infrastructure",
+  "integration",
+  "data_model",
+  "operational",
+  "ux",
+];
+
+const VALID_RESEARCH_STATUSES: ReadonlyArray<ResearchItem["status"]> = [
+  "open",
+  "researching",
+  "resolved",
+];
+
+// --- Validation helpers ---
 
 /**
  * Validates a string field is a non-empty string within the max length.
@@ -39,6 +65,56 @@ function validateStringField(value: unknown, fieldName: string, maxLength: numbe
   return null;
 }
 
+/**
+ * Validates a URL string is a valid http/https URL.
+ * Returns an error message string or null if valid.
+ */
+function validateUrl(value: string, fieldName: string): string | null {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "https:" && url.protocol !== "http:") {
+      return `${fieldName} must use http or https protocol`;
+    }
+    return null;
+  } catch {
+    return `${fieldName} must be a valid URL`;
+  }
+}
+
+/**
+ * Sanitizes user-supplied text content by escaping HTML entities.
+ * Prevents stored content from being interpreted as markup.
+ */
+function sanitizeText(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#x27;");
+}
+
+/**
+ * Generates a contextual research question for the given category and goal text.
+ */
+function generateQuestionForCategory(
+  category: ResearchItem["category"],
+  goalText: string
+): string {
+  const goalExcerpt = goalText.slice(0, 100);
+  const templates: Record<ResearchItem["category"], string> = {
+    domain: `What domain-specific concepts, terminology, and business rules are essential for: ${goalExcerpt}?`,
+    architecture: `What architectural patterns and system design decisions are needed for: ${goalExcerpt}?`,
+    security: `What security requirements, threat model, and access controls apply to: ${goalExcerpt}?`,
+    infrastructure: `What hosting, deployment, and operational infrastructure is required for: ${goalExcerpt}?`,
+    integration: `What external systems, APIs, or services need to integrate with: ${goalExcerpt}?`,
+    data_model: `What data structures, storage design, and persistence strategy is needed for: ${goalExcerpt}?`,
+    operational: `What monitoring, logging, alerting, and maintenance concerns apply to: ${goalExcerpt}?`,
+    ux: `What user experience requirements, workflows, and interface design considerations apply to: ${goalExcerpt}?`,
+  };
+  return templates[category].slice(0, MAX_QUESTION_LENGTH);
+}
+
 // --- Tool factory ---
 
 /**
@@ -48,7 +124,7 @@ function validateStringField(value: unknown, fieldName: string, maxLength: numbe
  *
  * @param token - The user's GitHub PAT (reserved for future use)
  * @param planningStore - The PlanningStore instance for persisting goals
- * @returns Array of Tool objects [defineGoal, saveGoal, getGoal]
+ * @returns Array of Tool objects [defineGoal, saveGoal, getGoal, generateResearchChecklist, updateResearchItem, getResearch]
  */
 export function createPlanningTools(token: string, planningStore: PlanningStore): Tool[] {
   /**
@@ -274,5 +350,227 @@ export function createPlanningTools(token: string, planningStore: PlanningStore)
     },
   };
 
-  return [defineGoal, saveGoal, getGoal];
+  /**
+   * generate_research_checklist: Analyzes a saved goal and produces one research
+   * item per category (all 8 categories) with contextual questions derived from
+   * the goal text. Persists items via PlanningStore.
+   */
+  const generateResearchChecklist: Tool = {
+    name: "generate_research_checklist",
+    description:
+      "Analyze a saved goal and generate a structured research checklist covering all 8 categories: " +
+      "domain, architecture, security, infrastructure, integration, data_model, operational, and ux. " +
+      "Creates one research item per category with contextual questions derived from the goal. " +
+      "Requires sessionId to match the goal's owner session.",
+    parameters: {
+      type: "object",
+      properties: {
+        goalId: {
+          type: "string",
+          description: "The unique identifier of the goal to generate research items for.",
+        },
+        sessionId: {
+          type: "string",
+          description:
+            "The session identifier of the caller. Must match the goal's sessionId.",
+        },
+      },
+      required: ["goalId", "sessionId"],
+    },
+    handler: async (args: any) => {
+      const goalIdErr = validateStringField(args.goalId, "goalId", MAX_ID_LENGTH);
+      if (goalIdErr) return { error: goalIdErr };
+
+      const sessionIdErr = validateStringField(args.sessionId, "sessionId", MAX_SESSION_ID_LENGTH);
+      if (sessionIdErr) return { error: sessionIdErr };
+
+      const goal = await planningStore.getGoal(args.goalId);
+      if (!goal || goal.sessionId !== args.sessionId) {
+        return { error: `Goal not found: ${args.goalId}` };
+      }
+
+      const now = new Date().toISOString();
+      const created: ResearchItem[] = [];
+
+      for (const category of VALID_RESEARCH_CATEGORIES) {
+        const question = generateQuestionForCategory(category, goal.goal);
+        const item: ResearchItem = {
+          id: crypto.randomUUID(),
+          goalId: goal.id,
+          category,
+          question,
+          status: "open",
+          findings: "",
+          decision: "",
+        };
+        try {
+          const saved = await planningStore.createResearchItem(item);
+          created.push(saved);
+        } catch (err: any) {
+          return { error: `Failed to create research item for category "${category}": ${err.message ?? String(err)}` };
+        }
+      }
+
+      return { items: created, count: created.length, generatedAt: now };
+    },
+  };
+
+  /**
+   * update_research_item: Updates the status, findings, and/or decision of a
+   * research item. Sanitizes text content before persisting. Automatically sets
+   * resolvedAt when status transitions to "resolved".
+   */
+  const updateResearchItem: Tool = {
+    name: "update_research_item",
+    description:
+      "Update the status, findings, and/or decision of an existing research item. " +
+      "Transition status from 'open' → 'researching' → 'resolved'. " +
+      "Requires sessionId to match the goal's owner session for access control. " +
+      "Findings and decision text is sanitized before storage.",
+    parameters: {
+      type: "object",
+      properties: {
+        itemId: {
+          type: "string",
+          description: "The unique identifier of the research item to update.",
+        },
+        sessionId: {
+          type: "string",
+          description:
+            "The session identifier of the caller. Must match the owning goal's sessionId.",
+        },
+        status: {
+          type: "string",
+          enum: ["open", "researching", "resolved"],
+          description: "The new status for the research item.",
+        },
+        findings: {
+          type: "string",
+          description: "Findings gathered during investigation. Max 2000 chars.",
+        },
+        decision: {
+          type: "string",
+          description: "The decision or conclusion reached based on the findings. Max 1000 chars.",
+        },
+        sourceUrl: {
+          type: "string",
+          description: "Optional URL of a source consulted during research. Must be a valid http/https URL.",
+        },
+      },
+      required: ["itemId", "sessionId"],
+    },
+    handler: async (args: any) => {
+      const itemIdErr = validateStringField(args.itemId, "itemId", MAX_ID_LENGTH);
+      if (itemIdErr) return { error: itemIdErr };
+
+      const sessionIdErr = validateStringField(args.sessionId, "sessionId", MAX_SESSION_ID_LENGTH);
+      if (sessionIdErr) return { error: sessionIdErr };
+
+      // Verify ownership: get the item, then verify its goal belongs to this session
+      const item = await planningStore.getResearchItem(args.itemId);
+      if (!item) return { error: `Research item not found: ${args.itemId}` };
+
+      const goal = await planningStore.getGoal(item.goalId);
+      if (!goal || goal.sessionId !== args.sessionId) {
+        return { error: `Research item not found: ${args.itemId}` };
+      }
+
+      // Validate optional fields
+      if (args.status !== undefined) {
+        if (!VALID_RESEARCH_STATUSES.includes(args.status)) {
+          return { error: `status must be one of: ${VALID_RESEARCH_STATUSES.join(", ")}` };
+        }
+      }
+
+      if (args.findings !== undefined) {
+        if (typeof args.findings !== "string") return { error: "findings must be a string" };
+        if (args.findings.length > MAX_FINDINGS_LENGTH) {
+          return { error: `findings must be at most ${MAX_FINDINGS_LENGTH} characters` };
+        }
+      }
+
+      if (args.decision !== undefined) {
+        if (typeof args.decision !== "string") return { error: "decision must be a string" };
+        if (args.decision.length > MAX_DECISION_LENGTH) {
+          return { error: `decision must be at most ${MAX_DECISION_LENGTH} characters` };
+        }
+      }
+
+      if (args.sourceUrl !== undefined) {
+        if (typeof args.sourceUrl !== "string") return { error: "sourceUrl must be a string" };
+        const urlErr = validateUrl(args.sourceUrl, "sourceUrl");
+        if (urlErr) return { error: urlErr };
+      }
+
+      const updates: Partial<Omit<ResearchItem, "id" | "goalId">> = {};
+
+      if (args.status !== undefined) {
+        updates.status = args.status;
+        if (args.status === "resolved") {
+          updates.resolvedAt = new Date().toISOString();
+        }
+      }
+
+      if (args.findings !== undefined) {
+        updates.findings = sanitizeText(args.findings);
+      }
+
+      if (args.decision !== undefined) {
+        updates.decision = sanitizeText(args.decision);
+      }
+
+      try {
+        const updated = await planningStore.updateResearchItem(args.itemId, updates);
+        if (!updated) return { error: `Research item not found: ${args.itemId}` };
+        return { item: updated };
+      } catch (err: any) {
+        return { error: err.message ?? "Failed to update research item" };
+      }
+    },
+  };
+
+  /**
+   * get_research: Retrieves all research items for a goal.
+   * Requires sessionId to match the goal's owner session, preventing
+   * cross-session information disclosure.
+   */
+  const getResearch: Tool = {
+    name: "get_research",
+    description:
+      "Retrieve all research items for a goal, grouped by their current state. " +
+      "Requires sessionId to match the goal's owner session. " +
+      "Returns the list of ResearchItems or an error if access is denied.",
+    parameters: {
+      type: "object",
+      properties: {
+        goalId: {
+          type: "string",
+          description: "The unique identifier of the goal whose research items to retrieve.",
+        },
+        sessionId: {
+          type: "string",
+          description:
+            "The session identifier of the caller. Must match the goal's sessionId.",
+        },
+      },
+      required: ["goalId", "sessionId"],
+    },
+    handler: async (args: any) => {
+      const goalIdErr = validateStringField(args.goalId, "goalId", MAX_ID_LENGTH);
+      if (goalIdErr) return { error: goalIdErr };
+
+      const sessionIdErr = validateStringField(args.sessionId, "sessionId", MAX_SESSION_ID_LENGTH);
+      if (sessionIdErr) return { error: sessionIdErr };
+
+      const goal = await planningStore.getGoal(args.goalId);
+      if (!goal || goal.sessionId !== args.sessionId) {
+        return { error: `Goal not found: ${args.goalId}` };
+      }
+
+      const items = await planningStore.listResearchItems(args.goalId);
+      return { items, count: items.length };
+    },
+  };
+
+  return [defineGoal, saveGoal, getGoal, generateResearchChecklist, updateResearchItem, getResearch];
 }
