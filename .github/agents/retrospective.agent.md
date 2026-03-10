@@ -118,7 +118,7 @@ Return **ONLY** a JSON object — no prose, no markdown:
       "title": "Increase default POLL_TIMEOUT to 900s",
       "description": "Agent timeout occurred once at 600s; the agent completed shortly after the extended 1200s retry. A 900s default would have avoided the extended retry.",
       "rationale": "Reduces unnecessary agent-timeout → extended-retry cycles",
-      "affectedFiles": ["scripts/orchestrator/wait-for-agent.sh"],
+      "affectedFiles": ["scripts/orchestrator/wait-for-agent.ps1"],
       "effort": "trivial"
     }
   ],

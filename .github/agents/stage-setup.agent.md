@@ -82,7 +82,11 @@ This is **Issue {X} of {Y}** in **Stage {N}: {Stage Name}** of the [Next Version
 ## Security Checklist
 
 - [ ] No secrets, tokens, or real user data in code or examples
-- [ ] Input validation at system boundaries
+- [ ] Input validation at system boundaries — list each input and its validation rules
+- [ ] All user-provided string fields sanitized before storage
+- [ ] Resource ownership verified — user can only access their own data (e.g., goals scoped to user token)
+- [ ] API error responses use correct HTTP status codes (400 for invalid input, 401 for missing auth, 403 for forbidden, 404 for not found)
+- [ ] URL fields validated if accepted
 
 ## Documentation Standards
 
