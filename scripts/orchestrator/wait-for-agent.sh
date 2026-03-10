@@ -39,8 +39,9 @@ while true; do
     if [ -n "$pr_json" ] && [ "$pr_json" != "null" ]; then
       pr_state=$(echo "$pr_json" | jq -r '.state')
 
-      if [ "$pr_state" = "OPEN" ]; then
+      if [ "$pr_state" = "OPEN" ] || [ "$pr_state" = "MERGED" ] || [ "$pr_state" = "CLOSED" ]; then
         echo "✅ Copilot agent created PR #${pr_number} for issue #${ISSUE}"
+        echo "   State: ${pr_state}"
         echo "   Head branch: $(echo "$pr_json" | jq -r '.headRefName')"
         echo "   Draft: $(echo "$pr_json" | jq -r '.isDraft')"
         exit 0

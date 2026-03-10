@@ -29,8 +29,8 @@ echo "⏳ Waiting for Copilot review on ${OWNER}/${REPO}#${PR}..."
 echo "   Poll interval: ${INTERVAL}s | Timeout: ${TIMEOUT}s"
 
 while true; do
-  # Get reviews on the PR, look for one from copilot / github-actions bot
-  reviews=$(gh api "repos/${OWNER}/${REPO}/pulls/${PR}/reviews" --jq '[.[] | select(.user.login == "copilot-pull-request-review[bot]" or .user.login == "github-actions[bot]" or .user.type == "Bot")]' 2>/dev/null || echo "[]")
+  # Get reviews on the PR, look for one from known Copilot reviewer accounts
+  reviews=$(gh api "repos/${OWNER}/${REPO}/pulls/${PR}/reviews" --jq '[.[] | select(.user.login == "copilot-pull-request-reviewer[bot]" or .user.login == "copilot-pull-request-review[bot]" or .user.login == "github-actions[bot]")]' 2>/dev/null || echo "[]")
 
   review_count=$(echo "$reviews" | jq 'length')
 

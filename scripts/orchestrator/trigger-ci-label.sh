@@ -65,17 +65,19 @@ declare -a WORKFLOWS=()
 
 if [ "$add_e2e" = true ]; then
   echo "   Adding label: run-e2e"
-  gh pr edit "${PR}" --repo "${OWNER}/${REPO}" --add-label "run-e2e" 2>/dev/null || {
-    echo "   ⚠️  Failed to add run-e2e label — ensure the label exists in the repo"
-  }
+  if ! gh pr edit "${PR}" --repo "${OWNER}/${REPO}" --add-label "run-e2e" 2>/dev/null; then
+    echo "   ❌ Failed to add run-e2e label — ensure the label exists in the repo"
+    exit 1
+  fi
   WORKFLOWS+=("e2e-local.yml")
 fi
 
 if [ "$add_ephemeral" = true ]; then
   echo "   Adding label: deploy-ephemeral"
-  gh pr edit "${PR}" --repo "${OWNER}/${REPO}" --add-label "deploy-ephemeral" 2>/dev/null || {
-    echo "   ⚠️  Failed to add deploy-ephemeral label — ensure the label exists in the repo"
-  }
+  if ! gh pr edit "${PR}" --repo "${OWNER}/${REPO}" --add-label "deploy-ephemeral" 2>/dev/null; then
+    echo "   ❌ Failed to add deploy-ephemeral label — ensure the label exists in the repo"
+    exit 1
+  fi
   WORKFLOWS+=("deploy-ephemeral.yml")
 fi
 
@@ -86,6 +88,9 @@ fi
 
 # Short delay to let GitHub register the runs
 sleep 10
+
+# Record the start time (ISO 8601) to filter out stale runs
+start_time=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
 echo "⏳ Waiting for ${#WORKFLOWS[@]} workflow(s) to complete..."
 echo "   Poll interval: ${INTERVAL}s | Timeout: ${TIMEOUT}s"
@@ -98,8 +103,10 @@ while true; do
   failed_runs=""
 
   for wf in "${WORKFLOWS[@]}"; do
-    # Get the most recent run for this workflow on this branch
-    run_json=$(gh run list --repo "${OWNER}/${REPO}" --workflow "${wf}" --branch "${pr_branch}" --limit 1 --json databaseId,status,conclusion,createdAt --jq '.[0]' 2>/dev/null || echo "")
+    # Get recent runs for this workflow on this branch, skip any with 'skipped' conclusion
+    run_json=$(gh run list --repo "${OWNER}/${REPO}" --workflow "${wf}" --branch "${pr_branch}" --limit 5 --json databaseId,status,conclusion,createdAt --jq '
+      [.[] | select(.conclusion != "skipped")] | .[0]
+    ' 2>/dev/null || echo "")
 
     if [ -z "$run_json" ] || [ "$run_json" = "null" ]; then
       all_done=false

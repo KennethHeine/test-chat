@@ -45,6 +45,9 @@ done
 # Short delay to let GitHub register the runs
 sleep 5
 
+# Record the start time (ISO 8601) to filter out stale runs
+start_time=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
 echo "⏳ Waiting for all workflows to complete..."
 echo "   Poll interval: ${INTERVAL}s | Timeout: ${TIMEOUT}s"
 
@@ -56,8 +59,10 @@ while true; do
   failed_runs=""
 
   for wf in "${WORKFLOWS[@]}"; do
-    # Get the most recent run for this workflow on this branch
-    run_json=$(gh run list --repo "${OWNER}/${REPO}" --workflow "${wf}" --branch "${BRANCH}" --limit 1 --json databaseId,status,conclusion,createdAt --jq '.[0]' 2>/dev/null || echo "")
+    # Get recent runs for this workflow on this branch, skip any with 'skipped' conclusion
+    run_json=$(gh run list --repo "${OWNER}/${REPO}" --workflow "${wf}" --branch "${BRANCH}" --limit 5 --json databaseId,status,conclusion,createdAt --jq '
+      [.[] | select(.conclusion != "skipped")] | .[0]
+    ' 2>/dev/null || echo "")
 
     if [ -z "$run_json" ] || [ "$run_json" = "null" ]; then
       all_done=false

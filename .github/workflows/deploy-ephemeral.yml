@@ -26,7 +26,7 @@ jobs:
       github.event.action == 'labeled' &&
       github.event.label.name == 'deploy-ephemeral' &&
       github.event.pull_request.head.repo.full_name == github.repository &&
-      github.actor != 'dependabot[bot]'
+      github.event.pull_request.user.login != 'dependabot[bot]'
     runs-on: ubuntu-latest
     outputs:
       ephemeral-url: ${{ steps.deploy.outputs.ephemeralAppUrl }}
