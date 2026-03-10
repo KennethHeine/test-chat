@@ -507,10 +507,12 @@ export function createPlanningTools(token: string, planningStore: PlanningStore)
         };
       }
 
-      // findings required when resolving.
-      if (args.status === "resolved") {
+      // Validate findings when provided; required when resolving.
+      if (args.findings !== undefined && args.findings !== null && args.findings !== "") {
         const findingsErr = validateStringField(args.findings, "findings", MAX_FINDINGS_LENGTH);
         if (findingsErr) return { error: findingsErr };
+      } else if (args.status === "resolved") {
+        return { error: "findings is required when resolving a research item" };
       }
 
       // Optional decision validation.

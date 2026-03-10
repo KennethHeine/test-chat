@@ -660,14 +660,31 @@ if (process.env.ENABLE_GOAL_SEED === "true") {
         return;
       }
 
-      const goal = await getOwnedGoal(token, item.goalId);
+      // Validate findings/decision types to avoid seeding invalid data
+      if ("findings" in item && item.findings !== undefined && typeof item.findings !== "string") {
+        res.status(400).json({ error: "findings must be a string if provided" });
+        return;
+      }
+      if ("decision" in item && item.decision !== undefined && typeof item.decision !== "string") {
+        res.status(400).json({ error: "decision must be a string if provided" });
+        return;
+      }
+
+      // Default missing findings/decision to empty strings
+      const normalizedItem: import("./planning-types.js").ResearchItem = {
+        ...item,
+        findings: typeof item.findings === "string" ? item.findings : "",
+        decision: typeof item.decision === "string" ? item.decision : "",
+      };
+
+      const goal = await getOwnedGoal(token, normalizedItem.goalId);
       if (!goal) {
         res.status(404).json({ error: "Referenced goal does not exist or does not belong to the authenticated user" });
         return;
       }
 
       try {
-        const created = await planningStore.createResearchItem(item);
+        const created = await planningStore.createResearchItem(normalizedItem);
         res.status(201).json(created);
       } catch (err: any) {
         // planningStore.createResearchItem throws on validation errors (invalid/missing fields)
