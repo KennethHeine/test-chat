@@ -748,13 +748,13 @@ async function testUpdateResearchItemSanitizesFindings(): Promise<void> {
   );
   const itemId = generated.items[0].id;
 
-  // Findings with HTML tags should be stripped
+  // Findings with angle brackets should be stripped to prevent HTML injection
   const result: any = await update.handler(
     { itemId, status: "resolved", findings: "<script>alert('xss')</script>Use REST API" },
     STUB_INVOCATION
   );
   if (result.error) throw new Error(`Unexpected error: ${result.error}`);
-  if (result.item.findings.includes("<script>")) throw new Error("HTML tags should be stripped from findings");
+  if (result.item.findings.includes("<")) throw new Error("Angle brackets should be stripped from findings");
   if (!result.item.findings.includes("Use REST API")) throw new Error("Content should be preserved after sanitization");
 }
 

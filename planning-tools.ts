@@ -66,12 +66,12 @@ function validateStringField(value: unknown, fieldName: string, maxLength: numbe
 }
 
 /**
- * Sanitizes text content by stripping HTML tags and control characters.
- * Preserves newlines and tabs for multi-line content.
+ * Sanitizes text content by stripping angle brackets (preventing HTML injection)
+ * and control characters. Preserves newlines and tabs for multi-line content.
  */
 function sanitizeText(text: string): string {
   return text
-    .replace(/<[^>]*>/g, "")
+    .replace(/[<>]/g, "")
     .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "")
     .trim();
 }
