@@ -568,6 +568,23 @@ app.get("/api/goals", async (req: Request, res: Response) => {
   }
 });
 
+/**
+ * Fetches a goal by ID and verifies it belongs to the authenticated token's sessions.
+ * Returns the goal if found and owned, or null if not found/not owned.
+ */
+async function getOwnedGoal(
+  token: string,
+  goalId: string
+): Promise<import("./planning-types.js").Goal | null> {
+  const goal = await planningStore.getGoal(goalId);
+  if (!goal) return null;
+  const tHash = await hashToken(token);
+  const userSessions = await sessionStore.listSessions(tHash);
+  const userSessionIds = new Set(userSessions.map((s) => s.id));
+  if (!userSessionIds.has(goal.sessionId)) return null;
+  return goal;
+}
+
 // Get a specific goal by ID, scoped to the authenticated user
 app.get("/api/goals/:id", async (req: Request, res: Response) => {
   const token = extractToken(req);
@@ -579,21 +596,11 @@ app.get("/api/goals/:id", async (req: Request, res: Response) => {
   const goalId = req.params.id as string;
 
   try {
-    const goal = await planningStore.getGoal(goalId);
+    const goal = await getOwnedGoal(token, goalId);
     if (!goal) {
       res.status(404).json({ error: "Goal not found" });
       return;
     }
-
-    // Verify the goal belongs to the authenticated user by checking session ownership
-    const tHash = await hashToken(token);
-    const userSessions = await sessionStore.listSessions(tHash);
-    const userSessionIds = new Set(userSessions.map((s) => s.id));
-    if (!userSessionIds.has(goal.sessionId)) {
-      res.status(404).json({ error: "Goal not found" });
-      return;
-    }
-
     res.json(goal);
   } catch (err: any) {
     res.status(500).json({ error: err.message || "Failed to get goal" });
@@ -611,21 +618,11 @@ app.get("/api/goals/:id/research", async (req: Request, res: Response) => {
   const goalId = req.params.id as string;
 
   try {
-    const goal = await planningStore.getGoal(goalId);
+    const goal = await getOwnedGoal(token, goalId);
     if (!goal) {
       res.status(404).json({ error: "Goal not found" });
       return;
     }
-
-    // Verify the goal belongs to the authenticated user by checking session ownership
-    const tHash = await hashToken(token);
-    const userSessions = await sessionStore.listSessions(tHash);
-    const userSessionIds = new Set(userSessions.map((s) => s.id));
-    if (!userSessionIds.has(goal.sessionId)) {
-      res.status(404).json({ error: "Goal not found" });
-      return;
-    }
-
     const items = await planningStore.listResearchItems(goalId);
     res.json({ items });
   } catch (err: any) {
@@ -658,6 +655,19 @@ if (process.env.ENABLE_GOAL_SEED === "true") {
     }
     try {
       const item = req.body as import("./planning-types.js").ResearchItem;
+
+      if (!item.goalId) {
+        res.status(400).json({ error: "goalId is required" });
+        return;
+      }
+
+      // Ensure the goal exists and belongs to the authenticated user
+      const goal = await getOwnedGoal(token, item.goalId);
+      if (!goal) {
+        res.status(404).json({ error: "Goal not found" });
+        return;
+      }
+
       const created = await planningStore.createResearchItem(item);
       res.status(201).json(created);
     } catch (err: any) {

@@ -494,11 +494,13 @@ async function testGoalSeedAndRetrieve(): Promise<void> {
 // ============================================================
 
 async function testResearchGetNoAuth(): Promise<void> {
-  const res = await fetch(`${BASE}/api/goals/some-goal-id/research`);
-  // extractToken() falls back to process.env.COPILOT_GITHUB_TOKEN when no Authorization header
-  // is present, so in CI/local runs with the env var set the server returns 404 instead of 401.
-  if (res.status !== 401 && res.status !== 404 && res.status !== 200) {
-    throw new Error(`Expected 401, 404, or 200 (env-token fallback), got ${res.status}`);
+  // Send an explicitly empty Bearer token so extractToken() returns an empty string
+  // and the handler reliably returns 401, even when COPILOT_GITHUB_TOKEN is set.
+  const res = await fetch(`${BASE}/api/goals/some-goal-id/research`, {
+    headers: { Authorization: "Bearer " },
+  });
+  if (res.status !== 401) {
+    throw new Error(`Expected 401 for request with invalid/empty auth, got ${res.status}`);
   }
 }
 
