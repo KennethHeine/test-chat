@@ -894,8 +894,8 @@ function renderResearchChecklist(items) {
   const body = document.createElement("div");
   body.className = "research-card-body";
 
-  // Group items by category (preserving defined order)
-  const categoryOrder = ["domain", "architecture", "security", "infrastructure", "integration", "data_model", "operational", "ux"];
+  // Group items by category (preserving defined order from CATEGORY_LABELS)
+  const categoryOrder = Object.keys(CATEGORY_LABELS);
   /** @type {Map<string, Array>} */
   const grouped = new Map();
   for (const item of items) {
