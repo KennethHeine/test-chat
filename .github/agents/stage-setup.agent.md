@@ -59,13 +59,13 @@ This is **Issue {X} of {Y}** in **Stage {N}: {Stage Name}** of the [Next Version
 
 | File | Purpose |
 |------|---------|
-{For each file in filesToModify}
+| {For each file in filesToModify} | {description} |
 
 ### Files to read (for context)
 
 | File | Why |
 |------|-----|
-{For each file in filesToRead}
+| {For each file in filesToRead} | {reason} |
 
 ### Patterns to follow
 

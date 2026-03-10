@@ -60,13 +60,17 @@ The orchestrator provides a JSON object:
 ### `ci-ready`
 1. Run: `./scripts/orchestrator/trigger-ci-label.sh {owner} {repo} {prNumber} --all`
 2. Exit 0 → return status `ready-for-user`
-3. Exit 1 → get failure summary, return status `ci-failed`
+3. Exit 1 (failure) → extract failing run ID(s) from script output (look for `run:NNNNN`), or query: `gh run list --repo {owner}/{repo} --branch {stageBranch} --limit 5 --json databaseId,conclusion --jq '[.[] | select(.conclusion=="failure")] | .[0].databaseId'`
+4. Run: `./scripts/orchestrator/get-ci-failure-summary.sh {owner} {repo} {runId}` for each failing run
+5. Return status `ci-failed` with failure summary
+6. Exit 2 (timeout) → return status `ci-failed` with summary "CI timed out waiting for workflows to complete"
 
 ### `ci-in-progress`
 *(Legacy — same as `ci-ready` for backward compatibility)*
 1. Run: `./scripts/orchestrator/trigger-ci-label.sh {owner} {repo} {prNumber} --all`
 2. Exit 0 → return status `ready-for-user`
-3. Exit 1 → return status `ci-failed`
+3. Exit 1 → extract run ID(s) as above, get failure summary, return status `ci-failed`
+4. Exit 2 → return status `ci-failed` with timeout summary
 
 ### `ci-failed`
 1. **Check limit:** if `ciFixAttempts >= 3` → return status `escalated`

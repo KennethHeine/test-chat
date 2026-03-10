@@ -66,14 +66,17 @@ The orchestrator provides a JSON object:
 ### `ci-ready` *(new intermediate state)*
 1. Run: `./scripts/orchestrator/trigger-ci-label.sh {owner} {repo} {prNumber} --all`
 2. Exit 0 → return status `ci-passed`
-3. Exit 1 → get failure details: `./scripts/orchestrator/get-ci-failure-summary.sh {owner} {repo} {runId}`
-4. Return status `ci-failed` with failure summary
+3. Exit 1 (failure) → extract failing run ID(s) from the script output (look for `run:NNNNN` in the failure line), or query: `gh run list --repo {owner}/{repo} --branch {prBranch} --limit 5 --json databaseId,conclusion --jq '[.[] | select(.conclusion=="failure")] | .[0].databaseId'`
+4. Run: `./scripts/orchestrator/get-ci-failure-summary.sh {owner} {repo} {runId}` for each failing run
+5. Return status `ci-failed` with failure summary
+6. Exit 2 (timeout) → return status `ci-failed` with summary "CI timed out waiting for workflows to complete"
 
 ### `ci-in-progress`
 *(Legacy — same as `ci-ready` for backward compatibility)*
 1. Run: `./scripts/orchestrator/trigger-ci-label.sh {owner} {repo} {prNumber} --all`
 2. Exit 0 → return status `ci-passed`
-3. Exit 1 → get failure details, return status `ci-failed`
+3. Exit 1 → extract run ID(s) as above, get failure details, return status `ci-failed`
+4. Exit 2 → return status `ci-failed` with timeout summary
 
 ### `ci-failed`
 1. **Check limit:** if `ciFixAttempts >= 3` → return status `escalated` with summary
@@ -115,4 +118,4 @@ Return **ONLY** a JSON object — no prose, no markdown:
 | `trigger-ci-label.sh` | Add CI labels + wait | `./scripts/orchestrator/trigger-ci-label.sh <owner> <repo> <pr> --all` |
 | `get-ci-failure-summary.sh` | Get failure logs | `./scripts/orchestrator/get-ci-failure-summary.sh <owner> <repo> <run_id>` |
 
-All scripts use `POLL_INTERVAL=20` and `POLL_TIMEOUT=600` by default. Override with env vars.
+Scripts use `POLL_INTERVAL=20` by default. `POLL_TIMEOUT` defaults to `600` for most scripts, but `trigger-ci-label.sh` uses `POLL_TIMEOUT=1200` (20 min). Override with env vars.
