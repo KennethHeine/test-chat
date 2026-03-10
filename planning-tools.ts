@@ -85,7 +85,7 @@ function generateQuestionForCategory(
   category: ResearchItem["category"],
   goalText: string
 ): string {
-  const goalExcerpt = goalText.slice(0, 100);
+  const goalExcerpt = sanitizeText(goalText.slice(0, 100));
   const templates: Record<ResearchItem["category"], string> = {
     domain: `What domain-specific concepts, terminology, and business rules are essential for: ${goalExcerpt}?`,
     architecture: `What architectural patterns and system design decisions are needed for: ${goalExcerpt}?`,
@@ -387,7 +387,6 @@ export function createPlanningTools(token: string, planningStore: PlanningStore)
       }
 
       const now = new Date().toISOString();
-      const created: ResearchItem[] = [];
 
       for (const category of missingCategories) {
         const question = generateQuestionForCategory(category, goal.goal);
@@ -401,8 +400,7 @@ export function createPlanningTools(token: string, planningStore: PlanningStore)
           decision: "",
         };
         try {
-          const saved = await planningStore.createResearchItem(item);
-          created.push(saved);
+          await planningStore.createResearchItem(item);
         } catch (err: any) {
           return { error: `Failed to create research item for category "${category}": ${err.message ?? String(err)}` };
         }
