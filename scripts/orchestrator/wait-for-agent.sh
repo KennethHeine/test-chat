@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # Wait for the Copilot coding agent to finish work on an issue.
-# Uses gh CLI to poll the copilot job status.
+# Detects completion via GitHub timeline events:
+#   copilot_work_started          — agent is working
+#   copilot_work_finished         — agent completed successfully
+#   copilot_work_finished_failure — agent failed
 #
 # Usage: ./scripts/orchestrator/wait-for-agent.sh <owner> <repo> <issue_number>
 #
@@ -10,7 +13,7 @@
 #
 # Exit codes:
 #   0 - agent completed successfully
-#   1 - timeout or error
+#   1 - timeout, agent failure, or error
 
 set -euo pipefail
 
@@ -27,36 +30,35 @@ echo "⏳ Waiting for Copilot agent to complete on ${OWNER}/${REPO}#${ISSUE}..."
 echo "   Poll interval: ${INTERVAL}s | Timeout: ${TIMEOUT}s"
 
 while true; do
-  # Look for a PR that closes this issue by checking the issue timeline for cross-references
-  # The coding agent's PR body typically contains "Closes #N" or "Fixes #N"
-  pr_number=$(gh api "repos/${OWNER}/${REPO}/issues/${ISSUE}/timeline" --jq '
+  # Step 1: Find the PR linked to this issue via cross-reference events
+  pr_number=$(gh api "repos/${OWNER}/${REPO}/issues/${ISSUE}/timeline" --paginate --jq '
     [.[] | select(.event == "cross-referenced" and .source.issue.pull_request != null) | .source.issue.number] | last
   ' 2>/dev/null || echo "")
 
   if [ -n "$pr_number" ] && [ "$pr_number" != "null" ]; then
-    # Use gh's built-in --jq to extract fields directly (no standalone jq needed)
-    pr_state=$(gh pr view "${pr_number}" --repo "${OWNER}/${REPO}" --json state --jq '.state' 2>/dev/null || echo "")
-    pr_draft=$(gh pr view "${pr_number}" --repo "${OWNER}/${REPO}" --json isDraft --jq '.isDraft' 2>/dev/null || echo "")
-    pr_head=$(gh pr view "${pr_number}" --repo "${OWNER}/${REPO}" --json headRefName --jq '.headRefName' 2>/dev/null || echo "")
+    # Step 2: Check the PR timeline for Copilot work events
+    copilot_event=$(gh api "repos/${OWNER}/${REPO}/issues/${pr_number}/timeline" --paginate --jq '
+      [.[] | select(.event == "copilot_work_started" or .event == "copilot_work_finished" or .event == "copilot_work_finished_failure")] | last | .event // empty
+    ' 2>/dev/null || echo "")
 
-    if [ -n "$pr_state" ]; then
-      if [ "$pr_state" = "MERGED" ] || [ "$pr_state" = "CLOSED" ]; then
-        echo "✅ PR #${pr_number} already ${pr_state} for issue #${ISSUE}"
+    case "$copilot_event" in
+      copilot_work_finished)
+        echo "✅ Copilot agent finished work on issue #${ISSUE} (PR #${pr_number})"
         exit 0
-      fi
-
-      if [ "$pr_state" = "OPEN" ] && [ "$pr_draft" = "false" ]; then
-        echo "✅ Copilot agent finished — PR #${pr_number} is open and ready for issue #${ISSUE}"
-        echo "   State: ${pr_state}"
-        echo "   Head branch: ${pr_head}"
-        echo "   Draft: false"
-        exit 0
-      fi
-
-      if [ "$pr_state" = "OPEN" ] && [ "$pr_draft" = "true" ]; then
-        echo "   ... PR #${pr_number} exists but is still draft (agent working)"
-      fi
-    fi
+        ;;
+      copilot_work_finished_failure)
+        echo "❌ Copilot agent failed on issue #${ISSUE} (PR #${pr_number})"
+        exit 1
+        ;;
+      copilot_work_started)
+        echo "   ... agent is working on issue #${ISSUE} (PR #${pr_number})"
+        ;;
+      *)
+        echo "   ... PR #${pr_number} found but no Copilot work events yet"
+        ;;
+    esac
+  else
+    echo "   ... no PR linked to issue #${ISSUE} yet"
   fi
 
   if [ "$elapsed" -ge "$TIMEOUT" ]; then
