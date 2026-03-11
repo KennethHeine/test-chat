@@ -40,9 +40,11 @@ The parent agent provides a JSON payload:
 
 1. Read the research findings file completely
 2. Read the retrospective file completely
-3. Read all four planning documents in full:
+3. Read all planning documents in full:
    - `docs/next-version-plan/project-plan-v2.md`
-   - `docs/next-version-plan/issue-breakdown.md`
+   - `docs/next-version-plan/issue-breakdown.md` (index + stages 0–3)
+   - `docs/next-version-plan/issues/stage-4.md` (Stage 4 issues)
+   - `docs/next-version-plan/issues/stage-5.md` (Stage 5 issues)
    - `docs/next-version-plan/data-model.md`
    - `docs/next-version-plan/research-needed.md`
 4. If the research references specific source files (e.g., `tools.ts`, `storage.ts`, `planning-types.ts`), read them for implementation context
@@ -57,9 +59,9 @@ Apply edits to each of the four files based on what the research found:
 - Remove or modify tasks that the research makes unnecessary or changes
 - Update dependency information if the research affects stage ordering
 
-#### `issue-breakdown.md`
+#### `issue-breakdown.md` / `issues/stage-4.md` / `issues/stage-5.md`
 - Update existing issue descriptions with concrete technical details from the research
-- Add new issues the research revealed are needed
+- Add new issues the research revealed are needed (in the appropriate stage file)
 - Remove issues the research makes unnecessary
 - Update issue dependencies based on findings
 - Ensure technical details in issue bodies match what the research discovered

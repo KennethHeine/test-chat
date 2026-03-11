@@ -13,8 +13,10 @@ Read the following files and extract facts relevant to the requested stage:
 
 - `AGENTS.md`
 - `.github/copilot-instructions.md`
-- `docs/next-version-plan/project-plan.md`
-- `docs/next-version-plan/issue-breakdown.md`
+- `docs/next-version-plan/project-plan-v2.md`
+- `docs/next-version-plan/issue-breakdown.md` (index + stages 0–3)
+- `docs/next-version-plan/issues/stage-4.md` (if requesting Stage 4)
+- `docs/next-version-plan/issues/stage-5.md` (if requesting Stage 5)
 - `docs/next-version-plan/data-model.md`
 
 If a file does not exist, skip it and note its absence in the response.

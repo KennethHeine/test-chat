@@ -28,7 +28,7 @@ Use this exact template for every issue:
 ```markdown
 ## Parent Context
 
-This is **Issue {X} of {Y}** in **Stage {N}: {Stage Name}** of the [Next Version Plan](docs/next-version-plan/project-plan.md).
+This is **Issue {X} of {Y}** in **Stage {N}: {Stage Name}** of the [Next Version Plan](docs/next-version-plan/project-plan-v2.md).
 
 **Stage branch:** `{branchName}` — PRs target this branch, not `main`.
 **Stage goal:** {stageGoal}

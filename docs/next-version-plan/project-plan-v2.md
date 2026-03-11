@@ -290,7 +290,7 @@ These research issues produce documentation, not code. They must be resolved bef
 - **Scope ≤3 hours human-equivalent work** — larger issues cause agent timeouts (R9)
 - Enough detail that a coding agent can implement without asking questions
 
-> **R9 prerequisite:** The `IssueDraft` interface must be extended with 5 new fields (`filesToModify`, `filesToRead`, `patternReference`, `securityChecklist`, `verificationCommands`) + new `FileRef` interface before implementing Issue 4.6. See Issue 4.6a in [issue-breakdown.md](./issue-breakdown.md).
+> **R9 prerequisite:** The `IssueDraft` interface must be extended with 5 new fields (`filesToModify`, `filesToRead`, `patternReference`, `securityChecklist`, `verificationCommands`) + new `FileRef` interface before implementing Issue 4.6. See Issue 4.6a in [issues/stage-4.md](./issues/stage-4.md).
 
 #### GitHub Write Tools (Issues 4.9–4.12)
 

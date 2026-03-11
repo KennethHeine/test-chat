@@ -67,6 +67,10 @@
 │   ├── deployment.md      #   Azure deployment + scaling
 │   ├── sdk-reference.md   #   Copilot SDK deep dive
 │   └── roadmap.md         #   Optimization plan
+│   └── next-version-plan/ #   Planning docs for next version
+│       ├── issue-breakdown.md   # Index + stages 0–3 (complete)
+│       ├── issues/stage-4.md    # Stage 4 issues (orchestrator sequence + details)
+│       └── issues/stage-5.md    # Stage 5 issues (orchestrator sequence + details)
 ├── infra/
 │   └── main.bicep         # Azure infrastructure (Container Apps + SWA + Storage Account)
 ├── .github/workflows/
