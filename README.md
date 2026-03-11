@@ -107,7 +107,7 @@ The server also accepts `COPILOT_GITHUB_TOKEN` in `.env` as a fallback (used whe
 Returns server status, connected client info, and active session count. No auth required.
 
 ```json
-{ "status": "ok", "storage": "memory", "clients": { "total": 2, "connected": 2 }, "activeSessions": 3 }
+{ "status": "ok", "storage": "memory", "planningStorage": "memory", "clients": { "total": 2, "connected": 2 }, "activeSessions": 3 }
 ```
 
 ### `GET /api/models`

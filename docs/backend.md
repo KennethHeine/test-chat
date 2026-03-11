@@ -74,6 +74,7 @@ data: {"type":"done","sessionId":"abc123"}
 {
   "status": "ok",
   "storage": "memory",
+  "planningStorage": "memory",
   "clients": { "total": 2, "connected": 2 },
   "activeSessions": 3
 }

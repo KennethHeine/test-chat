@@ -6,7 +6,7 @@ import { config } from "dotenv";
 import path from "path";
 import { createSessionStore, hashToken, AzureSessionStore, InMemorySessionStore, type SessionStore } from "./storage.js";
 import { createGitHubTools, GITHUB_TOOL_NAMES } from "./tools.js";
-import { InMemoryPlanningStore, type PlanningStore } from "./planning-store.js";
+import { InMemoryPlanningStore, AzurePlanningStore, createPlanningStore, type PlanningStore } from "./planning-store.js";
 import { createPlanningTools } from "./planning-tools.js";
 
 // --- System Message for Agent Orchestration ---
@@ -43,7 +43,7 @@ let sessionStore: SessionStore = createSessionStore(storageAccountName || undefi
 // --- Planning Store ---
 // Goals are created via planning tools (planning-tools.ts), not through API endpoints.
 // This store is shared with the tool factory once planning tools are wired in.
-const planningStore: PlanningStore = new InMemoryPlanningStore();
+let planningStore: PlanningStore = createPlanningStore(storageAccountName || undefined);
 
 // --- Per-user Copilot Clients ---
 
@@ -188,6 +188,7 @@ app.get("/api/health", (_req: Request, res: Response) => {
   res.json({
     status: "ok",
     storage: sessionStore instanceof AzureSessionStore ? "azure" : "memory",
+    planningStorage: planningStore instanceof AzurePlanningStore ? "azure" : "memory",
     clients: {
       total: clientCount,
       connected: connectedClients,
@@ -862,6 +863,20 @@ async function startServer() {
     }
   } else {
     console.log("Using in-memory session storage (set AZURE_STORAGE_ACCOUNT_NAME for persistence)");
+  }
+
+  // Initialize Azure planning store if configured
+  if (planningStore instanceof AzurePlanningStore) {
+    try {
+      await planningStore.initialize();
+      console.log("Azure Planning Store initialized (4 tables)");
+    } catch (err: any) {
+      console.error("Failed to initialize Azure Planning Store:", err.message);
+      console.log("Falling back to in-memory planning storage (planning data will not persist)");
+      planningStore = new InMemoryPlanningStore();
+    }
+  } else {
+    console.log("Using in-memory planning storage (set AZURE_STORAGE_ACCOUNT_NAME for persistence)");
   }
 
   const server = app.listen(PORT, () => {
