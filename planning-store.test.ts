@@ -1,5 +1,5 @@
 import { InMemoryPlanningStore } from "./planning-store.js";
-import type { Goal, ResearchItem, Milestone, IssueDraft } from "./planning-types.js";
+import type { Goal, ResearchItem, Milestone, IssueDraft, FileRef } from "./planning-types.js";
 
 let passed = 0;
 let failed = 0;
@@ -94,6 +94,10 @@ function makeIssueDraft(overrides: Partial<IssueDraft> = {}): IssueDraft {
     researchLinks: [],
     order: 1,
     status: "draft",
+    filesToModify: [],
+    filesToRead: [],
+    securityChecklist: [],
+    verificationCommands: [],
     ...overrides,
   };
 }
@@ -579,6 +583,101 @@ async function testIssueDraftMissingTitle(): Promise<void> {
   assert(threw, "Should throw for empty title");
 }
 
+async function testIssueDraftFileRefEmptyPath(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const badRef: FileRef = { path: "", reason: "Some reason" };
+  let threw = false;
+  try {
+    await store.createIssueDraft(makeIssueDraft({ filesToModify: [badRef] }));
+  } catch {
+    threw = true;
+  }
+  assert(threw, "Should throw for filesToModify element with empty path");
+}
+
+async function testIssueDraftFileRefEmptyReason(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const badRef: FileRef = { path: "server.ts", reason: "" };
+  let threw = false;
+  try {
+    await store.createIssueDraft(makeIssueDraft({ filesToModify: [badRef] }));
+  } catch {
+    threw = true;
+  }
+  assert(threw, "Should throw for filesToModify element with empty reason");
+}
+
+async function testIssueDraftFilesToReadEmptyPath(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const badRef: FileRef = { path: "   ", reason: "Read for context" };
+  let threw = false;
+  try {
+    await store.createIssueDraft(makeIssueDraft({ filesToRead: [badRef] }));
+  } catch {
+    threw = true;
+  }
+  assert(threw, "Should throw for filesToRead element with whitespace-only path");
+}
+
+async function testIssueDraftFilesToReadEmptyReason(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const badRef: FileRef = { path: "tools.ts", reason: "  " };
+  let threw = false;
+  try {
+    await store.createIssueDraft(makeIssueDraft({ filesToRead: [badRef] }));
+  } catch {
+    threw = true;
+  }
+  assert(threw, "Should throw for filesToRead element with whitespace-only reason");
+}
+
+async function testIssueDraftValidFileRefs(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const modRef: FileRef = { path: "server.ts", reason: "Add new endpoint" };
+  const readRef: FileRef = { path: "tools.ts", reason: "Follow existing pattern" };
+  const draft = makeIssueDraft({
+    filesToModify: [modRef],
+    filesToRead: [readRef],
+    patternReference: "tools.ts githubFetch()",
+    securityChecklist: ["Validate input", "Check auth"],
+    verificationCommands: ["npx tsc --noEmit", "npm test"],
+  });
+  const created = await store.createIssueDraft(draft);
+  assert(created.filesToModify.length === 1, "Should store filesToModify");
+  assert(created.filesToModify[0].path === "server.ts", "Should store filesToModify path");
+  assert(created.filesToModify[0].reason === "Add new endpoint", "Should store filesToModify reason");
+  assert(created.filesToRead.length === 1, "Should store filesToRead");
+  assert(created.filesToRead[0].path === "tools.ts", "Should store filesToRead path");
+  assert(created.filesToRead[0].reason === "Follow existing pattern", "Should store filesToRead reason");
+  assert(created.patternReference === "tools.ts githubFetch()", "Should store patternReference");
+  assert(created.securityChecklist.length === 2, "Should store securityChecklist");
+  assert(created.verificationCommands.length === 2, "Should store verificationCommands");
+}
+
+async function testIssueDraftFileRefNonStringPath(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const badRef = { path: null as unknown as string, reason: "Some reason" };
+  let threw = false;
+  try {
+    await store.createIssueDraft(makeIssueDraft({ filesToModify: [badRef] }));
+  } catch {
+    threw = true;
+  }
+  assert(threw, "Should throw for filesToModify element with null path");
+}
+
+async function testIssueDraftFileRefNonStringReason(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const badRef = { path: "server.ts", reason: undefined as unknown as string };
+  let threw = false;
+  try {
+    await store.createIssueDraft(makeIssueDraft({ filesToRead: [badRef] }));
+  } catch {
+    threw = true;
+  }
+  assert(threw, "Should throw for filesToRead element with undefined reason");
+}
+
 // ============================================================
 // Deep Copy / Isolation Tests
 // ============================================================
@@ -687,6 +786,13 @@ async function main() {
   await run("createIssueDraft throws for negative/zero order", testIssueDraftNegativeOrder);
   await run("updateIssueDraft throws for invalid status", testIssueDraftUpdateInvalidStatus);
   await run("createIssueDraft throws for empty title", testIssueDraftMissingTitle);
+  await run("createIssueDraft throws for filesToModify element with empty path", testIssueDraftFileRefEmptyPath);
+  await run("createIssueDraft throws for filesToModify element with empty reason", testIssueDraftFileRefEmptyReason);
+  await run("createIssueDraft throws for filesToRead element with whitespace-only path", testIssueDraftFilesToReadEmptyPath);
+  await run("createIssueDraft throws for filesToRead element with whitespace-only reason", testIssueDraftFilesToReadEmptyReason);
+  await run("createIssueDraft accepts valid FileRef arrays and stores all new fields", testIssueDraftValidFileRefs);
+  await run("createIssueDraft throws for filesToModify element with null path", testIssueDraftFileRefNonStringPath);
+  await run("createIssueDraft throws for filesToRead element with undefined reason", testIssueDraftFileRefNonStringReason);
 
   console.log("\n── Deep Copy / Isolation ──\n");
   await run("Goal array fields are deep-copied (structuredClone)", testGoalArrayIsolation);
