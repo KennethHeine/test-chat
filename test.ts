@@ -442,6 +442,40 @@ async function testServerQuotaNoAuth(): Promise<void> {
   }
 }
 
+async function testReasoningEffortInvalidValue(): Promise<void> {
+  const res = await fetch(`${BASE}/api/chat`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ message: "hello", model: FREE_MODEL, reasoningEffort: "ultra" }),
+  });
+  if (res.status !== 400) throw new Error(`Expected 400 for invalid reasoningEffort, got ${res.status}`);
+  const data = await res.json();
+  if (!data.error || !data.error.includes("reasoningEffort")) {
+    throw new Error(`Expected error message referencing reasoningEffort, got: ${JSON.stringify(data)}`);
+  }
+}
+
+async function testReasoningEffortValidValues(): Promise<void> {
+  // Each allowed value should not cause a 400 before SSE headers are sent
+  // We only check that sending a valid effort doesn't get rejected pre-stream
+  // (we won't wait for the full SSE response to keep the test fast)
+  for (const effort of ["low", "medium", "high", "xhigh"]) {
+    const res = await fetch(`${BASE}/api/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+      body: JSON.stringify({ message: "Reply with: EFFORT_TEST_OK", model: FREE_MODEL, reasoningEffort: effort }),
+    });
+    // Valid effort should not return 400; it returns 200 (SSE) or another non-400 status
+    if (res.status === 400) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(`Valid reasoningEffort "${effort}" was rejected with 400: ${JSON.stringify(data)}`);
+    }
+    // Consume body to avoid connection hang
+    await res.text();
+  }
+  log("  ", "All 4 valid reasoning effort values accepted");
+}
+
 // ============================================================
 // 5. Goal API tests
 // ============================================================
@@ -3604,6 +3638,8 @@ async function main() {
   await run("Model switch validates required fields", testServerModelSwitchMissingFields);
   await run("Quota endpoint returns data", testServerQuotaEndpoint);
   await run("Quota endpoint handles no auth gracefully", testServerQuotaNoAuth);
+  await run("Reasoning effort: invalid value returns 400", testReasoningEffortInvalidValue);
+  await run("Reasoning effort: valid values accepted", testReasoningEffortValidValues);
 
   // --- Goal API tests ---
   console.log("\n── Goal API Tests ──\n");

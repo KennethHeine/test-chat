@@ -42,6 +42,7 @@ The frontend is vanilla HTML, CSS, and JavaScript — no frameworks, no build st
 | Token input | `#token-input` | Text field for GitHub PAT entry |
 | Save/Clear Token | `#save-token-btn` | Toggles between save and clear token |
 | Model selector | `#model-select` | Dropdown populated from `/api/models` |
+| Reasoning effort | `#reasoning-effort-select` | Conditional dropdown — visible only when selected model supports reasoning |
 | New Chat | `#new-chat-btn` | Resets `sessionId`, clears messages, shows welcome screen |
 | Session sidebar | `#sessions-list` | List of previous conversations with timestamps |
 | Message input | `#message-input` | Textarea for user messages |
@@ -127,6 +128,10 @@ Buffering handles partial lines that may arrive split across network chunks.
 ## Model Switching
 
 The model dropdown (`#model-select`) is populated on page load by fetching `GET /api/models`. When the user changes the selected model during an active session, the frontend automatically fires `POST /api/chat/model` to switch the model mid-conversation without creating a new session.
+
+## Reasoning Effort Control
+
+A reasoning effort dropdown (`#reasoning-effort-select`) appears conditionally next to the model selector when the currently selected model has `capabilities.supports.reasoningEffort === true` (e.g., `o4-mini`). Options are populated from the model's `supportedReasoningEfforts` array with the default pre-selected from `defaultReasoningEffort`. The selected effort level is sent as `reasoningEffort` in the `POST /api/chat` request body. Changing the model hides or shows the dropdown and resets the selection to the new model's default.
 
 ## Quota Display
 

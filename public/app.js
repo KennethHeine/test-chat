@@ -1,6 +1,7 @@
 // --- State ---
 let sessionId = null;
 let isStreaming = false;
+let modelData = {}; // modelId -> full model object (populated after loadModels)
 
 // --- DOM ---
 const messagesEl = document.getElementById("messages");
@@ -10,6 +11,7 @@ const sendBtn = document.getElementById("send-btn");
 const stopBtn = document.getElementById("stop-btn");
 const newChatBtn = document.getElementById("new-chat-btn");
 const modelSelect = document.getElementById("model-select");
+const reasoningEffortSelect = document.getElementById("reasoning-effort-select");
 const statusDot = document.getElementById("status-dot");
 const statusText = document.getElementById("status-text");
 const tokenInput = document.getElementById("token-input");
@@ -559,6 +561,7 @@ async function loadQuota() {
 
 // --- Model Switching Mid-Conversation (Phase 2.5) ---
 modelSelect.addEventListener("change", async () => {
+  updateReasoningEffortDropdown();
   if (!sessionId || isStreaming) return;
   const newModel = modelSelect.value;
   try {
@@ -663,8 +666,10 @@ async function loadModels() {
     const data = await res.json();
     if (data.models && Array.isArray(data.models)) {
       modelSelect.innerHTML = "";
+      modelData = {};
       for (const model of data.models) {
         const name = typeof model === "string" ? model : model.id || model.name;
+        modelData[name] = model;
         const opt = document.createElement("option");
         opt.value = name;
         opt.textContent = name;
@@ -675,9 +680,37 @@ async function loadModels() {
       if ([...modelSelect.options].some((o) => o.value === defaultModel)) {
         modelSelect.value = defaultModel;
       }
+      updateReasoningEffortDropdown();
     }
   } catch {
     modelSelect.innerHTML = '<option value="gpt-4.1">Enter token to load models</option>';
+  }
+}
+
+// --- Reasoning Effort Dropdown ---
+// Label map keeps display names consistent with the static HTML fallback options.
+// Must stay in sync with ALLOWED_REASONING_EFFORTS in server.ts.
+const EFFORT_LABELS = { low: "Low", medium: "Medium", high: "High", xhigh: "Extended" };
+
+function updateReasoningEffortDropdown() {
+  const model = modelData[modelSelect.value];
+  const supportsReasoning = model?.capabilities?.supports?.reasoningEffort === true;
+  reasoningEffortSelect.style.display = supportsReasoning ? "" : "none";
+  if (supportsReasoning) {
+    const efforts = Array.isArray(model.supportedReasoningEfforts) && model.supportedReasoningEfforts.length > 0
+      ? model.supportedReasoningEfforts
+      : ["low", "medium", "high", "xhigh"];
+    reasoningEffortSelect.innerHTML = "";
+    for (const effort of efforts) {
+      const opt = document.createElement("option");
+      opt.value = effort;
+      opt.textContent = EFFORT_LABELS[effort] ?? effort.charAt(0).toUpperCase() + effort.slice(1);
+      reasoningEffortSelect.appendChild(opt);
+    }
+    const defaultEffort = model.defaultReasoningEffort;
+    if (defaultEffort && efforts.includes(defaultEffort)) {
+      reasoningEffortSelect.value = defaultEffort;
+    }
   }
 }
 
@@ -704,11 +737,15 @@ async function sendMessage() {
   stopBtn.style.display = "inline-block";
 
   try {
-    const body = JSON.stringify({
+    const chatPayload = {
       message: text,
       sessionId: sessionId,
       model: modelSelect.value,
-    });
+    };
+    if (reasoningEffortSelect.style.display !== "none" && reasoningEffortSelect.value) {
+      chatPayload.reasoningEffort = reasoningEffortSelect.value;
+    }
+    const body = JSON.stringify(chatPayload);
 
     const response = await fetch("/api/chat", {
       method: "POST",

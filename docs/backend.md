@@ -37,9 +37,12 @@ The backend is a single Express.js server written in TypeScript (`server.ts`), e
 {
   "message": "What is 2 + 2?",
   "sessionId": "optional-session-id",
-  "model": "gpt-4.1"
+  "model": "gpt-4.1",
+  "reasoningEffort": "medium"
 }
 ```
+
+- `reasoningEffort` — Optional. One of `low`, `medium`, `high`, `xhigh`. Only valid for models where `capabilities.supports.reasoningEffort === true` (e.g., `o4-mini`). Returns `400` if an invalid value is supplied.
 
 **Response:** Server-Sent Events (SSE) stream
 

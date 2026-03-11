@@ -107,9 +107,13 @@ function extractSubagentName(data: { agentDisplayName?: unknown; agentName?: unk
   return "Sub-agent";
 }
 
+// Allowed reasoning effort levels (from SDK ReasoningEffort type)
+const ALLOWED_REASONING_EFFORTS = ["low", "medium", "high", "xhigh"] as const;
+type ReasoningEffort = typeof ALLOWED_REASONING_EFFORTS[number];
+
 // Build the shared session config used for both new and resumed sessions
-function buildSessionConfig(token: string, model: string): SessionConfig {
-  return {
+function buildSessionConfig(token: string, model: string, reasoningEffort?: ReasoningEffort): SessionConfig {
+  const cfg: SessionConfig = {
     model,
     streaming: true,
     onPermissionRequest: safePermissionHandler,
@@ -139,6 +143,10 @@ function buildSessionConfig(token: string, model: string): SessionConfig {
       },
     },
   };
+  if (reasoningEffort) {
+    cfg.reasoningEffort = reasoningEffort;
+  }
+  return cfg;
 }
 
 // Resolve or create a CopilotSession — handles resumption (Phase 2.3), tools (2.1), and hooks (2.4)
@@ -147,9 +155,10 @@ async function resolveSession(
   token: string,
   sid: string,
   model: string,
-  message: string
+  message: string,
+  reasoningEffort?: ReasoningEffort
 ): Promise<CopilotSession> {
-  const sessionConfig = buildSessionConfig(token, model);
+  const sessionConfig = buildSessionConfig(token, model, reasoningEffort);
 
   // Phase 2.3: Try to resume an existing SDK session
   const tHash = await hashToken(token);
@@ -323,10 +332,16 @@ app.post("/api/chat", async (req: Request, res: Response) => {
     return;
   }
 
-  const { message, sessionId, model } = req.body;
+  const { message, sessionId, model, reasoningEffort } = req.body;
 
   if (!message || typeof message !== "string") {
     res.status(400).json({ error: "Missing or invalid 'message' field" });
+    return;
+  }
+
+  // Validate reasoningEffort if provided
+  if (reasoningEffort !== undefined && !ALLOWED_REASONING_EFFORTS.includes(reasoningEffort)) {
+    res.status(400).json({ error: `Invalid reasoningEffort. Must be one of: ${ALLOWED_REASONING_EFFORTS.join(", ")}` });
     return;
   }
 
@@ -347,7 +362,7 @@ app.post("/api/chat", async (req: Request, res: Response) => {
       session = sessions.get(key)!;
     } else {
       sid = sid || generateSessionId();
-      session = await resolveSession(c, token, sid, model || "gpt-4.1", message);
+      session = await resolveSession(c, token, sid, model || "gpt-4.1", message, reasoningEffort);
     }
 
     // Update session last-used time
