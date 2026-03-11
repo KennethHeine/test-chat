@@ -355,6 +355,8 @@ function navigateDashboard(page) {
   });
   if (page === "goals") {
     loadGoalsDashboard();
+  } else if (page === "research") {
+    loadResearchDashboard();
   }
 }
 
@@ -663,6 +665,341 @@ async function showGoalDetail(goalId) {
   }
 }
 
+// --- Research Dashboard ---
+
+const researchGoalSelector = document.getElementById("research-goal-selector");
+const researchGoalSelect = document.getElementById("research-goal-select");
+const researchPageContent = document.getElementById("research-page-content");
+
+/** In-flight guard: true while loadResearchDashboard() is fetching, to prevent duplicate calls. */
+let researchLoadInFlight = false;
+
+/**
+ * Loads the list of goals and populates the goal selector, then loads research for the first goal.
+ * De-dupes concurrent calls via in-flight guard.
+ */
+async function loadResearchDashboard() {
+  if (researchLoadInFlight) return;
+  researchLoadInFlight = true;
+
+  if (!getToken()) {
+    researchGoalSelector.style.display = "none";
+    researchPageContent.innerHTML = "";
+    const empty = document.createElement("div");
+    empty.className = "dashboard-empty";
+    empty.innerHTML = '<span class="dashboard-empty-icon">🔑</span><p>Save a GitHub token to view research items.</p>';
+    researchPageContent.appendChild(empty);
+    researchLoadInFlight = false;
+    return;
+  }
+
+  researchGoalSelector.style.display = "none";
+  researchPageContent.innerHTML = '<div class="dashboard-empty"><span class="dashboard-empty-icon" style="font-size:24px">⏳</span><p>Loading…</p></div>';
+
+  try {
+    const res = await fetch("/api/goals", { headers: authHeaders() });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      researchPageContent.innerHTML = "";
+      const empty = document.createElement("div");
+      empty.className = "dashboard-empty";
+      const p = document.createElement("p");
+      p.textContent = (err && err.error) ? err.error : "Failed to load goals.";
+      empty.appendChild(p);
+      researchPageContent.appendChild(empty);
+      return;
+    }
+    const data = await res.json();
+    const goals = Array.isArray(data.goals) ? data.goals : [];
+
+    if (goals.length === 0) {
+      researchGoalSelector.style.display = "none";
+      researchPageContent.innerHTML = "";
+      const empty = document.createElement("div");
+      empty.className = "dashboard-empty";
+      empty.innerHTML = '<span class="dashboard-empty-icon">🔬</span><p>No goals yet. Use the chat to define planning goals with Copilot.</p>';
+      researchPageContent.appendChild(empty);
+      return;
+    }
+
+    // Sort goals newest first
+    goals.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
+    // Populate goal selector
+    researchGoalSelect.innerHTML = "";
+    for (const goal of goals) {
+      const opt = document.createElement("option");
+      opt.value = typeof goal.id === "string" ? goal.id : "";
+      opt.textContent = typeof goal.goal === "string" ? goal.goal : "(untitled goal)";
+      researchGoalSelect.appendChild(opt);
+    }
+
+    if (goals.length > 1) {
+      researchGoalSelector.style.display = "block";
+    } else {
+      researchGoalSelector.style.display = "none";
+    }
+
+    // Load research for the first goal
+    await loadResearchForGoal(goals[0].id);
+  } catch (err) {
+    console.warn("Failed to load research dashboard:", err);
+    researchPageContent.innerHTML = "";
+    const empty = document.createElement("div");
+    empty.className = "dashboard-empty";
+    const p = document.createElement("p");
+    p.textContent = "Failed to load research. Please try again.";
+    empty.appendChild(p);
+    researchPageContent.appendChild(empty);
+  } finally {
+    researchLoadInFlight = false;
+  }
+}
+
+/**
+ * Fetches research items for a specific goal and renders them in the research tracker.
+ * @param {string} goalId
+ */
+async function loadResearchForGoal(goalId) {
+  researchPageContent.innerHTML = '<div class="dashboard-empty"><span class="dashboard-empty-icon" style="font-size:24px">⏳</span><p>Loading research…</p></div>';
+
+  try {
+    const res = await fetch(`/api/goals/${encodeURIComponent(goalId)}/research`, { headers: authHeaders() });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      researchPageContent.innerHTML = "";
+      const empty = document.createElement("div");
+      empty.className = "dashboard-empty";
+      const p = document.createElement("p");
+      p.textContent = (err && err.error) ? err.error : "Failed to load research items.";
+      empty.appendChild(p);
+      researchPageContent.appendChild(empty);
+      return;
+    }
+    const data = await res.json();
+    const items = Array.isArray(data.research) ? data.research : [];
+    renderResearchItems(items, goalId);
+  } catch (err) {
+    console.warn("Failed to load research for goal:", err);
+    researchPageContent.innerHTML = "";
+    const empty = document.createElement("div");
+    empty.className = "dashboard-empty";
+    const p = document.createElement("p");
+    p.textContent = "Failed to load research items. Please try again.";
+    empty.appendChild(p);
+    researchPageContent.appendChild(empty);
+  }
+}
+
+/**
+ * Renders research items grouped by category in the research tracker dashboard.
+ * All user-supplied content is inserted via textContent to prevent XSS.
+ * @param {Array} items - Array of ResearchItem objects
+ * @param {string} goalId - The goal ID these items belong to
+ */
+function renderResearchItems(items, goalId) {
+  researchPageContent.innerHTML = "";
+
+  if (items.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "dashboard-empty";
+    empty.innerHTML = '<span class="dashboard-empty-icon">🔬</span><p>No research items for this goal yet.</p>';
+    researchPageContent.appendChild(empty);
+    return;
+  }
+
+  // Group items by category using the defined order
+  const categoryOrder = Object.keys(CATEGORY_LABELS);
+  /** @type {Map<string, Array>} */
+  const grouped = new Map();
+  for (const item of items) {
+    const cat = typeof item.category === "string" ? item.category : "domain";
+    if (!grouped.has(cat)) grouped.set(cat, []);
+    grouped.get(cat).push(item);
+  }
+  const orderedKeys = [
+    ...categoryOrder.filter((c) => grouped.has(c)),
+    ...Array.from(grouped.keys()).filter((c) => !categoryOrder.includes(c)),
+  ];
+
+  for (const category of orderedKeys) {
+    const categoryItems = grouped.get(category);
+    const catEl = document.createElement("div");
+    catEl.className = "research-tracker-category";
+
+    const catHeader = document.createElement("div");
+    catHeader.className = "research-tracker-category-header";
+    catHeader.textContent = CATEGORY_LABELS[category] || category;
+    catEl.appendChild(catHeader);
+
+    for (const item of categoryItems) {
+      catEl.appendChild(buildResearchTrackerItem(item, goalId));
+    }
+
+    researchPageContent.appendChild(catEl);
+  }
+
+  // Summary
+  const total = items.length;
+  const resolved = items.filter((i) => i.status === "resolved").length;
+  const researching = items.filter((i) => i.status === "researching").length;
+  const open = total - resolved - researching;
+  const summaryParts = [];
+  if (open > 0) summaryParts.push(`Open: ${open}`);
+  if (researching > 0) summaryParts.push(`Researching: ${researching}`);
+  if (resolved > 0) summaryParts.push(`Resolved: ${resolved}`);
+  const summaryEl = document.createElement("div");
+  summaryEl.className = "research-tracker-summary";
+  summaryEl.textContent = summaryParts.join(" · ");
+  researchPageContent.appendChild(summaryEl);
+}
+
+/**
+ * Builds a single research tracker item DOM element with status badge, question, findings, and edit UI.
+ * All user-supplied content is inserted via textContent to prevent XSS.
+ * @param {Object} item - ResearchItem object
+ * @param {string} goalId - The goal ID the item belongs to
+ * @returns {HTMLElement}
+ */
+function buildResearchTrackerItem(item, goalId) {
+  const itemEl = document.createElement("div");
+  itemEl.className = "research-tracker-item";
+  itemEl.setAttribute("data-item-id", typeof item.id === "string" ? item.id : "");
+
+  // Header row: status badge + question + edit button
+  const headerEl = document.createElement("div");
+  headerEl.className = "research-tracker-item-header";
+
+  const status = VALID_STATUSES.includes(item.status) ? item.status : "open";
+  const statusEl = document.createElement("span");
+  statusEl.className = "research-item-status status-" + status;
+  statusEl.textContent = status;
+  headerEl.appendChild(statusEl);
+
+  const questionEl = document.createElement("span");
+  questionEl.className = "research-tracker-question";
+  questionEl.textContent = typeof item.question === "string" ? item.question : "";
+  headerEl.appendChild(questionEl);
+
+  const editBtn = document.createElement("button");
+  editBtn.className = "research-tracker-edit-btn";
+  editBtn.textContent = "Edit";
+  editBtn.setAttribute("aria-label", "Edit findings");
+  headerEl.appendChild(editBtn);
+
+  itemEl.appendChild(headerEl);
+
+  // Findings display
+  const findingsDisplay = document.createElement("div");
+  const hasFinding = typeof item.findings === "string" && item.findings.trim().length > 0;
+  if (hasFinding) {
+    const findingsLabel = document.createElement("div");
+    findingsLabel.className = "research-tracker-findings-label";
+    findingsLabel.textContent = "Findings";
+    const findingsText = document.createElement("div");
+    findingsText.className = "research-tracker-findings";
+    findingsText.textContent = item.findings;
+    findingsDisplay.appendChild(findingsLabel);
+    findingsDisplay.appendChild(findingsText);
+  }
+  itemEl.appendChild(findingsDisplay);
+
+  // Edit area (hidden by default)
+  const editArea = document.createElement("div");
+  editArea.className = "research-tracker-edit-area";
+  editArea.style.display = "none";
+
+  const textarea = document.createElement("textarea");
+  textarea.className = "research-tracker-textarea";
+  textarea.placeholder = "Enter findings…";
+  textarea.setAttribute("aria-label", "Findings");
+  textarea.value = typeof item.findings === "string" ? item.findings : "";
+  editArea.appendChild(textarea);
+
+  const actionsEl = document.createElement("div");
+  actionsEl.className = "research-tracker-edit-actions";
+
+  const saveBtn = document.createElement("button");
+  saveBtn.className = "research-tracker-save-btn";
+  saveBtn.textContent = "Save";
+  actionsEl.appendChild(saveBtn);
+
+  const cancelBtn = document.createElement("button");
+  cancelBtn.className = "research-tracker-cancel-btn";
+  cancelBtn.textContent = "Cancel";
+  actionsEl.appendChild(cancelBtn);
+
+  editArea.appendChild(actionsEl);
+  itemEl.appendChild(editArea);
+
+  // Edit button opens the edit area
+  editBtn.addEventListener("click", () => {
+    textarea.value = typeof item.findings === "string" ? item.findings : "";
+    findingsDisplay.style.display = "none";
+    editArea.style.display = "flex";
+    editBtn.style.display = "none";
+    textarea.focus();
+  });
+
+  // Cancel restores the findings display
+  cancelBtn.addEventListener("click", () => {
+    editArea.style.display = "none";
+    findingsDisplay.style.display = "";
+    editBtn.style.display = "";
+  });
+
+  // Save sends PATCH request and updates the UI
+  saveBtn.addEventListener("click", async () => {
+    const newFindings = textarea.value;
+    if (newFindings.length > 2000) {
+      alert("Findings must be at most 2000 characters.");
+      return;
+    }
+    saveBtn.disabled = true;
+    saveBtn.textContent = "Saving…";
+    try {
+      const res = await fetch(
+        `/api/goals/${encodeURIComponent(goalId)}/research/${encodeURIComponent(item.id)}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json", ...authHeaders() },
+          body: JSON.stringify({ findings: newFindings }),
+        }
+      );
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        alert((err && err.error) ? err.error : "Failed to save findings.");
+        return;
+      }
+      const updated = await res.json();
+      // Update local item state and refresh display
+      item.findings = typeof updated.findings === "string" ? updated.findings : newFindings;
+      findingsDisplay.innerHTML = "";
+      if (item.findings.trim().length > 0) {
+        const lbl = document.createElement("div");
+        lbl.className = "research-tracker-findings-label";
+        lbl.textContent = "Findings";
+        const txt = document.createElement("div");
+        txt.className = "research-tracker-findings";
+        txt.textContent = item.findings;
+        findingsDisplay.appendChild(lbl);
+        findingsDisplay.appendChild(txt);
+      }
+      editArea.style.display = "none";
+      findingsDisplay.style.display = "";
+      editBtn.style.display = "";
+    } catch (err) {
+      console.warn("Failed to save findings:", err);
+      alert("Failed to save findings. Please try again.");
+    } finally {
+      saveBtn.disabled = false;
+      saveBtn.textContent = "Save";
+    }
+  });
+
+  return itemEl;
+}
+
 function restoreLastSession() {
   const lastId = localStorage.getItem("copilot_last_session");
   if (!lastId) return;
@@ -769,6 +1106,14 @@ viewToggleBtn.addEventListener("click", () => {
 // Dashboard nav items
 document.querySelectorAll(".dashboard-nav-item").forEach((item) => {
   item.addEventListener("click", () => navigateDashboard(item.dataset.page));
+});
+
+// Research goal selector
+researchGoalSelect.addEventListener("change", () => {
+  const selectedGoalId = researchGoalSelect.value;
+  if (selectedGoalId) {
+    loadResearchForGoal(selectedGoalId);
+  }
 });
 
 // --- Stop Button ---

@@ -870,6 +870,80 @@ app.get("/api/goals/:id/research", async (req: Request, res: Response) => {
   }
 });
 
+// Update a research item's fields (findings, decision, status), scoped to the authenticated user
+app.patch("/api/goals/:goalId/research/:itemId", async (req: Request, res: Response) => {
+  const token = extractToken(req);
+  if (!token) {
+    res.status(401).json({ error: "Missing token. Provide Authorization: Bearer <token> header." });
+    return;
+  }
+
+  const goalId = req.params.goalId as string;
+  const itemId = req.params.itemId as string;
+  const body = req.body as Record<string, unknown>;
+
+  const VALID_RESEARCH_STATUSES = ["open", "researching", "resolved"] as const;
+  const MAX_FINDINGS = 2000;
+  const MAX_DECISION = 1000;
+
+  const updates: Partial<Omit<import("./planning-types.js").ResearchItem, "id" | "goalId">> = {};
+
+  if ("findings" in body) {
+    if (typeof body.findings !== "string") {
+      res.status(400).json({ error: "findings must be a string" });
+      return;
+    }
+    if (body.findings.length > MAX_FINDINGS) {
+      res.status(400).json({ error: `findings must be at most ${MAX_FINDINGS} characters` });
+      return;
+    }
+    updates.findings = body.findings.trim();
+  }
+
+  if ("decision" in body) {
+    if (typeof body.decision !== "string") {
+      res.status(400).json({ error: "decision must be a string" });
+      return;
+    }
+    if (body.decision.length > MAX_DECISION) {
+      res.status(400).json({ error: `decision must be at most ${MAX_DECISION} characters` });
+      return;
+    }
+    updates.decision = body.decision.trim();
+  }
+
+  if ("status" in body) {
+    if (!VALID_RESEARCH_STATUSES.includes(body.status as (typeof VALID_RESEARCH_STATUSES)[number])) {
+      res.status(400).json({ error: "status must be one of: open, researching, resolved" });
+      return;
+    }
+    updates.status = body.status as "open" | "researching" | "resolved";
+  }
+
+  if (Object.keys(updates).length === 0) {
+    res.status(400).json({ error: "No valid fields provided for update" });
+    return;
+  }
+
+  try {
+    const goal = await getOwnedGoal(token, goalId);
+    if (!goal) {
+      res.status(404).json({ error: "Goal not found" });
+      return;
+    }
+
+    const updated = await planningStore.updateResearchItem(itemId, updates);
+    if (!updated) {
+      res.status(404).json({ error: "Research item not found" });
+      return;
+    }
+
+    res.json(updated);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Failed to update research item" });
+  }
+});
+
 // Get milestones for a specific goal, scoped to the authenticated user
 app.get("/api/goals/:id/milestones", async (req: Request, res: Response) => {
   const token = extractToken(req);
