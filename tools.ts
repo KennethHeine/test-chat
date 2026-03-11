@@ -1,4 +1,5 @@
 import type { Tool } from "@github/copilot-sdk";
+import type { PlanningStore } from "./planning-store.js";
 
 // --- GitHub API helper ---
 
@@ -18,6 +19,50 @@ async function githubFetch(token: string, path: string): Promise<unknown> {
   return res.json();
 }
 
+/**
+ * Sends a write request (POST, PATCH, PUT, DELETE) to the GitHub REST API.
+ * Handles authentication, content-type, and rate-limit monitoring.
+ * Throws on non-2xx responses. Returns null for 204 No Content.
+ */
+async function githubWrite(
+  token: string,
+  method: "POST" | "PATCH" | "PUT" | "DELETE",
+  path: string,
+  body?: Record<string, unknown>
+): Promise<unknown> {
+  const res = await fetch(`https://api.github.com${path}`, {
+    method,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: "application/vnd.github+json",
+      "X-GitHub-Api-Version": "2022-11-28",
+      "User-Agent": "copilot-agent-orchestrator",
+      ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
+    },
+    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+  });
+  if (!res.ok) {
+    const errorBody = await res.text().catch(() => "");
+    throw new Error(`GitHub API ${res.status}: ${errorBody.slice(0, 200)}`);
+  }
+  // 204 No Content (e.g., DELETE) — return null
+  if (res.status === 204) return null;
+  // Monitor rate limits; pause 1s when remaining is critically low
+  const remaining = res.headers.get("x-ratelimit-remaining");
+  if (remaining !== null && parseInt(remaining, 10) < 10) {
+    await new Promise<void>((resolve) => setTimeout(resolve, 1000));
+  }
+  return res.json();
+}
+
+// --- ISO 8601 date validation helper ---
+
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
+
+function isValidIsoDate(value: string): boolean {
+  return ISO_DATE_RE.test(value) && !isNaN(Date.parse(value));
+}
+
 // --- Tool factory (creates tools bound to a user's GitHub token) ---
 
 // Exported tool names for permission handler reference
@@ -27,12 +72,13 @@ export const GITHUB_TOOL_NAMES = [
   "read_repo_file",
   "list_issues",
   "search_code",
+  "create_github_milestone",
 ] as const;
 
 // Max file size returned by read_repo_file (100KB) to prevent blowing up LLM context
 const MAX_FILE_SIZE = 100 * 1024;
 
-export function createGitHubTools(token: string): Tool[] {
+export function createGitHubTools(token: string, planningStore?: PlanningStore): Tool[] {
   const listRepos: Tool = {
     name: "list_repos",
     description:
@@ -235,5 +281,160 @@ export function createGitHubTools(token: string): Tool[] {
     },
   };
 
-  return [listRepos, getRepoStructure, readRepoFile, listIssues, searchCode];
+  /**
+   * create_github_milestone: Creates a GitHub Milestone from a planning Milestone entity.
+   * Idempotent: if a milestone with the same title already exists in the repository,
+   * it reuses that one. Stores the GitHub milestone number and html_url back on the
+   * planning Milestone entity.
+   *
+   * Requires a planningStore to be provided to createGitHubTools.
+   */
+  const createGithubMilestone: Tool = {
+    name: "create_github_milestone",
+    description:
+      "Create a GitHub Milestone from a planning milestone entity. " +
+      "Reads the milestone title and description from the planning store, " +
+      "creates (or finds) the GitHub milestone, and stores the GitHub milestone " +
+      "number and URL back on the planning entity. Idempotent: existing milestones " +
+      "with the same title are reused without error.",
+    parameters: {
+      type: "object",
+      properties: {
+        milestoneId: {
+          type: "string",
+          description: "The ID of the planning Milestone to push to GitHub.",
+        },
+        goalId: {
+          type: "string",
+          description: "The goal ID this milestone belongs to (used for ownership check).",
+        },
+        sessionId: {
+          type: "string",
+          description: "The session identifier of the caller. Must match the goal's sessionId.",
+        },
+        owner: {
+          type: "string",
+          description: "GitHub repository owner (user or organization).",
+        },
+        repo: {
+          type: "string",
+          description: "GitHub repository name.",
+        },
+        dueDate: {
+          type: "string",
+          description:
+            "Optional due date for the milestone in ISO 8601 format: YYYY-MM-DDTHH:MM:SSZ " +
+            "(e.g., '2026-06-01T00:00:00Z'). Must be a valid date.",
+        },
+      },
+      required: ["milestoneId", "goalId", "sessionId", "owner", "repo"],
+    },
+    handler: async (args: any) => {
+      if (!planningStore) {
+        return { error: "Planning store not available" };
+      }
+
+      // Validate required string fields
+      if (typeof args.milestoneId !== "string" || args.milestoneId.trim().length === 0) {
+        return { error: "milestoneId must be a non-empty string" };
+      }
+      if (typeof args.goalId !== "string" || args.goalId.trim().length === 0) {
+        return { error: "goalId must be a non-empty string" };
+      }
+      if (typeof args.sessionId !== "string" || args.sessionId.trim().length === 0) {
+        return { error: "sessionId must be a non-empty string" };
+      }
+      if (typeof args.owner !== "string" || args.owner.trim().length === 0) {
+        return { error: "owner must be a non-empty string" };
+      }
+      if (typeof args.repo !== "string" || args.repo.trim().length === 0) {
+        return { error: "repo must be a non-empty string" };
+      }
+
+      // Validate optional dueDate (must be valid ISO 8601: YYYY-MM-DDTHH:MM:SSZ)
+      if (args.dueDate !== undefined && args.dueDate !== null && args.dueDate !== "") {
+        if (typeof args.dueDate !== "string" || !isValidIsoDate(args.dueDate)) {
+          return { error: "dueDate must be a valid ISO 8601 date string (YYYY-MM-DDTHH:MM:SSZ)" };
+        }
+      }
+
+      // Ownership check: verify goal belongs to caller's session
+      const goal = await planningStore.getGoal(args.goalId);
+      if (!goal || goal.sessionId !== args.sessionId) {
+        return { error: `Goal not found: ${args.goalId}` };
+      }
+
+      // Verify milestone belongs to the stated goal
+      const milestone = await planningStore.getMilestone(args.milestoneId);
+      if (!milestone || milestone.goalId !== args.goalId) {
+        return { error: `Milestone not found: ${args.milestoneId}` };
+      }
+
+      const { owner, repo } = args;
+      const title = milestone.name;
+      const description = milestone.goal;
+
+      // Idempotency: check if a GitHub milestone with this title already exists
+      let githubNumber: number | undefined;
+      let githubUrl: string | undefined;
+
+      try {
+        const existing = (await githubFetch(
+          token,
+          `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/milestones?state=open&per_page=100`
+        )) as any[];
+
+        const match = existing.find((m: any) => m.title === title);
+        if (match) {
+          githubNumber = match.number;
+          githubUrl = match.html_url;
+        }
+      } catch (err: any) {
+        return { error: `Failed to list milestones: ${err.message}` };
+      }
+
+      // Create the milestone if it doesn't already exist
+      if (githubNumber === undefined) {
+        const body: Record<string, unknown> = {
+          title,
+          description,
+        };
+        if (args.dueDate) {
+          body.due_on = args.dueDate;
+        }
+        try {
+          const created = (await githubWrite(
+            token,
+            "POST",
+            `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/milestones`,
+            body
+          )) as any;
+          githubNumber = created.number;
+          githubUrl = created.html_url;
+        } catch (err: any) {
+          return { error: `Failed to create GitHub milestone: ${err.message}` };
+        }
+      }
+
+      // Store GitHub milestone data back on the planning entity
+      try {
+        const updated = await planningStore.updateMilestone(args.milestoneId, {
+          githubNumber,
+          githubUrl,
+        });
+        if (!updated) {
+          return { error: `Milestone not found after update: ${args.milestoneId}` };
+        }
+        return {
+          milestoneId: args.milestoneId,
+          githubNumber,
+          githubUrl,
+        };
+      } catch (err: any) {
+        return { error: `Failed to update planning milestone: ${err.message}` };
+      }
+    },
+  };
+
+  return [listRepos, getRepoStructure, readRepoFile, listIssues, searchCode, createGithubMilestone];
 }

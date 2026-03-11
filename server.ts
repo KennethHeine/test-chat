@@ -105,7 +105,7 @@ function buildSessionConfig(token: string, model: string): SessionConfig {
     systemMessage: {
       content: ORCHESTRATOR_SYSTEM_MESSAGE,
     },
-    tools: [...createGitHubTools(token), ...createPlanningTools(token, planningStore)],
+    tools: [...createGitHubTools(token, planningStore), ...createPlanningTools(token, planningStore)],
     hooks: {
       onPreToolUse: async (input) => {
         console.log(`[hook] pre-tool: ${input.toolName}`);

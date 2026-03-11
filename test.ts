@@ -3,6 +3,7 @@ import { execSync, spawn, ChildProcess } from "child_process";
 import { config } from "dotenv";
 import { InMemoryPlanningStore } from "./planning-store.js";
 import { createPlanningTools, PLANNING_TOOL_NAMES } from "./planning-tools.js";
+import { createGitHubTools, GITHUB_TOOL_NAMES } from "./tools.js";
 
 config(); // load .env
 
@@ -1393,6 +1394,228 @@ async function testCreateMilestonePlanNameLengthAfterSanitizationReturnsError():
 }
 
 // ============================================================
+// 6b. create_github_milestone tool tests
+// ============================================================
+
+/**
+ * Seeds a goal and a milestone into the store.
+ * Returns { goalId, milestoneId, sessionId }.
+ */
+async function seedGoalAndMilestone(
+  store: InMemoryPlanningStore
+): Promise<{ goalId: string; milestoneId: string; sessionId: string }> {
+  const goalId = await seedGoal(store);
+  const tools = createPlanningTools("test-token", store);
+  const create = tools.find((t) => t.name === "create_milestone_plan")!;
+  const result: any = await create.handler(
+    {
+      sessionId: makeValidSaveGoalArgs().sessionId,
+      goalId,
+      milestones: [
+        {
+          name: "Alpha Release",
+          goal: "Ship the first working version",
+          scope: "Core features only",
+          order: 1,
+          dependencies: [],
+          acceptanceCriteria: ["app starts"],
+          exitCriteria: [],
+        },
+      ],
+    },
+    STUB_INVOCATION
+  );
+  if (result.error) throw new Error(`seedGoalAndMilestone failed: ${result.error}`);
+  const milestoneId = result.milestones[0].id;
+  return { goalId, milestoneId, sessionId: makeValidSaveGoalArgs().sessionId as string };
+}
+
+/**
+ * Sets global.fetch to a mock that simulates GitHub milestone API.
+ * Returns a restore function.
+ */
+function mockGitHubMilestoneFetch(options: {
+  listResponse?: any[];
+  createResponse?: any;
+  shouldFail?: boolean;
+}): () => void {
+  const orig = global.fetch;
+  (global as any).fetch = async (url: string, init?: any) => {
+    if (options.shouldFail) {
+      return {
+        ok: false,
+        status: 500,
+        text: async () => "Internal Server Error",
+        headers: { get: () => null },
+      };
+    }
+    const method = init?.method ?? "GET";
+    if (method === "GET" && String(url).includes("/milestones")) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => options.listResponse ?? [],
+        headers: { get: () => null },
+      };
+    }
+    if (method === "POST" && String(url).includes("/milestones")) {
+      return {
+        ok: true,
+        status: 201,
+        json: async () => options.createResponse ?? { number: 42, html_url: "https://github.com/owner/repo/milestone/42" },
+        headers: { get: () => null },
+      };
+    }
+    // Fallback: let through
+    return orig(url as any, init);
+  };
+  return () => { (global as any).fetch = orig; };
+}
+
+async function testGithubToolRegistration(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const tools = createGitHubTools("test-token", store);
+  if (tools.length !== GITHUB_TOOL_NAMES.length) {
+    throw new Error(`Expected ${GITHUB_TOOL_NAMES.length} GitHub tools, got ${tools.length}`);
+  }
+  const names = tools.map((t) => t.name);
+  for (const name of GITHUB_TOOL_NAMES) {
+    if (!names.includes(name)) throw new Error(`Missing GitHub tool: ${name}`);
+  }
+}
+
+async function testCreateGithubMilestoneCreatesNew(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const { goalId, milestoneId, sessionId } = await seedGoalAndMilestone(store);
+  const tools = createGitHubTools("test-token", store);
+  const tool = tools.find((t) => t.name === "create_github_milestone")!;
+
+  const restore = mockGitHubMilestoneFetch({
+    listResponse: [], // no existing milestones
+    createResponse: { number: 7, html_url: "https://github.com/owner/repo/milestone/7" },
+  });
+  try {
+    const result: any = await tool.handler(
+      { milestoneId, goalId, sessionId, owner: "owner", repo: "repo" },
+      STUB_INVOCATION
+    );
+    if (result.error) throw new Error(`Unexpected error: ${result.error}`);
+    if (result.githubNumber !== 7) throw new Error(`Expected githubNumber 7, got ${result.githubNumber}`);
+    if (result.githubUrl !== "https://github.com/owner/repo/milestone/7") {
+      throw new Error(`Unexpected githubUrl: ${result.githubUrl}`);
+    }
+    // Verify store was updated
+    const updated = await store.getMilestone(milestoneId);
+    if (updated?.githubNumber !== 7) throw new Error("githubNumber not persisted to store");
+    if (updated?.githubUrl !== "https://github.com/owner/repo/milestone/7") {
+      throw new Error("githubUrl not persisted to store");
+    }
+  } finally {
+    restore();
+  }
+}
+
+async function testCreateGithubMilestoneIdempotentWhenExists(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const { goalId, milestoneId, sessionId } = await seedGoalAndMilestone(store);
+  const tools = createGitHubTools("test-token", store);
+  const tool = tools.find((t) => t.name === "create_github_milestone")!;
+
+  // Simulate an existing GitHub milestone matching the planning milestone's name
+  const restore = mockGitHubMilestoneFetch({
+    listResponse: [{ number: 3, html_url: "https://github.com/owner/repo/milestone/3", title: "Alpha Release" }],
+  });
+  try {
+    const result: any = await tool.handler(
+      { milestoneId, goalId, sessionId, owner: "owner", repo: "repo" },
+      STUB_INVOCATION
+    );
+    if (result.error) throw new Error(`Unexpected error: ${result.error}`);
+    if (result.githubNumber !== 3) throw new Error(`Expected githubNumber 3, got ${result.githubNumber}`);
+    // Verify the existing number was stored (not a new one)
+    const updated = await store.getMilestone(milestoneId);
+    if (updated?.githubNumber !== 3) throw new Error("Existing githubNumber not persisted");
+  } finally {
+    restore();
+  }
+}
+
+async function testCreateGithubMilestoneWithDueDate(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const { goalId, milestoneId, sessionId } = await seedGoalAndMilestone(store);
+  const tools = createGitHubTools("test-token", store);
+  const tool = tools.find((t) => t.name === "create_github_milestone")!;
+
+  const restore = mockGitHubMilestoneFetch({
+    listResponse: [],
+    createResponse: { number: 9, html_url: "https://github.com/owner/repo/milestone/9" },
+  });
+  try {
+    const result: any = await tool.handler(
+      { milestoneId, goalId, sessionId, owner: "owner", repo: "repo", dueDate: "2026-06-01T00:00:00Z" },
+      STUB_INVOCATION
+    );
+    if (result.error) throw new Error(`Unexpected error: ${result.error}`);
+    if (result.githubNumber !== 9) throw new Error(`Expected githubNumber 9, got ${result.githubNumber}`);
+  } finally {
+    restore();
+  }
+}
+
+async function testCreateGithubMilestoneInvalidDueDateReturnsError(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const { goalId, milestoneId, sessionId } = await seedGoalAndMilestone(store);
+  const tools = createGitHubTools("test-token", store);
+  const tool = tools.find((t) => t.name === "create_github_milestone")!;
+
+  const result: any = await tool.handler(
+    { milestoneId, goalId, sessionId, owner: "owner", repo: "repo", dueDate: "not-a-date" },
+    STUB_INVOCATION
+  );
+  if (!result.error) throw new Error("Expected error for invalid dueDate");
+  if (!result.error.includes("dueDate")) throw new Error(`Expected error to mention 'dueDate', got: ${result.error}`);
+}
+
+async function testCreateGithubMilestoneWrongSessionReturnsError(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const { goalId, milestoneId } = await seedGoalAndMilestone(store);
+  const tools = createGitHubTools("test-token", store);
+  const tool = tools.find((t) => t.name === "create_github_milestone")!;
+
+  const result: any = await tool.handler(
+    { milestoneId, goalId, sessionId: "wrong-session", owner: "owner", repo: "repo" },
+    STUB_INVOCATION
+  );
+  if (!result.error) throw new Error("Expected error for wrong sessionId");
+}
+
+async function testCreateGithubMilestoneMissingOwnerReturnsError(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const { goalId, milestoneId, sessionId } = await seedGoalAndMilestone(store);
+  const tools = createGitHubTools("test-token", store);
+  const tool = tools.find((t) => t.name === "create_github_milestone")!;
+
+  const result: any = await tool.handler(
+    { milestoneId, goalId, sessionId, owner: "", repo: "repo" },
+    STUB_INVOCATION
+  );
+  if (!result.error) throw new Error("Expected error for empty owner");
+  if (!result.error.includes("owner")) throw new Error(`Expected error to mention 'owner', got: ${result.error}`);
+}
+
+async function testCreateGithubMilestoneWithoutPlanningStoreReturnsError(): Promise<void> {
+  // When createGitHubTools is called without a planningStore, the tool should report an error
+  const tools = createGitHubTools("test-token"); // no planningStore
+  const tool = tools.find((t) => t.name === "create_github_milestone")!;
+
+  const result: any = await tool.handler(
+    { milestoneId: "m1", goalId: "g1", sessionId: "s1", owner: "owner", repo: "repo" },
+    STUB_INVOCATION
+  );
+  if (!result.error) throw new Error("Expected error when planningStore is not provided");
+}
+
+// ============================================================
 // 7. Research API endpoint tests (HTTP)
 // ============================================================
 
@@ -1805,6 +2028,14 @@ async function main() {
   await run("get_milestones: unknown goalId returns error", testGetMilestonesUnknownGoalReturnsError);
   await run("update_milestone: order collision returns error", testUpdateMilestoneOrderCollisionReturnsError);
   await run("create_milestone_plan: name exceeding max length after sanitization returns error", testCreateMilestonePlanNameLengthAfterSanitizationReturnsError);
+  await run("create_github_milestone: GitHub tool names include new tool", testGithubToolRegistration);
+  await run("create_github_milestone: creates new when none exists", testCreateGithubMilestoneCreatesNew);
+  await run("create_github_milestone: idempotent when milestone exists on GitHub", testCreateGithubMilestoneIdempotentWhenExists);
+  await run("create_github_milestone: accepts valid dueDate", testCreateGithubMilestoneWithDueDate);
+  await run("create_github_milestone: invalid dueDate returns error", testCreateGithubMilestoneInvalidDueDateReturnsError);
+  await run("create_github_milestone: wrong sessionId returns error", testCreateGithubMilestoneWrongSessionReturnsError);
+  await run("create_github_milestone: empty owner returns error", testCreateGithubMilestoneMissingOwnerReturnsError);
+  await run("create_github_milestone: missing planningStore returns error", testCreateGithubMilestoneWithoutPlanningStoreReturnsError);
 
   // --- Summary ---
   console.log("\n═══════════════════════════════════════════════");
