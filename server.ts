@@ -753,10 +753,16 @@ if (process.env.ENABLE_GOAL_SEED === "true") {
         return;
       }
 
-      const created = await planningStore.createMilestone(milestone);
-      res.status(201).json(created);
+      try {
+        const created = await planningStore.createMilestone(milestone);
+        res.status(201).json(created);
+      } catch (err: any) {
+        // Validation or domain errors from createMilestone → 400 Bad Request
+        res.status(400).json({ error: err.message || "Invalid milestone" });
+      }
     } catch (err: any) {
-      res.status(400).json({ error: err.message || "Failed to seed milestone" });
+      // Unexpected errors (e.g., getOwnedGoal/session store failures) → 500 Internal Server Error
+      res.status(500).json({ error: err.message || "Failed to seed milestone" });
     }
   });
 }
