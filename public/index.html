@@ -1098,6 +1098,168 @@
       max-width: 300px;
     }
 
+    /* Goal list view */
+    .goal-list {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .goal-list-item {
+      background: var(--color-bg-secondary);
+      border: 1px solid var(--color-border);
+      border-radius: var(--radius);
+      padding: 14px 16px;
+      cursor: pointer;
+      transition: border-color 0.15s, background 0.15s;
+    }
+
+    .goal-list-item:hover {
+      border-color: var(--color-accent);
+      background: var(--color-bg-tertiary);
+    }
+
+    .goal-list-item-title {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--color-text);
+      margin-bottom: 4px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .goal-list-item-intent {
+      font-size: 12px;
+      color: var(--color-text-muted);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      margin-bottom: 8px;
+    }
+
+    .goal-list-item-counts {
+      display: flex;
+      gap: 12px;
+      font-size: 11px;
+      color: var(--color-text-muted);
+    }
+
+    .goal-list-item-count {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    /* Goal detail view */
+    .goal-detail-back {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 13px;
+      color: var(--color-accent);
+      cursor: pointer;
+      background: none;
+      border: none;
+      padding: 0 0 16px 0;
+      margin-bottom: 4px;
+    }
+
+    .goal-detail-back:hover {
+      text-decoration: underline;
+    }
+
+    .goal-detail-title {
+      font-size: 18px;
+      font-weight: 600;
+      color: var(--color-text);
+      margin-bottom: 6px;
+    }
+
+    .goal-detail-intent {
+      font-size: 13px;
+      color: var(--color-text-muted);
+      margin-bottom: 20px;
+    }
+
+    .goal-detail-counts {
+      display: flex;
+      gap: 16px;
+      margin-bottom: 20px;
+      flex-wrap: wrap;
+    }
+
+    .goal-detail-count-badge {
+      background: var(--color-bg-tertiary);
+      border: 1px solid var(--color-border);
+      border-radius: var(--radius);
+      padding: 6px 12px;
+      font-size: 12px;
+      color: var(--color-text-muted);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 2px;
+      min-width: 70px;
+    }
+
+    .goal-detail-count-badge .count-number {
+      font-size: 20px;
+      font-weight: 600;
+      color: var(--color-text);
+      line-height: 1.2;
+    }
+
+    .goal-detail-section {
+      margin-bottom: 18px;
+    }
+
+    .goal-detail-section-label {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--color-text-muted);
+      margin-bottom: 6px;
+    }
+
+    .goal-detail-section-value {
+      font-size: 13px;
+      color: var(--color-text);
+      line-height: 1.5;
+    }
+
+    .goal-detail-list {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .goal-detail-list li {
+      font-size: 13px;
+      color: var(--color-text);
+      padding-left: 12px;
+      position: relative;
+    }
+
+    .goal-detail-list li::before {
+      content: "•";
+      position: absolute;
+      left: 0;
+      color: var(--color-text-muted);
+    }
+
+    .goal-detail-meta {
+      font-size: 11px;
+      color: var(--color-text-muted);
+      margin-top: 24px;
+      padding-top: 12px;
+      border-top: 1px solid var(--color-border);
+    }
+
     @media (max-width: 768px) {
       #dashboard-nav {
         width: 160px;
@@ -1221,14 +1383,19 @@
 
       <div id="dashboard-content">
         <div class="dashboard-page active" id="dashboard-page-goals">
-          <div class="dashboard-page-header">
-            <h2>Goals</h2>
-            <p>Planning goals defined in your conversations</p>
+          <div id="goals-list-view">
+            <div class="dashboard-page-header">
+              <h2>Goals</h2>
+              <p>Planning goals defined in your conversations</p>
+            </div>
+            <div id="goals-list-content">
+              <div class="dashboard-empty">
+                <span class="dashboard-empty-icon">🎯</span>
+                <p>No goals yet. Use the chat to define planning goals with Copilot.</p>
+              </div>
+            </div>
           </div>
-          <div class="dashboard-empty">
-            <span class="dashboard-empty-icon">🎯</span>
-            <p>No goals yet. Use the chat to define planning goals with Copilot.</p>
-          </div>
+          <div id="goals-detail-view" style="display:none;"></div>
         </div>
 
         <div class="dashboard-page" id="dashboard-page-research">
