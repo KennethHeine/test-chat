@@ -99,7 +99,7 @@ function buildIssueBody(draft: IssueDraft, researchItems: ResearchItem[]): strin
    * @returns The sanitized string safe for use inside a Markdown table cell.
    */
   function escapeTableCell(value: string): string {
-    return value.replace(/\r?\n/g, " ").replace(/\|/g, "\\|");
+    return value.replace(/\r?\n/g, " ").replace(/\\/g, "\\\\").replace(/\|/g, "\\|");
   }
 
   lines.push("## Purpose", "", draft.purpose, "");
