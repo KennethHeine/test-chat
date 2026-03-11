@@ -23,6 +23,8 @@ const usageDisplay = document.getElementById("usage-display");
 const usageText = document.getElementById("usage-text");
 const quotaDisplay = document.getElementById("quota-display");
 const quotaText = document.getElementById("quota-text");
+const agentStatusEl = document.getElementById("agent-status");
+const agentStatusText = document.getElementById("agent-status-text");
 const sidebarBackdrop = document.getElementById("sidebar-backdrop");
 
 // --- Token Management ---
@@ -437,6 +439,53 @@ function hideToolActivity() {
   toolActivityText.textContent = "";
 }
 
+// --- Agent Status Helpers (planning / intent / subagent / compaction events) ---
+
+let activeSubagentCount = 0;
+
+function showAgentStatus(text) {
+  agentStatusText.textContent = text;
+  agentStatusEl.style.display = "inline";
+}
+
+function hideAgentStatus() {
+  agentStatusEl.style.display = "none";
+  agentStatusText.textContent = "";
+  activeSubagentCount = 0;
+}
+
+/**
+ * Handles planning_start, plan_ready, intent, subagent_start, subagent_end, and compaction
+ * SSE events by updating the agent status indicator in the status bar.
+ * @param {Object} event - The parsed SSE event
+ */
+function handleAgentStatusEvent(event) {
+  if (event.type === "planning_start") {
+    showAgentStatus("🗺️ Planning...");
+  } else if (event.type === "plan_ready") {
+    showAgentStatus("✅ Plan ready");
+  } else if (event.type === "intent" && event.intent) {
+    showAgentStatus(`💡 ${event.intent}`);
+  } else if (event.type === "subagent_start") {
+    activeSubagentCount++;
+    const label = event.name || "Sub-agent";
+    showAgentStatus(`🤖 ${label} (${activeSubagentCount} active)`);
+  } else if (event.type === "subagent_end") {
+    if (activeSubagentCount > 0) activeSubagentCount--;
+    if (activeSubagentCount === 0) {
+      hideAgentStatus();
+    } else {
+      showAgentStatus(`🤖 Sub-agents running (${activeSubagentCount} active)`);
+    }
+  } else if (event.type === "compaction") {
+    if (event.started) {
+      showAgentStatus("🔄 Optimizing context...");
+    } else {
+      hideAgentStatus();
+    }
+  }
+}
+
 /**
  * Handles a parsed tool_complete SSE event.
  * Extracted so it can be called from both the streaming loop and tests.
@@ -708,6 +757,10 @@ async function sendMessage() {
             updateSessionTitle(sessionId, event.title);
           } else if (event.type === "usage") {
             showUsage(event.usage);
+          } else if (event.type === "planning_start" || event.type === "plan_ready"
+            || event.type === "intent" || event.type === "subagent_start"
+            || event.type === "subagent_end" || event.type === "compaction") {
+            handleAgentStatusEvent(event);
           } else if (event.type === "done") {
             sessionId = event.sessionId;
             // Persist session state
@@ -735,6 +788,7 @@ async function sendMessage() {
     sendBtn.style.display = "inline-block";
     stopBtn.style.display = "none";
     hideToolActivity();
+    hideAgentStatus();
     inputEl.focus();
   }
 }

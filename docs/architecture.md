@@ -140,6 +140,14 @@ Client                          Server                          Copilot SDK
 | `tool.execution_complete` | `{"type":"tool_complete"}` | Tool execution finished |
 | `session.title_changed` | `{"type":"title","title":"..."}` | AI-generated session title |
 | `assistant.usage` | `{"type":"usage","usage":{...}}` | Token usage (model, inputTokens, outputTokens) |
+| `session.mode_changed` (→ plan) | `{"type":"planning_start"}` | Agent entered planning mode |
+| `session.mode_changed` (← plan) | `{"type":"plan_ready"}` | Agent exited planning mode |
+| `assistant.intent` | `{"type":"intent","intent":"..."}` | Current agent intent/activity description |
+| `subagent.started` | `{"type":"subagent_start","name":"..."}` | Sub-agent began |
+| `subagent.completed` | `{"type":"subagent_end","name":"...","success":true}` | Sub-agent finished successfully |
+| `subagent.failed` | `{"type":"subagent_end","name":"...","success":false,"error":"..."}` | Sub-agent failed |
+| `session.compaction_start` | `{"type":"compaction","started":true}` | Context compaction began |
+| `session.compaction_complete` | `{"type":"compaction","started":false,"tokensRemoved":N}` | Context compaction finished |
 | `session.idle` | `{"type":"done","sessionId":"..."}` | Streaming complete — includes session ID for follow-ups |
 | `session.error` | `{"type":"error","message":"..."}` | Error during generation |
 

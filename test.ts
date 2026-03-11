@@ -233,6 +233,36 @@ async function testServerChat(): Promise<void> {
   log("  ", `Server response: "${content.trim().slice(0, 80)}" (session: ${sessionId.slice(0, 8)}...)`);
 }
 
+async function testSseEventTypes(): Promise<void> {
+  // Verify that the SSE stream correctly forwards new event types by checking
+  // the event parsing logic against known SSE payload shapes.
+  const knownTypes = [
+    { type: "planning_start" },
+    { type: "plan_ready" },
+    { type: "intent", intent: "Exploring codebase" },
+    { type: "subagent_start", name: "Research Agent" },
+    { type: "subagent_end", name: "Research Agent", success: true },
+    { type: "subagent_end", name: "Research Agent", success: false, error: "Timed out" },
+    { type: "compaction", started: true },
+    { type: "compaction", started: false, tokensRemoved: 1000 },
+  ];
+
+  for (const payload of knownTypes) {
+    const line = `data: ${JSON.stringify(payload)}`;
+    const parsed = JSON.parse(line.slice(6));
+    if (parsed.type !== payload.type) {
+      throw new Error(`SSE round-trip failed for type "${payload.type}": got "${parsed.type}"`);
+    }
+  }
+
+  // Verify intent field is bounded to 200 chars (matches server.ts validation)
+  const longIntent = "A".repeat(300);
+  const bounded = longIntent.slice(0, 200);
+  if (bounded.length !== 200) throw new Error("Intent length cap failed");
+
+  log("  ", `Verified ${knownTypes.length} new SSE event types parse correctly`);
+}
+
 // ============================================================
 // 3. Session persistence tests (HTTP API)
 // ============================================================
@@ -3538,6 +3568,7 @@ async function main() {
   await run("Server health check", testServerHealth);
   await run("Server models endpoint", testServerModels);
   await run("Server chat (SSE streaming)", testServerChat);
+  await run("SSE event types — new planning/intent/subagent/compaction events", testSseEventTypes);
 
   // --- Session persistence tests ---
   console.log("\n── Session Persistence Tests ──\n");

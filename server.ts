@@ -438,6 +438,74 @@ app.post("/api/chat", async (req: Request, res: Response) => {
       })
     );
 
+    // Planning mode changes — emit planning_start when entering plan mode, plan_ready when exiting
+    unsubscribers.push(
+      session.on("session.mode_changed", (event) => {
+        const newMode = event.data?.newMode || "";
+        const previousMode = event.data?.previousMode || "";
+        if (newMode === "plan") {
+          res.write(`data: ${JSON.stringify({ type: "planning_start" })}\n\n`);
+        } else if (previousMode === "plan") {
+          res.write(`data: ${JSON.stringify({ type: "plan_ready" })}\n\n`);
+        }
+      })
+    );
+
+    // Agent intent — what the agent is currently doing
+    unsubscribers.push(
+      session.on("assistant.intent", (event) => {
+        const intent = typeof event.data?.intent === "string" ? event.data.intent.slice(0, 200) : "";
+        if (intent) {
+          res.write(`data: ${JSON.stringify({ type: "intent", intent })}\n\n`);
+        }
+      })
+    );
+
+    // Sub-agent lifecycle events
+    unsubscribers.push(
+      session.on("subagent.started", (event) => {
+        const name = typeof event.data?.agentDisplayName === "string"
+          ? event.data.agentDisplayName.slice(0, 100)
+          : typeof event.data?.agentName === "string"
+            ? event.data.agentName.slice(0, 100)
+            : "Sub-agent";
+        res.write(`data: ${JSON.stringify({ type: "subagent_start", name })}\n\n`);
+      })
+    );
+
+    unsubscribers.push(
+      session.on("subagent.completed", (event) => {
+        const name = typeof event.data?.agentDisplayName === "string"
+          ? event.data.agentDisplayName.slice(0, 100)
+          : typeof event.data?.agentName === "string"
+            ? event.data.agentName.slice(0, 100)
+            : "Sub-agent";
+        res.write(`data: ${JSON.stringify({ type: "subagent_end", name, success: true })}\n\n`);
+      })
+    );
+
+    unsubscribers.push(
+      session.on("subagent.failed", (event) => {
+        const name = typeof event.data?.agentName === "string" ? event.data.agentName.slice(0, 100) : "Sub-agent";
+        const error = typeof event.data?.error === "string" ? event.data.error.slice(0, 200) : "Sub-agent failed";
+        res.write(`data: ${JSON.stringify({ type: "subagent_end", name, success: false, error })}\n\n`);
+      })
+    );
+
+    // Context compaction events
+    unsubscribers.push(
+      session.on("session.compaction_start", () => {
+        res.write(`data: ${JSON.stringify({ type: "compaction", started: true })}\n\n`);
+      })
+    );
+
+    unsubscribers.push(
+      session.on("session.compaction_complete", (event) => {
+        const tokensRemoved = typeof event.data?.tokensRemoved === "number" ? event.data.tokensRemoved : undefined;
+        res.write(`data: ${JSON.stringify({ type: "compaction", started: false, tokensRemoved })}\n\n`);
+      })
+    );
+
     // Stream complete
     unsubscribers.push(
       session.on("session.idle", () => {
