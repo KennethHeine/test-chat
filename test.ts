@@ -1520,6 +1520,154 @@ async function testResearchSeedAndRetrieve(): Promise<void> {
 }
 
 // ============================================================
+// 8. Milestone API endpoint tests (HTTP)
+// ============================================================
+
+async function testMilestonesGetNoAuthHeaderIsHandled(): Promise<void> {
+  const res = await fetch(`${BASE}/api/goals/some-goal-id/milestones`);
+  // Same env-token fallback caveat as testGoalsListNoAuth: missing Authorization
+  // header may be satisfied by an env-based token, so 401/404/200 are all acceptable.
+  if (res.status !== 401 && res.status !== 404 && res.status !== 200) {
+    throw new Error(`Expected 401, 404, or 200 (env-token fallback), got ${res.status}`);
+  }
+}
+
+async function testMilestonesGetNotFound(): Promise<void> {
+  const res = await fetch(`${BASE}/api/goals/nonexistent-goal-id-99999/milestones`, {
+    headers: testAuthHeaders(),
+  });
+  if (res.status !== 404) throw new Error(`Expected 404, got ${res.status}`);
+  const data = await res.json();
+  if (!data.error) throw new Error("Expected error message in 404 response");
+}
+
+async function testMilestonesGetEmptyForGoalWithNoMilestones(): Promise<void> {
+  // Create a session so that the ownership check passes
+  const sessionId = `test-milestones-empty-session-${Date.now()}`;
+  const saveRes = await fetch(`${BASE}/api/sessions/${sessionId}/messages`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ messages: [{ role: "user", text: "milestones empty test" }] }),
+  });
+  if (!saveRes.ok) throw new Error(`Failed to seed session: HTTP ${saveRes.status}`);
+
+  const goalId = `test-milestones-empty-goal-${Date.now()}`;
+  const seedGoalBody = {
+    id: goalId,
+    sessionId,
+    intent: "Test milestones empty",
+    goal: "Verify empty milestones array",
+    problemStatement: "No milestones exist",
+    businessValue: "Reliable API",
+    targetOutcome: "Empty array returned",
+    successCriteria: [],
+    assumptions: [],
+    constraints: [],
+    risks: [],
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+  const seedRes = await fetch(`${BASE}/api/test/seed-goal`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify(seedGoalBody),
+  });
+  if (!seedRes.ok) throw new Error(`Failed to seed goal: HTTP ${seedRes.status}`);
+
+  const res = await fetch(`${BASE}/api/goals/${goalId}/milestones`, { headers: testAuthHeaders() });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const data = await res.json();
+  if (!Array.isArray(data.milestones)) throw new Error("Expected milestones array in response");
+  if (data.milestones.length !== 0) throw new Error(`Expected empty milestones array, got ${data.milestones.length}`);
+  log("  ", "Milestones is empty for goal with no milestones");
+}
+
+async function testMilestonesSeedAndRetrieve(): Promise<void> {
+  // Create a session so that the ownership check passes
+  const sessionId = `test-milestones-session-${Date.now()}`;
+  const saveRes = await fetch(`${BASE}/api/sessions/${sessionId}/messages`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ messages: [{ role: "user", text: "milestones seed test" }] }),
+  });
+  if (!saveRes.ok) throw new Error(`Failed to seed session: HTTP ${saveRes.status}`);
+
+  const goalId = `test-milestones-goal-${Date.now()}`;
+  const seedGoalBody = {
+    id: goalId,
+    sessionId,
+    intent: "Test milestones retrieval",
+    goal: "Verify milestones are returned in order",
+    problemStatement: "Need to test milestones endpoint",
+    businessValue: "Reliable API",
+    targetOutcome: "Milestones returned",
+    successCriteria: ["Milestones returned"],
+    assumptions: [],
+    constraints: [],
+    risks: [],
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+  const goalSeedRes = await fetch(`${BASE}/api/test/seed-goal`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify(seedGoalBody),
+  });
+  if (!goalSeedRes.ok) throw new Error(`Failed to seed goal: HTTP ${goalSeedRes.status}`);
+
+  // Seed two milestones in reverse order to verify ordering
+  const ts = Date.now();
+  const ms2Id = `test-milestone-2-${ts}-a`;
+  const ms1Id = `test-milestone-1-${ts}-b`;
+
+  const seedMs2Res = await fetch(`${BASE}/api/test/seed-milestone`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({
+      id: ms2Id,
+      goalId,
+      name: "Milestone 2",
+      goal: "Second deliverable",
+      scope: "Scope 2",
+      order: 2,
+      dependencies: [],
+      acceptanceCriteria: ["done"],
+      exitCriteria: [],
+      status: "draft",
+    }),
+  });
+  if (!seedMs2Res.ok) throw new Error(`Failed to seed milestone 2: HTTP ${seedMs2Res.status}`);
+
+  const seedMs1Res = await fetch(`${BASE}/api/test/seed-milestone`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({
+      id: ms1Id,
+      goalId,
+      name: "Milestone 1",
+      goal: "First deliverable",
+      scope: "Scope 1",
+      order: 1,
+      dependencies: [],
+      acceptanceCriteria: ["done"],
+      exitCriteria: [],
+      status: "draft",
+    }),
+  });
+  if (!seedMs1Res.ok) throw new Error(`Failed to seed milestone 1: HTTP ${seedMs1Res.status}`);
+
+  const res = await fetch(`${BASE}/api/goals/${goalId}/milestones`, { headers: testAuthHeaders() });
+  if (!res.ok) throw new Error(`GET /api/goals/:id/milestones HTTP ${res.status}`);
+  const data = await res.json();
+  if (!Array.isArray(data.milestones)) throw new Error("Expected milestones array in response");
+  if (data.milestones.length !== 2) throw new Error(`Expected 2 milestones, got ${data.milestones.length}`);
+  if (data.milestones[0].order !== 1) throw new Error(`Expected first milestone order 1, got ${data.milestones[0].order}`);
+  if (data.milestones[1].order !== 2) throw new Error(`Expected second milestone order 2, got ${data.milestones[1].order}`);
+  if (data.milestones[0].goalId !== goalId) throw new Error("Milestone goalId mismatch");
+  log("  ", `Milestones seed → get round-trip passed (2 milestones in order)`);
+}
+
+// ============================================================
 // Main
 // ============================================================
 
@@ -1600,6 +1748,14 @@ async function main() {
   await run("GET /api/goals/:id/research returns 404 for unknown goal", testResearchGetNotFound);
   await run("GET /api/goals/:id/research returns empty array for goal with no items", testResearchGetEmptyForGoalWithNoItems);
   await run("Research seed → get round-trip", testResearchSeedAndRetrieve);
+
+  // --- Milestone API tests ---
+  console.log("\n── Milestone API Tests ──\n");
+
+  await run("GET /api/goals/:id/milestones — no Authorization header is handled", testMilestonesGetNoAuthHeaderIsHandled);
+  await run("GET /api/goals/:id/milestones returns 404 for unknown goal", testMilestonesGetNotFound);
+  await run("GET /api/goals/:id/milestones returns empty array for goal with no milestones", testMilestonesGetEmptyForGoalWithNoMilestones);
+  await run("Milestone seed → get round-trip (ordered)", testMilestonesSeedAndRetrieve);
 
   // Cleanup
   serverProcess.kill();
