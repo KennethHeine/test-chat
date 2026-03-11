@@ -521,6 +521,132 @@ function handleToolComplete(event) {
   hideToolActivity();
 }
 
+/**
+ * Submits the user's answer to a pending agent input request via POST /api/chat/input.
+ * On success, replaces the interactive UI with a "answered" confirmation label.
+ * @param {string} requestId - The UUID for the pending input request
+ * @param {string} answer - The user's answer text
+ * @param {boolean} wasFreeform - Whether the answer was typed (true) or a choice (false)
+ * @param {HTMLElement} containerEl - The .user-input-request element to update after submit
+ */
+async function submitUserInputAnswer(requestId, answer, wasFreeform, containerEl) {
+  try {
+    const res = await fetch("/api/chat/input", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify({ requestId, answer, wasFreeform }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: "Request failed" }));
+      console.warn("Failed to submit user input:", err.error);
+      return;
+    }
+    // Replace interactive controls with a compact "answered" label
+    const body = containerEl.querySelector(".user-input-request-body");
+    if (body) {
+      const questionEl = containerEl.querySelector(".user-input-question");
+      const questionText = questionEl ? questionEl.textContent : "";
+      body.innerHTML = "";
+      if (questionText) {
+        const q = document.createElement("div");
+        q.className = "user-input-question";
+        q.textContent = questionText;
+        body.appendChild(q);
+      }
+      const answeredEl = document.createElement("div");
+      answeredEl.className = "user-input-answered";
+      answeredEl.textContent = `✓ You answered: ${answer}`;
+      body.appendChild(answeredEl);
+    }
+  } catch (err) {
+    console.warn("Failed to submit user input:", err);
+  }
+}
+
+/**
+ * Renders an inline user input request card in the chat flow.
+ * Shows choice buttons if choices are provided, and/or a freeform text input if allowFreeform.
+ * All user-supplied content (question, choices) is inserted via textContent to prevent XSS.
+ * @param {Object} event - The parsed user_input_request SSE event
+ */
+function renderUserInputRequest(event) {
+  const { requestId, question, choices, allowFreeform } = event;
+  if (!requestId || !question) return;
+
+  const card = document.createElement("div");
+  card.className = "user-input-request";
+
+  // Header
+  const header = document.createElement("div");
+  header.className = "user-input-request-header";
+  header.textContent = "❓ Agent is asking you a question";
+  card.appendChild(header);
+
+  // Body
+  const body = document.createElement("div");
+  body.className = "user-input-request-body";
+
+  const questionEl = document.createElement("div");
+  questionEl.className = "user-input-question";
+  questionEl.textContent = question;
+  body.appendChild(questionEl);
+
+  // Choice buttons (if provided)
+  if (Array.isArray(choices) && choices.length > 0) {
+    const choicesEl = document.createElement("div");
+    choicesEl.className = "user-input-choices";
+    for (const choice of choices) {
+      const btn = document.createElement("button");
+      btn.className = "user-input-choice-btn";
+      btn.textContent = choice;
+      btn.addEventListener("click", () => {
+        submitUserInputAnswer(requestId, choice, false, card);
+      });
+      choicesEl.appendChild(btn);
+    }
+    body.appendChild(choicesEl);
+  }
+
+  // Freeform text input (if allowFreeform is true or no choices given)
+  const showFreeform = allowFreeform !== false || !Array.isArray(choices) || choices.length === 0;
+  if (showFreeform) {
+    const freeformEl = document.createElement("div");
+    freeformEl.className = "user-input-freeform";
+
+    const textarea = document.createElement("textarea");
+    textarea.className = "user-input-freeform-text";
+    textarea.rows = 1;
+    textarea.placeholder = "Type your answer...";
+    textarea.addEventListener("input", () => {
+      textarea.style.height = "auto";
+      textarea.style.height = Math.min(textarea.scrollHeight, 120) + "px";
+    });
+    textarea.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        const val = textarea.value.trim();
+        if (val) submitUserInputAnswer(requestId, val, true, card);
+      }
+    });
+
+    const submitBtn = document.createElement("button");
+    submitBtn.className = "user-input-submit-btn";
+    submitBtn.textContent = "Submit";
+    submitBtn.addEventListener("click", () => {
+      const val = textarea.value.trim();
+      if (val) submitUserInputAnswer(requestId, val, true, card);
+    });
+
+    freeformEl.appendChild(textarea);
+    freeformEl.appendChild(submitBtn);
+    body.appendChild(freeformEl);
+  }
+
+  card.appendChild(body);
+  messagesEl.appendChild(card);
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+
 function showUsage(usage) {
   if (!usage) return;
   const parts = [];
@@ -797,6 +923,8 @@ async function sendMessage() {
             || event.type === "intent" || event.type === "subagent_start"
             || event.type === "subagent_end" || event.type === "compaction") {
             handleAgentStatusEvent(event);
+          } else if (event.type === "user_input_request") {
+            renderUserInputRequest(event);
           } else if (event.type === "done") {
             sessionId = event.sessionId;
             // Persist session state

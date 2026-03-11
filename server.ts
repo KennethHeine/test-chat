@@ -9,6 +9,17 @@ import { createGitHubTools, GITHUB_TOOL_NAMES } from "./tools.js";
 import { InMemoryPlanningStore, AzurePlanningStore, createPlanningStore, type PlanningStore } from "./planning-store.js";
 import { createPlanningTools } from "./planning-tools.js";
 
+// SDK does not re-export these types from its main index, so define them locally.
+interface UserInputRequest {
+  question: string;
+  choices?: string[];
+  allowFreeform?: boolean;
+}
+interface UserInputResponse {
+  answer: string;
+  wasFreeform: boolean;
+}
+
 // --- System Message for Agent Orchestration ---
 const ORCHESTRATOR_SYSTEM_MESSAGE = `You are a coding task orchestrator. Your role is to help users research codebases, plan coding tasks, and coordinate work across repositories.
 
@@ -51,6 +62,34 @@ let planningStore: PlanningStore = createPlanningStore(storageAccountName || und
 const clients = new Map<string, CopilotClient>();
 // Key: "token:sessionId" → CopilotSession (in-memory SDK sessions for active conversations)
 const sessions = new Map<string, CopilotSession>();
+
+// --- User Input Requests ---
+
+// Timeout for pending user input requests (ms). Configurable via env var; default 2 minutes.
+const DEFAULT_USER_INPUT_TIMEOUT_MS = 120000;
+const parsedUserInputTimeout = Number.parseInt(process.env.USER_INPUT_TIMEOUT_MS ?? "", 10);
+const USER_INPUT_TIMEOUT_MS =
+  Number.isNaN(parsedUserInputTimeout) || parsedUserInputTimeout <= 0
+    ? DEFAULT_USER_INPUT_TIMEOUT_MS
+    : parsedUserInputTimeout;
+
+interface PendingInput {
+  resolve: (response: UserInputResponse) => void;
+  reject: (err: Error) => void;
+  ownerTokenHash: string;
+}
+
+// Global map of requestId → pending Promise resolver. RequestIds are UUIDs so no collisions.
+const pendingInputs = new Map<string, PendingInput>();
+
+interface ActiveConnection {
+  res: Response;
+  inputIds: Set<string>;
+}
+
+// Maps session key → active SSE connection info. Updated per SSE request so onUserInputRequest
+// always writes to the current response object even when sessions are reused across requests.
+const activeConnections = new Map<string, ActiveConnection>();
 
 function extractToken(req: Request): string | undefined {
   const authHeader = req.headers.authorization;
@@ -159,6 +198,49 @@ async function resolveSession(
   reasoningEffort?: ReasoningEffort
 ): Promise<CopilotSession> {
   const sessionConfig = buildSessionConfig(token, model, reasoningEffort);
+  const skey = sessionKey(token, sid);
+
+  // Attach onUserInputRequest — looks up the current active SSE connection dynamically so that
+  // reused sessions (across multiple SSE requests) always write to the correct response object.
+  sessionConfig.onUserInputRequest = async (request: UserInputRequest): Promise<UserInputResponse> => {
+    const tHash = await hashToken(token);
+    const conn = activeConnections.get(skey);
+    if (!conn) {
+      throw new Error("onUserInputRequest: no active SSE connection for this session");
+    }
+    const requestId = crypto.randomUUID();
+    conn.res.write(`data: ${JSON.stringify({
+      type: "user_input_request",
+      requestId,
+      question: request.question,
+      choices: request.choices ?? null,
+      allowFreeform: request.allowFreeform ?? true,
+    })}\n\n`);
+    return new Promise<UserInputResponse>((resolve, reject) => {
+      const pendingCleanup = () => {
+        pendingInputs.delete(requestId);
+        conn.inputIds.delete(requestId);
+      };
+      const timeoutHandle = setTimeout(() => {
+        if (pendingInputs.has(requestId)) {
+          pendingCleanup();
+          reject(new Error("User input request timed out"));
+        }
+      }, USER_INPUT_TIMEOUT_MS);
+      const wrappedResolve = (value: UserInputResponse) => {
+        pendingCleanup();
+        clearTimeout(timeoutHandle);
+        resolve(value);
+      };
+      const wrappedReject = (error: Error) => {
+        pendingCleanup();
+        clearTimeout(timeoutHandle);
+        reject(error);
+      };
+      conn.inputIds.add(requestId);
+      pendingInputs.set(requestId, { resolve: wrappedResolve, reject: wrappedReject, ownerTokenHash: tHash });
+    });
+  };
 
   // Phase 2.3: Try to resume an existing SDK session
   const tHash = await hashToken(token);
@@ -167,7 +249,7 @@ async function resolveSession(
     try {
       // Pass the full session config so resumed sessions get tools, hooks, and streaming
       const resumed = await client.resumeSession(existingMeta.sdkSessionId, sessionConfig);
-      sessions.set(sessionKey(token, sid), resumed);
+      sessions.set(skey, resumed);
       return resumed;
     } catch (err: any) {
       console.warn(`[resumeSession] Failed to resume SDK session ${existingMeta.sdkSessionId}: ${err.message || err}`);
@@ -177,7 +259,7 @@ async function resolveSession(
   // Phase 2.1: Create session with GitHub API tools
   // Phase 2.4: Create session with hooks for task tracking
   const session = await client.createSession(sessionConfig);
-  sessions.set(sessionKey(token, sid), session);
+  sessions.set(skey, session);
 
   // Store session metadata with SDK session ID for resumption
   const title = message.length > 50 ? message.slice(0, 50) + "…" : message;
@@ -379,10 +461,30 @@ app.post("/api/chat", async (req: Request, res: Response) => {
     // Track toolCallId -> toolName mappings for correlating start/complete events
     const activeTools = new Map<string, string>();
 
+    // Register active SSE connection so onUserInputRequest can write to the correct response.
+    // The final session key is computed from the resolved sid (which may have been generated above).
+    const skey = sessionKey(token, sid);
+    const connectionInputIds = new Set<string>();
+    activeConnections.set(skey, { res, inputIds: connectionInputIds });
+
     const cleanup = () => {
       for (const unsub of unsubscribers) unsub();
       unsubscribers.length = 0;
       activeTools.clear();
+      // Reject any pending user input requests from this connection (wrappedReject handles cleanup)
+      for (const rid of connectionInputIds) {
+        const pending = pendingInputs.get(rid);
+        if (pending) {
+          pending.reject(new Error("SSE connection closed"));
+        }
+      }
+      connectionInputIds.clear();
+      // Only delete the active connection if this response is still registered.
+      // A newer SSE request on the same session may have already replaced it.
+      const current = activeConnections.get(skey);
+      if (current && current.res === res) {
+        activeConnections.delete(skey);
+      }
     };
 
     // Listen for streaming deltas
@@ -579,6 +681,47 @@ app.post("/api/chat/abort", async (req: Request, res: Response) => {
   } catch (err: any) {
     res.status(500).json({ error: err.message || "Failed to abort" });
   }
+});
+
+// Submit a user input response to a pending onUserInputRequest from the agent
+app.post("/api/chat/input", async (req: Request, res: Response) => {
+  const token = extractToken(req);
+  if (!token) {
+    res.status(401).json({ error: "Missing token. Provide Authorization: Bearer <token> header." });
+    return;
+  }
+
+  const { requestId, answer, wasFreeform } = req.body;
+
+  if (!requestId || typeof requestId !== "string") {
+    res.status(400).json({ error: "Missing or invalid 'requestId' field" });
+    return;
+  }
+  if (answer === undefined || answer === null || typeof answer !== "string" || answer.trim() === "") {
+    res.status(400).json({ error: "Missing or invalid 'answer' field (must be a non-empty string)" });
+    return;
+  }
+  if (typeof wasFreeform !== "boolean") {
+    res.status(400).json({ error: "Missing or invalid 'wasFreeform' field (must be a boolean)" });
+    return;
+  }
+
+  const pending = pendingInputs.get(requestId);
+  if (!pending) {
+    res.status(404).json({ error: "No pending input request found for this requestId" });
+    return;
+  }
+
+  // Verify ownership — only the user who initiated the session can answer their own question
+  const tHash = await hashToken(token);
+  if (pending.ownerTokenHash !== tHash) {
+    res.status(403).json({ error: "Forbidden: this input request does not belong to your session" });
+    return;
+  }
+
+  // wrappedResolve handles cleanup (delete from pendingInputs, inputIds, clearTimeout)
+  pending.resolve({ answer, wasFreeform });
+  res.json({ ok: true });
 });
 
 // Phase 2.5: Switch model mid-conversation
@@ -931,6 +1074,30 @@ if (process.env.ENABLE_GOAL_SEED === "true") {
       // Unexpected errors → 500 Internal Server Error
       res.status(500).json({ error: err.message || "Failed to seed issue draft" });
     }
+  });
+
+  // Seed a pending user input request (for integration tests of POST /api/chat/input roundtrip)
+  app.post("/api/test/seed-pending-input", async (req: Request, res: Response) => {
+    const token = extractToken(req);
+    if (!token) {
+      res.status(401).json({ error: "Missing token. Provide Authorization: Bearer <token> header." });
+      return;
+    }
+    const { requestId } = req.body;
+    if (!requestId || typeof requestId !== "string") {
+      res.status(400).json({ error: "Missing or invalid 'requestId' field" });
+      return;
+    }
+    if (pendingInputs.has(requestId)) {
+      res.status(409).json({ error: "A pending input with this requestId already exists" });
+      return;
+    }
+    const tHash = await hashToken(token);
+    // Create a no-op pending entry scoped to this token so the roundtrip test can resolve it
+    const wrappedResolve = (_value: UserInputResponse) => { pendingInputs.delete(requestId); };
+    const wrappedReject = (_err: Error) => { pendingInputs.delete(requestId); };
+    pendingInputs.set(requestId, { resolve: wrappedResolve, reject: wrappedReject, ownerTokenHash: tHash });
+    res.status(201).json({ ok: true, requestId });
   });
 }
 

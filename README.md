@@ -171,6 +171,22 @@ Abort a streaming response. Requires `Authorization: Bearer <token>` header.
 { "sessionId": "abc-123" }
 ```
 
+### `POST /api/chat/input`
+
+Submit the user's answer to a pending agent input request (`ask_user` tool invocation).
+Requires `Authorization: Bearer <token>` header.
+
+**Request:**
+```json
+{ "requestId": "uuid-from-sse-event", "answer": "Option A", "wasFreeform": false }
+```
+
+The `requestId` comes from the `user_input_request` SSE event emitted when the agent calls
+`ask_user`. This endpoint resolves the Promise in the `onUserInputRequest` handler so the
+agent can continue processing.
+
+**Response:** `{ "ok": true }` on success; `404` if the request has already been resolved or timed out.
+
 ### `POST /api/chat/model`
 
 Switch the model for an active session mid-conversation. Requires `Authorization: Bearer <token>` header.

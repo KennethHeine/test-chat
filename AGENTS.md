@@ -118,6 +118,7 @@
 | PUT | `/api/sessions/:id/messages` | Bearer token | Save chat messages for a session |
 | POST | `/api/chat` | Bearer token | SSE streaming chat |
 | POST | `/api/chat/abort` | Bearer token | Abort streaming response |
+| POST | `/api/chat/input` | Bearer token | Submit user answer to pending agent input request |
 | POST | `/api/chat/model` | Bearer token | Switch model mid-conversation |
 | GET | `/api/quota` | Bearer token | Premium request quota |
 | GET | `/api/goals` | Bearer token | List all goals for the user |

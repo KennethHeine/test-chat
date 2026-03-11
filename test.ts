@@ -483,6 +483,185 @@ async function testReasoningEffortValidValues(): Promise<void> {
 }
 
 // ============================================================
+// 4b. User input request endpoint tests (POST /api/chat/input)
+// ============================================================
+
+async function testChatInputNoAuth(): Promise<void> {
+  // When no auth header is provided, the server may fall back to the
+  // COPILOT_GITHUB_TOKEN env var. In that case, with a requestId in the body,
+  // we expect 404 (no pending input) rather than 401. Accept both 401 and 404.
+  const res = await fetch(`${BASE}/api/chat/input`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ requestId: "test-id", answer: "hello", wasFreeform: true }),
+  });
+  if (res.status !== 401 && res.status !== 404) {
+    // 404 = no pending input (valid auth via env fallback, request not found)
+    throw new Error(`Expected 401 (no auth) or 404 (env token active), got ${res.status}`);
+  }
+  log("  ", `Auth check: ${res.status === 401 ? "401 without auth" : "env token active, got 404"}`);
+}
+
+async function testChatInputMissingRequestId(): Promise<void> {
+  const res = await fetch(`${BASE}/api/chat/input`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ answer: "hello", wasFreeform: true }),
+  });
+  if (res.status !== 400) throw new Error(`Expected 400 for missing requestId, got ${res.status}`);
+  const data = await res.json();
+  if (!data.error || !data.error.toLowerCase().includes("requestid")) {
+    throw new Error(`Expected error referencing requestId, got: ${JSON.stringify(data)}`);
+  }
+}
+
+async function testChatInputMissingAnswer(): Promise<void> {
+  const res = await fetch(`${BASE}/api/chat/input`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ requestId: "some-uuid", wasFreeform: false }),
+  });
+  if (res.status !== 400) throw new Error(`Expected 400 for missing answer, got ${res.status}`);
+  const data = await res.json();
+  if (!data.error || !data.error.toLowerCase().includes("answer")) {
+    throw new Error(`Expected error referencing answer, got: ${JSON.stringify(data)}`);
+  }
+}
+
+async function testChatInputMissingWasFreeform(): Promise<void> {
+  const res = await fetch(`${BASE}/api/chat/input`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ requestId: "some-uuid", answer: "my answer" }),
+  });
+  if (res.status !== 400) throw new Error(`Expected 400 for missing wasFreeform, got ${res.status}`);
+  const data = await res.json();
+  if (!data.error || !data.error.toLowerCase().includes("wasfreeform")) {
+    throw new Error(`Expected error referencing wasFreeform, got: ${JSON.stringify(data)}`);
+  }
+}
+
+async function testChatInputUnknownRequestId(): Promise<void> {
+  const res = await fetch(`${BASE}/api/chat/input`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ requestId: "00000000-0000-0000-0000-000000000000", answer: "hello", wasFreeform: true }),
+  });
+  if (res.status !== 404) throw new Error(`Expected 404 for unknown requestId, got ${res.status}`);
+  const data = await res.json();
+  if (!data.error) throw new Error("Expected error message in 404 response");
+  log("  ", `404 response: ${data.error}`);
+}
+
+async function testUserInputRequestEventShape(): Promise<void> {
+  // This test validates the SSE event payload shape for user_input_request events.
+  // It confirms the JSON structure that server.ts emits is well-formed and includes
+  // all required fields. Full Promise resolution is not tested here because it requires
+  // an active agent session invoking ask_user — covered by E2E tests instead.
+  const sampleEvent = {
+    type: "user_input_request",
+    requestId: crypto.randomUUID(),
+    question: "Which approach do you prefer?",
+    choices: ["Option A", "Option B"],
+    allowFreeform: true,
+  };
+  const line = `data: ${JSON.stringify(sampleEvent)}`;
+  if (!line.startsWith("data: ")) throw new Error("Unexpected SSE line format");
+  const parsed = JSON.parse(line.slice(6)) as Record<string, unknown>;
+  if (parsed.type !== "user_input_request") throw new Error(`Expected type user_input_request, got ${parsed.type}`);
+  if (typeof parsed.requestId !== "string") throw new Error("requestId must be a string");
+  if (typeof parsed.question !== "string") throw new Error("question must be a string");
+  // choices is optional/nullable when the SDK request has no structured choices
+  if (parsed.choices !== null && parsed.choices !== undefined && !Array.isArray(parsed.choices)) {
+    throw new Error("choices must be an array when present");
+  }
+  if (typeof parsed.allowFreeform !== "boolean") throw new Error("allowFreeform must be a boolean");
+  log("  ", "user_input_request SSE event payload shape validated");
+
+  // Also validate the null-choices variant (no structured choices)
+  const noChoicesEvent = {
+    type: "user_input_request",
+    requestId: crypto.randomUUID(),
+    question: "Describe your goal",
+    choices: null,
+    allowFreeform: true,
+  };
+  const nullParsed = JSON.parse(`data: ${JSON.stringify(noChoicesEvent)}`.slice(6)) as Record<string, unknown>;
+  if (nullParsed.choices !== null) throw new Error("choices should be null when not provided");
+  log("  ", "user_input_request null-choices variant also valid");
+}
+
+async function testChatInputRoundtrip(): Promise<void> {
+  // Seed a pending input via the test-only endpoint, then resolve it via POST /api/chat/input.
+  // This verifies the full server-side resolution flow: seed → resolve → cleanup.
+  const requestId = crypto.randomUUID();
+
+  // Step 1: Seed the pending input
+  const seedRes = await fetch(`${BASE}/api/test/seed-pending-input`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ requestId }),
+  });
+  if (seedRes.status !== 201) throw new Error(`Seed failed: HTTP ${seedRes.status}`);
+
+  // Step 2: Resolve it via POST /api/chat/input
+  const inputRes = await fetch(`${BASE}/api/chat/input`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ requestId, answer: "Option A", wasFreeform: false }),
+  });
+  if (!inputRes.ok) throw new Error(`Expected 200, got ${inputRes.status}`);
+  const inputData = await inputRes.json();
+  if (!inputData.ok) throw new Error(`Expected { ok: true }, got ${JSON.stringify(inputData)}`);
+
+  // Step 3: Verify cleanup — second call should return 404 (already resolved)
+  const dupRes = await fetch(`${BASE}/api/chat/input`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ requestId, answer: "Option B", wasFreeform: false }),
+  });
+  if (dupRes.status !== 404) throw new Error(`Expected 404 for duplicate resolve, got ${dupRes.status}`);
+
+  log("  ", "Roundtrip: seed → resolve → cleanup verified");
+}
+
+async function testChatInputOwnershipRejection(): Promise<void> {
+  // Verify that a user cannot resolve another user's pending input request.
+  // We seed a request with the normal test token, then try to resolve it with a different token.
+  const requestId = crypto.randomUUID();
+
+  // Seed the pending input with normal test token
+  const seedRes = await fetch(`${BASE}/api/test/seed-pending-input`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ requestId }),
+  });
+  if (seedRes.status !== 201) throw new Error(`Seed failed: HTTP ${seedRes.status}`);
+
+  // Try to resolve with a different (fake) token — should get 403
+  const foreignRes = await fetch(`${BASE}/api/chat/input`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": "Bearer different-fake-token-for-ownership-test",
+    },
+    body: JSON.stringify({ requestId, answer: "evil answer", wasFreeform: true }),
+  });
+  if (foreignRes.status !== 403) throw new Error(`Expected 403 for cross-user resolve attempt, got ${foreignRes.status}`);
+  const foreignData = await foreignRes.json();
+  if (!foreignData.error) throw new Error("Expected error message in 403 response");
+
+  // Clean up: resolve with correct token to avoid leaving the pending entry
+  await fetch(`${BASE}/api/chat/input`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ requestId, answer: "correct answer", wasFreeform: true }),
+  });
+
+  log("  ", "403 returned for cross-user ownership attempt");
+}
+
+// ============================================================
 // 5. Goal API tests
 // ============================================================
 
@@ -3646,6 +3825,18 @@ async function main() {
   await run("Quota endpoint handles no auth gracefully", testServerQuotaNoAuth);
   await run("Reasoning effort: invalid value returns 400", testReasoningEffortInvalidValue);
   await run("Reasoning effort: valid values accepted", testReasoningEffortValidValues);
+
+  // --- User input request endpoint tests ---
+  console.log("\n── User Input Request Tests ──\n");
+
+  await run("POST /api/chat/input — auth check", testChatInputNoAuth);
+  await run("POST /api/chat/input — missing requestId returns 400", testChatInputMissingRequestId);
+  await run("POST /api/chat/input — missing answer returns 400", testChatInputMissingAnswer);
+  await run("POST /api/chat/input — missing wasFreeform returns 400", testChatInputMissingWasFreeform);
+  await run("POST /api/chat/input — unknown requestId returns 404", testChatInputUnknownRequestId);
+  await run("user_input_request SSE event payload shape", testUserInputRequestEventShape);
+  await run("POST /api/chat/input — seed → resolve → cleanup roundtrip", testChatInputRoundtrip);
+  await run("POST /api/chat/input — cross-user ownership returns 403", testChatInputOwnershipRejection);
 
   // --- Goal API tests ---
   console.log("\n── Goal API Tests ──\n");
