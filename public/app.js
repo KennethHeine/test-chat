@@ -357,6 +357,8 @@ function navigateDashboard(page) {
     loadGoalsDashboard();
   } else if (page === "research") {
     loadResearchDashboard();
+  } else if (page === "milestones") {
+    loadMilestonesDashboard();
   }
 }
 
@@ -999,6 +1001,271 @@ function buildResearchTrackerItem(item, goalId) {
   return itemEl;
 }
 
+// --- Milestone Dashboard ---
+
+const milestoneGoalSelector = document.getElementById("milestone-goal-selector");
+const milestoneGoalSelect = document.getElementById("milestone-goal-select");
+const milestonePageContent = document.getElementById("milestone-page-content");
+
+/** In-flight guard: true while loadMilestonesDashboard() is fetching, to prevent duplicate calls. */
+let milestonesLoadInFlight = false;
+
+/**
+ * Loads the list of goals and populates the goal selector, then loads milestones for the first goal.
+ * De-dupes concurrent calls via in-flight guard.
+ */
+async function loadMilestonesDashboard() {
+  if (milestonesLoadInFlight) return;
+  milestonesLoadInFlight = true;
+
+  if (!getToken()) {
+    milestoneGoalSelector.style.display = "none";
+    milestonePageContent.innerHTML = "";
+    const empty = document.createElement("div");
+    empty.className = "dashboard-empty";
+    empty.innerHTML = '<span class="dashboard-empty-icon">🔑</span><p>Save a GitHub token to view milestones.</p>';
+    milestonePageContent.appendChild(empty);
+    milestonesLoadInFlight = false;
+    return;
+  }
+
+  milestoneGoalSelector.style.display = "none";
+  milestonePageContent.innerHTML = '<div class="dashboard-empty"><span class="dashboard-empty-icon" style="font-size:24px">⏳</span><p>Loading…</p></div>';
+
+  try {
+    const res = await fetch("/api/goals", { headers: authHeaders() });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      milestonePageContent.innerHTML = "";
+      const empty = document.createElement("div");
+      empty.className = "dashboard-empty";
+      const p = document.createElement("p");
+      p.textContent = (err && err.error) ? err.error : "Failed to load goals.";
+      empty.appendChild(p);
+      milestonePageContent.appendChild(empty);
+      return;
+    }
+    const data = await res.json();
+    const goals = Array.isArray(data.goals) ? data.goals : [];
+
+    if (goals.length === 0) {
+      milestoneGoalSelector.style.display = "none";
+      milestonePageContent.innerHTML = "";
+      const empty = document.createElement("div");
+      empty.className = "dashboard-empty";
+      empty.innerHTML = '<span class="dashboard-empty-icon">🏁</span><p>No goals yet. Use the chat to define planning goals with Copilot.</p>';
+      milestonePageContent.appendChild(empty);
+      return;
+    }
+
+    // Sort goals newest first
+    goals.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
+    // Populate goal selector
+    milestoneGoalSelect.innerHTML = "";
+    for (const goal of goals) {
+      const opt = document.createElement("option");
+      opt.value = typeof goal.id === "string" ? goal.id : "";
+      opt.textContent = typeof goal.goal === "string" ? goal.goal : "(untitled goal)";
+      milestoneGoalSelect.appendChild(opt);
+    }
+
+    if (goals.length > 1) {
+      milestoneGoalSelector.style.display = "block";
+    } else {
+      milestoneGoalSelector.style.display = "none";
+    }
+
+    // Load milestones for the first goal
+    await loadMilestonesForGoal(goals[0].id);
+  } catch (err) {
+    console.warn("Failed to load milestones dashboard:", err);
+    milestonePageContent.innerHTML = "";
+    const empty = document.createElement("div");
+    empty.className = "dashboard-empty";
+    const p = document.createElement("p");
+    p.textContent = "Failed to load milestones. Please try again.";
+    empty.appendChild(p);
+    milestonePageContent.appendChild(empty);
+  } finally {
+    milestonesLoadInFlight = false;
+  }
+}
+
+/**
+ * Fetches milestones for a specific goal and renders them in the milestone timeline.
+ * Also fetches issue counts per milestone.
+ * @param {string} goalId
+ */
+async function loadMilestonesForGoal(goalId) {
+  milestonePageContent.innerHTML = '<div class="dashboard-empty"><span class="dashboard-empty-icon" style="font-size:24px">⏳</span><p>Loading milestones…</p></div>';
+
+  try {
+    const res = await fetch(`/api/goals/${encodeURIComponent(goalId)}/milestones`, { headers: authHeaders() });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      milestonePageContent.innerHTML = "";
+      const empty = document.createElement("div");
+      empty.className = "dashboard-empty";
+      const p = document.createElement("p");
+      p.textContent = (err && err.error) ? err.error : "Failed to load milestones.";
+      empty.appendChild(p);
+      milestonePageContent.appendChild(empty);
+      return;
+    }
+    const data = await res.json();
+    const milestones = Array.isArray(data.milestones) ? data.milestones : [];
+
+    // Fetch issue counts for each milestone
+    /** @type {Map<string, number>} */
+    const issueCounts = new Map();
+    await Promise.all(
+      milestones.map(async (ms) => {
+        try {
+          const issueRes = await fetch(`/api/milestones/${encodeURIComponent(ms.id)}/issues`, { headers: authHeaders() });
+          if (issueRes.ok) {
+            const issueData = await issueRes.json();
+            const count = Array.isArray(issueData.issues) ? issueData.issues.length : 0;
+            issueCounts.set(ms.id, count);
+          } else {
+            issueCounts.set(ms.id, 0);
+          }
+        } catch {
+          issueCounts.set(ms.id, 0);
+        }
+      })
+    );
+
+    renderMilestoneDashboardItems(milestones, issueCounts);
+  } catch (err) {
+    console.warn("Failed to load milestones for goal:", err);
+    milestonePageContent.innerHTML = "";
+    const empty = document.createElement("div");
+    empty.className = "dashboard-empty";
+    const p = document.createElement("p");
+    p.textContent = "Failed to load milestones. Please try again.";
+    empty.appendChild(p);
+    milestonePageContent.appendChild(empty);
+  }
+}
+
+/**
+ * Renders milestones in the milestone timeline dashboard.
+ * Milestones are shown in order with status, dependencies, and issue counts.
+ * All user-supplied content is inserted via textContent to prevent XSS.
+ * @param {Array} milestones - Array of Milestone objects
+ * @param {Map<string, number>} issueCounts - Map of milestone ID to issue count
+ */
+function renderMilestoneDashboardItems(milestones, issueCounts) {
+  milestonePageContent.innerHTML = "";
+
+  if (milestones.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "dashboard-empty";
+    empty.innerHTML = '<span class="dashboard-empty-icon">🏁</span><p>No milestones for this goal yet. Use the chat to create a milestone plan with Copilot.</p>';
+    milestonePageContent.appendChild(empty);
+    return;
+  }
+
+  // Sort by order ascending (defensive copy)
+  const sorted = [...milestones].sort((a, b) => (a.order || 0) - (b.order || 0));
+
+  // Build a map from milestone ID to order for dependency display
+  /** @type {Map<string, number>} */
+  const idToOrder = new Map();
+  for (const ms of sorted) {
+    if (ms.id) idToOrder.set(ms.id, ms.order);
+  }
+
+  for (const ms of sorted) {
+    const itemEl = document.createElement("div");
+    itemEl.className = "milestone-timeline-item";
+    itemEl.setAttribute("data-milestone-id", typeof ms.id === "string" ? ms.id : "");
+
+    // Header row: order number, name, status badge, issue count
+    const headerEl = document.createElement("div");
+    headerEl.className = "milestone-timeline-item-header";
+
+    const orderEl = document.createElement("span");
+    orderEl.className = "milestone-timeline-order";
+    orderEl.textContent = `#${ms.order}`;
+    headerEl.appendChild(orderEl);
+
+    const nameEl = document.createElement("span");
+    nameEl.className = "milestone-timeline-name";
+    nameEl.textContent = typeof ms.name === "string" ? ms.name : "";
+    headerEl.appendChild(nameEl);
+
+    const rawStatus = ms.status || DEFAULT_MILESTONE_STATUS;
+    const status = VALID_MILESTONE_STATUSES.includes(rawStatus) ? rawStatus : DEFAULT_MILESTONE_STATUS;
+    const statusEl = document.createElement("span");
+    statusEl.className = "milestone-timeline-status status-" + status;
+    statusEl.textContent = status;
+    headerEl.appendChild(statusEl);
+
+    const issueCount = issueCounts instanceof Map ? (issueCounts.get(ms.id) ?? 0) : 0;
+    const issueCountEl = document.createElement("span");
+    issueCountEl.className = "milestone-timeline-issue-count";
+    issueCountEl.textContent = `${issueCount} issue${issueCount !== 1 ? "s" : ""}`;
+    headerEl.appendChild(issueCountEl);
+
+    itemEl.appendChild(headerEl);
+
+    // Goal/description line
+    if (typeof ms.goal === "string" && ms.goal) {
+      const goalEl = document.createElement("div");
+      goalEl.className = "milestone-timeline-goal";
+      goalEl.textContent = ms.goal;
+      itemEl.appendChild(goalEl);
+    }
+
+    // Dependencies with visual arrows
+    if (Array.isArray(ms.dependencies) && ms.dependencies.length > 0) {
+      const depsEl = document.createElement("div");
+      depsEl.className = "milestone-timeline-deps";
+
+      const arrowEl = document.createElement("span");
+      arrowEl.className = "milestone-timeline-deps-arrow";
+      arrowEl.textContent = "↑";
+      arrowEl.setAttribute("aria-hidden", "true");
+      depsEl.appendChild(arrowEl);
+
+      const labelEl = document.createElement("span");
+      labelEl.className = "milestone-timeline-deps-label";
+      labelEl.textContent = "Depends on:";
+      depsEl.appendChild(labelEl);
+
+      for (const depId of ms.dependencies) {
+        const depOrder = idToOrder.get(depId);
+        const tagEl = document.createElement("span");
+        tagEl.className = "milestone-timeline-dep-tag";
+        tagEl.textContent = depOrder !== undefined ? `#${depOrder}` : (typeof depId === "string" ? depId : "");
+        depsEl.appendChild(tagEl);
+      }
+
+      itemEl.appendChild(depsEl);
+    }
+
+    milestonePageContent.appendChild(itemEl);
+  }
+
+  // Summary line
+  const total = sorted.length;
+  const complete = sorted.filter((m) => m.status === "complete").length;
+  const inProgress = sorted.filter((m) => m.status === "in-progress").length;
+  const ready = sorted.filter((m) => m.status === "ready").length;
+  const draft = total - complete - inProgress - ready;
+  const summaryParts = [];
+  if (draft > 0) summaryParts.push(`Draft: ${draft}`);
+  if (ready > 0) summaryParts.push(`Ready: ${ready}`);
+  if (inProgress > 0) summaryParts.push(`In Progress: ${inProgress}`);
+  if (complete > 0) summaryParts.push(`Complete: ${complete}`);
+  const summaryEl = document.createElement("div");
+  summaryEl.className = "milestone-timeline-summary";
+  summaryEl.textContent = summaryParts.join(" · ");
+  milestonePageContent.appendChild(summaryEl);
+}
+
 function restoreLastSession() {
   const lastId = localStorage.getItem("copilot_last_session");
   if (!lastId) return;
@@ -1112,6 +1379,14 @@ researchGoalSelect.addEventListener("change", () => {
   const selectedGoalId = researchGoalSelect.value;
   if (selectedGoalId) {
     loadResearchForGoal(selectedGoalId);
+  }
+});
+
+// Milestone goal selector
+milestoneGoalSelect.addEventListener("change", () => {
+  const selectedGoalId = milestoneGoalSelect.value;
+  if (selectedGoalId) {
+    loadMilestonesForGoal(selectedGoalId);
   }
 });
 

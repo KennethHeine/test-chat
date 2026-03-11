@@ -1434,6 +1434,138 @@
       margin-top: 4px;
     }
 
+    /* Milestone timeline dashboard page */
+    .milestone-goal-select {
+      width: 100%;
+      padding: 8px 10px;
+      background: var(--color-bg-secondary);
+      border: 1px solid var(--color-border);
+      border-radius: var(--radius);
+      color: var(--color-text);
+      font-size: 13px;
+      margin-bottom: 20px;
+      cursor: pointer;
+    }
+
+    .milestone-goal-select:focus {
+      outline: 2px solid var(--color-accent);
+      outline-offset: 2px;
+    }
+
+    .milestone-timeline-item {
+      background: var(--color-bg-secondary);
+      border: 1px solid var(--color-border);
+      border-radius: var(--radius);
+      padding: 14px 16px;
+      margin-bottom: 10px;
+      position: relative;
+    }
+
+    .milestone-timeline-item-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .milestone-timeline-order {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--color-text-muted);
+      background: var(--color-bg-tertiary);
+      border: 1px solid var(--color-border);
+      border-radius: 3px;
+      padding: 1px 6px;
+      flex-shrink: 0;
+    }
+
+    .milestone-timeline-name {
+      flex: 1;
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--color-text);
+    }
+
+    .milestone-timeline-status {
+      font-size: 11px;
+      font-weight: 600;
+      border-radius: 3px;
+      padding: 2px 7px;
+      flex-shrink: 0;
+    }
+
+    .milestone-timeline-status.status-draft {
+      background: rgba(125, 133, 144, 0.15);
+      color: #7d8590;
+    }
+
+    .milestone-timeline-status.status-ready {
+      background: rgba(56, 139, 253, 0.15);
+      color: #58a6ff;
+    }
+
+    .milestone-timeline-status.status-in-progress {
+      background: rgba(187, 128, 9, 0.15);
+      color: #d29922;
+    }
+
+    .milestone-timeline-status.status-complete {
+      background: rgba(35, 134, 54, 0.15);
+      color: #3fb950;
+    }
+
+    .milestone-timeline-issue-count {
+      font-size: 11px;
+      color: var(--color-text-muted);
+      background: var(--color-bg-tertiary);
+      border: 1px solid var(--color-border);
+      border-radius: 3px;
+      padding: 1px 6px;
+      flex-shrink: 0;
+    }
+
+    .milestone-timeline-goal {
+      font-size: 12px;
+      color: var(--color-text-muted);
+      margin-top: 6px;
+      line-height: 1.5;
+    }
+
+    .milestone-timeline-deps {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-top: 8px;
+      font-size: 12px;
+    }
+
+    .milestone-timeline-deps-arrow {
+      color: var(--color-text-muted);
+      font-size: 14px;
+    }
+
+    .milestone-timeline-deps-label {
+      color: var(--color-text-muted);
+      font-weight: 500;
+    }
+
+    .milestone-timeline-dep-tag {
+      font-size: 11px;
+      color: var(--color-accent);
+      background: rgba(88, 166, 255, 0.1);
+      border: 1px solid rgba(88, 166, 255, 0.3);
+      border-radius: 3px;
+      padding: 1px 6px;
+    }
+
+    .milestone-timeline-summary {
+      font-size: 12px;
+      color: var(--color-text-muted);
+      border-top: 1px solid var(--color-border);
+      padding-top: 10px;
+      margin-top: 4px;
+    }
+
     @media (max-width: 768px) {
       #dashboard-nav {
         width: 160px;
@@ -1593,9 +1725,14 @@
             <h2>Milestones</h2>
             <p>Development milestones for your planning goals</p>
           </div>
-          <div class="dashboard-empty">
-            <span class="dashboard-empty-icon">🏁</span>
-            <p>No milestones yet. Milestones will appear here after planning is complete.</p>
+          <div id="milestone-goal-selector" style="display:none">
+            <select id="milestone-goal-select" class="milestone-goal-select" aria-label="Select goal to view milestones for"></select>
+          </div>
+          <div id="milestone-page-content">
+            <div class="dashboard-empty">
+              <span class="dashboard-empty-icon">🏁</span>
+              <p>No milestones yet. Milestones will appear here after planning is complete.</p>
+            </div>
           </div>
         </div>
 
