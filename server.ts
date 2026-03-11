@@ -396,6 +396,17 @@ app.post("/api/chat", async (req: Request, res: Response) => {
             // result content isn't JSON — skip enrichment
           }
         }
+        // For create_milestone_plan and get_milestones, parse the result to include milestones for the frontend timeline
+        if ((toolName === "create_milestone_plan" || toolName === "get_milestones") && event.data?.result?.content) {
+          try {
+            const parsed = JSON.parse(event.data.result.content) as { milestones?: unknown; error?: string };
+            if (Array.isArray(parsed.milestones) && !parsed.error) {
+              payload.result = { milestones: parsed.milestones };
+            }
+          } catch {
+            // result content isn't JSON — skip enrichment
+          }
+        }
         res.write(`data: ${JSON.stringify(payload)}\n\n`);
       })
     );
