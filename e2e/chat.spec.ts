@@ -949,3 +949,235 @@ test("goals dashboard: back button returns to goal list", async ({ page }) => {
   await expect(page.locator("#goals-detail-view")).not.toBeVisible();
   await expect(page.locator(".goal-list-item")).toBeVisible();
 });
+
+// ─── Research Tracker Page ──────────────────────────────────────
+
+const STUB_RESEARCH_ITEMS = [
+  {
+    id: "r1",
+    goalId: STUB_GOAL_ID,
+    category: "architecture",
+    question: "What layout should the dashboard use?",
+    status: "open",
+    findings: "",
+    decision: "",
+  },
+  {
+    id: "r2",
+    goalId: STUB_GOAL_ID,
+    category: "ux",
+    question: "How should status counts be displayed?",
+    status: "resolved",
+    findings: "Badge chips are compact and clear.",
+    decision: "Use badge chips",
+  },
+  {
+    id: "r3",
+    goalId: STUB_GOAL_ID,
+    category: "architecture",
+    question: "Should we use server-side rendering?",
+    status: "researching",
+    findings: "Evaluating pros and cons.",
+    decision: "",
+  },
+];
+
+/** Stubs the research API routes so research tracker tests work without a live server. */
+async function stubResearchRoutes(page: Page) {
+  await page.route("**/api/goals", (route) => {
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        goals: [
+          {
+            id: STUB_GOAL_ID,
+            sessionId: "session-1",
+            intent: "I want to build a feature-rich dashboard for planning.",
+            goal: "Deliver a planning dashboard with goal, research, and milestone views",
+            problemStatement: "Users lack visibility into planning state.",
+            businessValue: "Increases planning throughput.",
+            targetOutcome: "Dashboard shows all planning data at a glance.",
+            successCriteria: [],
+            assumptions: [],
+            constraints: [],
+            risks: [],
+            createdAt: "2024-01-01T10:00:00.000Z",
+            updatedAt: "2024-01-02T10:00:00.000Z",
+          },
+        ],
+      }),
+    });
+  });
+
+  await page.route(`**/api/goals/${STUB_GOAL_ID}/research`, (route) => {
+    if (route.request().method() === "GET") {
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ research: STUB_RESEARCH_ITEMS }),
+      });
+    } else {
+      route.continue();
+    }
+  });
+
+  await page.route(`**/api/goals/${STUB_GOAL_ID}/research/**`, (route) => {
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ ...STUB_RESEARCH_ITEMS[0], findings: "Updated findings" }),
+    });
+  });
+
+  await page.route("**/api/health", (route) => {
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ status: "ok", storage: "memory" }),
+    });
+  });
+}
+
+test("research tracker: renders items grouped by category with status indicators", async ({ page }) => {
+  await stubResearchRoutes(page);
+  await page.goto("/");
+  await page.evaluate(() => localStorage.setItem("copilot_github_token", "fake-test-token"));
+
+  // Switch to dashboard and navigate to research page
+  await page.locator("#view-toggle-btn").click();
+  await page.locator(".dashboard-nav-item[data-page='research']").click();
+  await expect(page.locator("#dashboard-page-research")).toBeVisible();
+
+  // Wait for items to load
+  await expect(page.locator(".research-tracker-item").first()).toBeVisible({ timeout: 10_000 });
+
+  // Should have 3 items total
+  await expect(page.locator(".research-tracker-item")).toHaveCount(3);
+
+  // Architecture category group should be visible with 2 items
+  const archCategory = page.locator(".research-tracker-category").filter({ hasText: "Architecture" });
+  await expect(archCategory).toBeVisible();
+  await expect(archCategory.locator(".research-tracker-item")).toHaveCount(2);
+
+  // UX category group should be visible with 1 item
+  const uxCategory = page.locator(".research-tracker-category").filter({ hasText: "UX" });
+  await expect(uxCategory).toBeVisible();
+  await expect(uxCategory.locator(".research-tracker-item")).toHaveCount(1);
+});
+
+test("research tracker: status indicators visible on items", async ({ page }) => {
+  await stubResearchRoutes(page);
+  await page.goto("/");
+  await page.evaluate(() => localStorage.setItem("copilot_github_token", "fake-test-token"));
+
+  await page.locator("#view-toggle-btn").click();
+  await page.locator(".dashboard-nav-item[data-page='research']").click();
+  await expect(page.locator(".research-tracker-item").first()).toBeVisible({ timeout: 10_000 });
+
+  // Status badges should be visible
+  const statuses = page.locator(".research-item-status");
+  await expect(statuses).toHaveCount(3);
+
+  // At least one "open", one "resolved", one "researching" should be present
+  await expect(page.locator(".research-item-status.status-open")).toHaveCount(1);
+  await expect(page.locator(".research-item-status.status-resolved")).toHaveCount(1);
+  await expect(page.locator(".research-item-status.status-researching")).toHaveCount(1);
+});
+
+test("research tracker: findings displayed when present", async ({ page }) => {
+  await stubResearchRoutes(page);
+  await page.goto("/");
+  await page.evaluate(() => localStorage.setItem("copilot_github_token", "fake-test-token"));
+
+  await page.locator("#view-toggle-btn").click();
+  await page.locator(".dashboard-nav-item[data-page='research']").click();
+  await expect(page.locator(".research-tracker-item").first()).toBeVisible({ timeout: 10_000 });
+
+  // The resolved item should show its findings
+  await expect(page.locator(".research-tracker-findings").filter({ hasText: "Badge chips are compact and clear." })).toBeVisible();
+});
+
+test("research tracker: edit button shows textarea for inline editing", async ({ page }) => {
+  await stubResearchRoutes(page);
+  await page.goto("/");
+  await page.evaluate(() => localStorage.setItem("copilot_github_token", "fake-test-token"));
+
+  await page.locator("#view-toggle-btn").click();
+  await page.locator(".dashboard-nav-item[data-page='research']").click();
+  await expect(page.locator(".research-tracker-item").first()).toBeVisible({ timeout: 10_000 });
+
+  // Click the first edit button
+  const firstEditBtn = page.locator(".research-tracker-edit-btn").first();
+  await expect(firstEditBtn).toBeVisible();
+  await firstEditBtn.click();
+
+  // Textarea and save/cancel buttons should appear
+  const textarea = page.locator(".research-tracker-textarea").first();
+  await expect(textarea).toBeVisible();
+  await expect(page.locator(".research-tracker-save-btn").first()).toBeVisible();
+  await expect(page.locator(".research-tracker-cancel-btn").first()).toBeVisible();
+
+  // Edit button should be hidden when edit area is open
+  await expect(firstEditBtn).not.toBeVisible();
+});
+
+test("research tracker: cancel button closes edit area without saving", async ({ page }) => {
+  await stubResearchRoutes(page);
+  await page.goto("/");
+  await page.evaluate(() => localStorage.setItem("copilot_github_token", "fake-test-token"));
+
+  await page.locator("#view-toggle-btn").click();
+  await page.locator(".dashboard-nav-item[data-page='research']").click();
+  await expect(page.locator(".research-tracker-item").first()).toBeVisible({ timeout: 10_000 });
+
+  // Open edit
+  await page.locator(".research-tracker-edit-btn").first().click();
+  const textarea = page.locator(".research-tracker-textarea").first();
+  await expect(textarea).toBeVisible();
+
+  // Type something then cancel
+  await textarea.fill("Some draft text");
+  await page.locator(".research-tracker-cancel-btn").first().click();
+
+  // Edit area should be gone, edit button should reappear
+  await expect(textarea).not.toBeVisible();
+  await expect(page.locator(".research-tracker-edit-btn").first()).toBeVisible();
+});
+
+test("research tracker: save button sends PATCH request and updates display", async ({ page }) => {
+  await stubResearchRoutes(page);
+  await page.goto("/");
+  await page.evaluate(() => localStorage.setItem("copilot_github_token", "fake-test-token"));
+
+  await page.locator("#view-toggle-btn").click();
+  await page.locator(".dashboard-nav-item[data-page='research']").click();
+  await expect(page.locator(".research-tracker-item").first()).toBeVisible({ timeout: 10_000 });
+
+  // Open edit on first item
+  await page.locator(".research-tracker-edit-btn").first().click();
+  const textarea = page.locator(".research-tracker-textarea").first();
+  await textarea.fill("Updated findings");
+
+  // Save
+  await page.locator(".research-tracker-save-btn").first().click();
+
+  // After save, edit area should be closed and edit button should reappear
+  await expect(textarea).not.toBeVisible({ timeout: 5_000 });
+  await expect(page.locator(".research-tracker-edit-btn").first()).toBeVisible();
+});
+
+test("research tracker: summary shows open/researching/resolved counts", async ({ page }) => {
+  await stubResearchRoutes(page);
+  await page.goto("/");
+  await page.evaluate(() => localStorage.setItem("copilot_github_token", "fake-test-token"));
+
+  await page.locator("#view-toggle-btn").click();
+  await page.locator(".dashboard-nav-item[data-page='research']").click();
+  await expect(page.locator(".research-tracker-summary")).toBeVisible({ timeout: 10_000 });
+
+  // Summary should show counts for each status
+  await expect(page.locator(".research-tracker-summary")).toContainText("Open: 1");
+  await expect(page.locator(".research-tracker-summary")).toContainText("Researching: 1");
+  await expect(page.locator(".research-tracker-summary")).toContainText("Resolved: 1");
+});

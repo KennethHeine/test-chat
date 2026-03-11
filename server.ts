@@ -150,6 +150,24 @@ function extractSubagentName(data: { agentDisplayName?: unknown; agentName?: unk
 const ALLOWED_REASONING_EFFORTS = ["low", "medium", "high", "xhigh"] as const;
 type ReasoningEffort = typeof ALLOWED_REASONING_EFFORTS[number];
 
+// Valid values and max lengths for research item updates
+const VALID_RESEARCH_STATUSES = ["open", "researching", "resolved"] as const;
+const MAX_RESEARCH_FINDINGS_LENGTH = 2000;
+const MAX_RESEARCH_DECISION_LENGTH = 1000;
+
+/**
+ * HTML-escapes a string to prevent stored XSS if the value is later rendered
+ * in a browser context. Mirrors the sanitizeText() helper in planning-tools.ts.
+ */
+function sanitizeResearchText(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#x27;");
+}
+
 // Build the shared session config used for both new and resumed sessions
 function buildSessionConfig(token: string, model: string, reasoningEffort?: ReasoningEffort): SessionConfig {
   const cfg: SessionConfig = {
@@ -867,6 +885,85 @@ app.get("/api/goals/:id/research", async (req: Request, res: Response) => {
     res.json({ research });
   } catch (err: any) {
     res.status(500).json({ error: err.message || "Failed to get research items" });
+  }
+});
+
+// Update a research item's fields (findings, decision, status), scoped to the authenticated user
+app.patch("/api/goals/:goalId/research/:itemId", async (req: Request, res: Response) => {
+  const token = extractToken(req);
+  if (!token) {
+    res.status(401).json({ error: "Missing token. Provide Authorization: Bearer <token> header." });
+    return;
+  }
+
+  const goalId = req.params.goalId as string;
+  const itemId = req.params.itemId as string;
+  const body = req.body as Record<string, unknown>;
+
+  const updates: Partial<Omit<import("./planning-types.js").ResearchItem, "id" | "goalId">> = {};
+
+  if ("findings" in body) {
+    if (typeof body.findings !== "string") {
+      res.status(400).json({ error: "findings must be a string" });
+      return;
+    }
+    const trimmedFindings = body.findings.trim();
+    if (trimmedFindings.length > MAX_RESEARCH_FINDINGS_LENGTH) {
+      res.status(400).json({ error: `findings must be at most ${MAX_RESEARCH_FINDINGS_LENGTH} characters` });
+      return;
+    }
+    updates.findings = sanitizeResearchText(trimmedFindings);
+  }
+
+  if ("decision" in body) {
+    if (typeof body.decision !== "string") {
+      res.status(400).json({ error: "decision must be a string" });
+      return;
+    }
+    const trimmedDecision = body.decision.trim();
+    if (trimmedDecision.length > MAX_RESEARCH_DECISION_LENGTH) {
+      res.status(400).json({ error: `decision must be at most ${MAX_RESEARCH_DECISION_LENGTH} characters` });
+      return;
+    }
+    updates.decision = sanitizeResearchText(trimmedDecision);
+  }
+
+  if ("status" in body) {
+    if (!VALID_RESEARCH_STATUSES.includes(body.status as (typeof VALID_RESEARCH_STATUSES)[number])) {
+      res.status(400).json({ error: "status must be one of: open, researching, resolved" });
+      return;
+    }
+    updates.status = body.status as "open" | "researching" | "resolved";
+  }
+
+  if (Object.keys(updates).length === 0) {
+    res.status(400).json({ error: "No valid fields provided for update" });
+    return;
+  }
+
+  try {
+    const goal = await getOwnedGoal(token, goalId);
+    if (!goal) {
+      res.status(404).json({ error: "Goal not found" });
+      return;
+    }
+
+    // Verify the research item exists and belongs to the requested goal (IDOR guard)
+    const existingItem = await planningStore.getResearchItem(itemId);
+    if (!existingItem || existingItem.goalId !== goalId) {
+      res.status(404).json({ error: "Research item not found" });
+      return;
+    }
+
+    const updated = await planningStore.updateResearchItem(itemId, updates);
+    if (!updated) {
+      res.status(404).json({ error: "Research item not found" });
+      return;
+    }
+
+    res.json(updated);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Failed to update research item" });
   }
 });
 

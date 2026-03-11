@@ -3429,8 +3429,230 @@ async function testResearchSeedAndRetrieve(): Promise<void> {
 }
 
 // ============================================================
-// 8. Milestone API endpoint tests (HTTP)
+// 7b. Research PATCH API endpoint tests (HTTP)
 // ============================================================
+
+/**
+ * Helper: seeds a session, goal, and research item for PATCH tests.
+ * Returns { goalId, itemId } for use in assertions.
+ */
+async function seedResearchItemForPatch(): Promise<{ goalId: string; itemId: string }> {
+  const sessionId = `test-patch-research-session-${Date.now()}`;
+  const saveRes = await fetch(`${BASE}/api/sessions/${sessionId}/messages`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ messages: [{ role: "user", text: "patch test" }] }),
+  });
+  if (!saveRes.ok) throw new Error(`Failed to seed session: HTTP ${saveRes.status}`);
+
+  const goalId = `test-patch-goal-${Date.now()}`;
+  const seedGoalBody = {
+    id: goalId,
+    sessionId,
+    intent: "Test PATCH research",
+    goal: "Verify PATCH research endpoint",
+    problemStatement: "Need to test PATCH",
+    businessValue: "Reliable API",
+    targetOutcome: "PATCH returns updated item",
+    successCriteria: [],
+    assumptions: [],
+    constraints: [],
+    risks: [],
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+  const goalSeedRes = await fetch(`${BASE}/api/test/seed-goal`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify(seedGoalBody),
+  });
+  if (!goalSeedRes.ok) throw new Error(`Failed to seed goal: HTTP ${goalSeedRes.status}`);
+
+  const itemId = `test-patch-item-${Date.now()}`;
+  const seedItemBody = {
+    id: itemId,
+    goalId,
+    category: "domain",
+    question: "What is the scope?",
+    status: "open",
+    findings: "",
+    decision: "",
+  };
+  const itemSeedRes = await fetch(`${BASE}/api/test/seed-research-item`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify(seedItemBody),
+  });
+  if (!itemSeedRes.ok) throw new Error(`Failed to seed research item: HTTP ${itemSeedRes.status}`);
+
+  return { goalId, itemId };
+}
+
+async function testResearchPatchSuccess(): Promise<void> {
+  const { goalId, itemId } = await seedResearchItemForPatch();
+
+  const res = await fetch(`${BASE}/api/goals/${goalId}/research/${itemId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ findings: "New findings text", status: "researching" }),
+  });
+  if (!res.ok) throw new Error(`PATCH HTTP ${res.status}`);
+  const data = await res.json();
+  if (data.id !== itemId) throw new Error("Expected updated item id in response");
+  if (data.status !== "researching") throw new Error(`Expected status 'researching', got '${data.status}'`);
+  log("  ", `PATCH research success (id: ${itemId.slice(0, 16)}...)`);
+}
+
+async function testResearchPatchNoAuth(): Promise<void> {
+  const res = await fetch(`${BASE}/api/goals/some-goal/research/some-item`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ findings: "test" }),
+  });
+  // 401 without token, or 200/404 when env-token fallback is active
+  if (res.status !== 401 && res.status !== 404 && res.status !== 200) {
+    throw new Error(`Expected 401, 404, or 200 (env-token fallback), got ${res.status}`);
+  }
+}
+
+async function testResearchPatchInvalidFindingsType(): Promise<void> {
+  const { goalId, itemId } = await seedResearchItemForPatch();
+
+  const res = await fetch(`${BASE}/api/goals/${goalId}/research/${itemId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ findings: 12345 }),
+  });
+  if (res.status !== 400) throw new Error(`Expected 400, got ${res.status}`);
+  const data = await res.json();
+  if (!data.error) throw new Error("Expected error message for invalid findings type");
+}
+
+async function testResearchPatchFindingsTooLong(): Promise<void> {
+  const { goalId, itemId } = await seedResearchItemForPatch();
+
+  const res = await fetch(`${BASE}/api/goals/${goalId}/research/${itemId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ findings: "x".repeat(2001) }),
+  });
+  if (res.status !== 400) throw new Error(`Expected 400, got ${res.status}`);
+  const data = await res.json();
+  if (!data.error) throw new Error("Expected error message for findings too long");
+}
+
+async function testResearchPatchDecisionTooLong(): Promise<void> {
+  const { goalId, itemId } = await seedResearchItemForPatch();
+
+  const res = await fetch(`${BASE}/api/goals/${goalId}/research/${itemId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ decision: "x".repeat(1001) }),
+  });
+  if (res.status !== 400) throw new Error(`Expected 400, got ${res.status}`);
+  const data = await res.json();
+  if (!data.error) throw new Error("Expected error message for decision too long");
+}
+
+async function testResearchPatchInvalidStatus(): Promise<void> {
+  const { goalId, itemId } = await seedResearchItemForPatch();
+
+  const res = await fetch(`${BASE}/api/goals/${goalId}/research/${itemId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ status: "invalid-status" }),
+  });
+  if (res.status !== 400) throw new Error(`Expected 400, got ${res.status}`);
+  const data = await res.json();
+  if (!data.error) throw new Error("Expected error message for invalid status");
+}
+
+async function testResearchPatchNoFields(): Promise<void> {
+  const { goalId, itemId } = await seedResearchItemForPatch();
+
+  const res = await fetch(`${BASE}/api/goals/${goalId}/research/${itemId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({}),
+  });
+  if (res.status !== 400) throw new Error(`Expected 400, got ${res.status}`);
+  const data = await res.json();
+  if (!data.error) throw new Error("Expected error message for empty body");
+}
+
+async function testResearchPatchUnknownGoal(): Promise<void> {
+  const res = await fetch(`${BASE}/api/goals/nonexistent-goal-99999/research/some-item`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ findings: "test" }),
+  });
+  if (res.status !== 404) throw new Error(`Expected 404 for unknown goal, got ${res.status}`);
+}
+
+async function testResearchPatchItemNotBelongingToGoal(): Promise<void> {
+  // Create two goals, seed an item under goal A, then try to PATCH it via goal B's URL
+  const sessionIdA = `test-idor-session-A-${Date.now()}`;
+  await fetch(`${BASE}/api/sessions/${sessionIdA}/messages`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ messages: [{ role: "user", text: "idor test A" }] }),
+  });
+  const sessionIdB = `test-idor-session-B-${Date.now()}`;
+  await fetch(`${BASE}/api/sessions/${sessionIdB}/messages`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ messages: [{ role: "user", text: "idor test B" }] }),
+  });
+
+  const goalIdA = `test-idor-goal-A-${Date.now()}`;
+  await fetch(`${BASE}/api/test/seed-goal`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({
+      id: goalIdA, sessionId: sessionIdA, intent: "IDOR test A", goal: "IDOR A",
+      problemStatement: "x", businessValue: "x", targetOutcome: "x",
+      successCriteria: [], assumptions: [], constraints: [], risks: [],
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    }),
+  });
+
+  const goalIdB = `test-idor-goal-B-${Date.now()}`;
+  await fetch(`${BASE}/api/test/seed-goal`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({
+      id: goalIdB, sessionId: sessionIdB, intent: "IDOR test B", goal: "IDOR B",
+      problemStatement: "x", businessValue: "x", targetOutcome: "x",
+      successCriteria: [], assumptions: [], constraints: [], risks: [],
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    }),
+  });
+
+  // Seed item under goal A
+  const itemId = `test-idor-item-${Date.now()}`;
+  const itemSeedRes = await fetch(`${BASE}/api/test/seed-research-item`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({
+      id: itemId, goalId: goalIdA, category: "domain",
+      question: "IDOR check", status: "open", findings: "", decision: "",
+    }),
+  });
+  if (!itemSeedRes.ok) throw new Error(`Failed to seed IDOR item: HTTP ${itemSeedRes.status}`);
+
+  // Attempt to PATCH item via goal B — must return 404
+  const res = await fetch(`${BASE}/api/goals/${goalIdB}/research/${itemId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ findings: "hacked" }),
+  });
+  if (res.status !== 404) {
+    throw new Error(`Expected 404 for IDOR attempt, got ${res.status}`);
+  }
+  log("  ", "IDOR: item from goal A rejected when accessed via goal B URL");
+}
+
+
 
 async function testMilestonesGetNoAuthHeaderIsHandled(): Promise<void> {
   const res = await fetch(`${BASE}/api/goals/some-goal-id/milestones`);
@@ -3854,6 +4076,19 @@ async function main() {
   await run("GET /api/goals/:id/research returns 404 for unknown goal", testResearchGetNotFound);
   await run("GET /api/goals/:id/research returns empty array for goal with no items", testResearchGetEmptyForGoalWithNoItems);
   await run("Research seed → get round-trip", testResearchSeedAndRetrieve);
+
+  // --- Research PATCH API tests ---
+  console.log("\n── Research PATCH API Tests ──\n");
+
+  await run("PATCH /api/goals/:goalId/research/:itemId — no auth is handled", testResearchPatchNoAuth);
+  await run("PATCH /api/goals/:goalId/research/:itemId — success update", testResearchPatchSuccess);
+  await run("PATCH /api/goals/:goalId/research/:itemId — invalid findings type returns 400", testResearchPatchInvalidFindingsType);
+  await run("PATCH /api/goals/:goalId/research/:itemId — findings too long returns 400", testResearchPatchFindingsTooLong);
+  await run("PATCH /api/goals/:goalId/research/:itemId — decision too long returns 400", testResearchPatchDecisionTooLong);
+  await run("PATCH /api/goals/:goalId/research/:itemId — invalid status returns 400", testResearchPatchInvalidStatus);
+  await run("PATCH /api/goals/:goalId/research/:itemId — empty body returns 400", testResearchPatchNoFields);
+  await run("PATCH /api/goals/:goalId/research/:itemId — unknown goal returns 404", testResearchPatchUnknownGoal);
+  await run("PATCH /api/goals/:goalId/research/:itemId — IDOR: item not in goal returns 404", testResearchPatchItemNotBelongingToGoal);
 
   // --- Milestone API tests ---
   console.log("\n── Milestone API Tests ──\n");
