@@ -1,4 +1,5 @@
-import { InMemoryPlanningStore } from "./planning-store.js";
+import { InMemoryPlanningStore, AzurePlanningStore, createPlanningStore } from "./planning-store.js";
+import type { PlanningStore } from "./planning-store.js";
 import type { Goal, ResearchItem, Milestone, IssueDraft, FileRef } from "./planning-types.js";
 
 let passed = 0;
@@ -106,8 +107,8 @@ function makeIssueDraft(overrides: Partial<IssueDraft> = {}): IssueDraft {
 // Goal Tests
 // ============================================================
 
-async function testGoalCreateAndGet(): Promise<void> {
-  const store = new InMemoryPlanningStore();
+async function testGoalCreateAndGet(storeFactory: () => PlanningStore): Promise<void> {
+  const store = storeFactory();
   const goal = makeGoal();
   const created = await store.createGoal(goal);
   assert(created.id === "goal-1", "Created goal ID should match");
@@ -116,29 +117,29 @@ async function testGoalCreateAndGet(): Promise<void> {
   assert(fetched!.intent === goal.intent, "Intent should match");
 }
 
-async function testGoalGetNotFound(): Promise<void> {
-  const store = new InMemoryPlanningStore();
+async function testGoalGetNotFound(storeFactory: () => PlanningStore): Promise<void> {
+  const store = storeFactory();
   const result = await store.getGoal("nonexistent");
   assert(result === null, "Should return null for missing goal");
 }
 
-async function testGoalListEmpty(): Promise<void> {
-  const store = new InMemoryPlanningStore();
+async function testGoalListEmpty(storeFactory: () => PlanningStore): Promise<void> {
+  const store = storeFactory();
   const goals = await store.listGoals("session-1");
   assert(Array.isArray(goals), "Should return an array");
   assert(goals.length === 0, "Should be empty for new store");
 }
 
-async function testGoalCreateAndList(): Promise<void> {
-  const store = new InMemoryPlanningStore();
+async function testGoalCreateAndList(storeFactory: () => PlanningStore): Promise<void> {
+  const store = storeFactory();
   await store.createGoal(makeGoal({ id: "g1" }));
   const goals = await store.listGoals("session-1");
   assert(goals.length === 1, "Should have 1 goal");
   assert(goals[0].id === "g1", "Listed goal should match created");
 }
 
-async function testGoalUpdate(): Promise<void> {
-  const store = new InMemoryPlanningStore();
+async function testGoalUpdate(storeFactory: () => PlanningStore): Promise<void> {
+  const store = storeFactory();
   await store.createGoal(makeGoal());
   const updated = await store.updateGoal("goal-1", { intent: "New intent", updatedAt: "2025-06-01T00:00:00Z" });
   assert(updated !== null, "Update should succeed");
@@ -147,14 +148,14 @@ async function testGoalUpdate(): Promise<void> {
   assert(updated!.createdAt === "2025-01-01T00:00:00Z", "createdAt should be unchanged");
 }
 
-async function testGoalUpdateNotFound(): Promise<void> {
-  const store = new InMemoryPlanningStore();
+async function testGoalUpdateNotFound(storeFactory: () => PlanningStore): Promise<void> {
+  const store = storeFactory();
   const result = await store.updateGoal("nonexistent", { intent: "X" });
   assert(result === null, "Update on missing goal should return null");
 }
 
-async function testGoalDelete(): Promise<void> {
-  const store = new InMemoryPlanningStore();
+async function testGoalDelete(storeFactory: () => PlanningStore): Promise<void> {
+  const store = storeFactory();
   await store.createGoal(makeGoal());
   const first = await store.deleteGoal("goal-1");
   assert(first === true, "First delete should return true");
@@ -164,8 +165,8 @@ async function testGoalDelete(): Promise<void> {
   assert(fetched === null, "Goal should be gone after delete");
 }
 
-async function testGoalListScoping(): Promise<void> {
-  const store = new InMemoryPlanningStore();
+async function testGoalListScoping(storeFactory: () => PlanningStore): Promise<void> {
+  const store = storeFactory();
   await store.createGoal(makeGoal({ id: "g1", sessionId: "session-A" }));
   await store.createGoal(makeGoal({ id: "g2", sessionId: "session-B" }));
   const sessionA = await store.listGoals("session-A");
@@ -176,8 +177,8 @@ async function testGoalListScoping(): Promise<void> {
   assert(sessionB[0].id === "g2", "Session B goal should be g2");
 }
 
-async function testGoalListOrdering(): Promise<void> {
-  const store = new InMemoryPlanningStore();
+async function testGoalListOrdering(storeFactory: () => PlanningStore): Promise<void> {
+  const store = storeFactory();
   // Create in reverse order; list should sort by createdAt ascending
   await store.createGoal(makeGoal({ id: "g-late", sessionId: "s1", createdAt: "2025-06-01T00:00:00Z", updatedAt: "2025-06-01T00:00:00Z" }));
   await store.createGoal(makeGoal({ id: "g-early", sessionId: "s1", createdAt: "2025-01-01T00:00:00Z", updatedAt: "2025-01-01T00:00:00Z" }));
@@ -187,8 +188,8 @@ async function testGoalListOrdering(): Promise<void> {
 }
 
 // Validation
-async function testGoalCreateMissingId(): Promise<void> {
-  const store = new InMemoryPlanningStore();
+async function testGoalCreateMissingId(storeFactory: () => PlanningStore): Promise<void> {
+  const store = storeFactory();
   let threw = false;
   try {
     await store.createGoal(makeGoal({ id: "" }));
@@ -198,8 +199,8 @@ async function testGoalCreateMissingId(): Promise<void> {
   assert(threw, "Should throw for missing id");
 }
 
-async function testGoalCreateMissingSessionId(): Promise<void> {
-  const store = new InMemoryPlanningStore();
+async function testGoalCreateMissingSessionId(storeFactory: () => PlanningStore): Promise<void> {
+  const store = storeFactory();
   let threw = false;
   try {
     await store.createGoal(makeGoal({ sessionId: "" }));
@@ -209,8 +210,8 @@ async function testGoalCreateMissingSessionId(): Promise<void> {
   assert(threw, "Should throw for missing sessionId");
 }
 
-async function testGoalCreateMissingIntent(): Promise<void> {
-  const store = new InMemoryPlanningStore();
+async function testGoalCreateMissingIntent(storeFactory: () => PlanningStore): Promise<void> {
+  const store = storeFactory();
   let threw = false;
   try {
     await store.createGoal(makeGoal({ intent: "  " }));
@@ -224,8 +225,8 @@ async function testGoalCreateMissingIntent(): Promise<void> {
 // ResearchItem Tests
 // ============================================================
 
-async function testResearchItemCreateAndGet(): Promise<void> {
-  const store = new InMemoryPlanningStore();
+async function testResearchItemCreateAndGet(storeFactory: () => PlanningStore): Promise<void> {
+  const store = storeFactory();
   const item = makeResearchItem();
   await store.createResearchItem(item);
   const fetched = await store.getResearchItem("ri-1");
@@ -233,28 +234,28 @@ async function testResearchItemCreateAndGet(): Promise<void> {
   assert(fetched!.question === item.question, "Question should match");
 }
 
-async function testResearchItemGetNotFound(): Promise<void> {
-  const store = new InMemoryPlanningStore();
+async function testResearchItemGetNotFound(storeFactory: () => PlanningStore): Promise<void> {
+  const store = storeFactory();
   const result = await store.getResearchItem("nonexistent");
   assert(result === null, "Should return null for missing item");
 }
 
-async function testResearchItemListEmpty(): Promise<void> {
-  const store = new InMemoryPlanningStore();
+async function testResearchItemListEmpty(storeFactory: () => PlanningStore): Promise<void> {
+  const store = storeFactory();
   const items = await store.listResearchItems("goal-1");
   assert(Array.isArray(items), "Should return an array");
   assert(items.length === 0, "Should be empty for new store");
 }
 
-async function testResearchItemCreateAndList(): Promise<void> {
-  const store = new InMemoryPlanningStore();
+async function testResearchItemCreateAndList(storeFactory: () => PlanningStore): Promise<void> {
+  const store = storeFactory();
   await store.createResearchItem(makeResearchItem());
   const items = await store.listResearchItems("goal-1");
   assert(items.length === 1, "Should have 1 item");
 }
 
-async function testResearchItemUpdate(): Promise<void> {
-  const store = new InMemoryPlanningStore();
+async function testResearchItemUpdate(storeFactory: () => PlanningStore): Promise<void> {
+  const store = storeFactory();
   await store.createResearchItem(makeResearchItem());
   const updated = await store.updateResearchItem("ri-1", { status: "resolved", findings: "Found it" });
   assert(updated !== null, "Update should succeed");
@@ -264,14 +265,14 @@ async function testResearchItemUpdate(): Promise<void> {
   assert(updated!.goalId === "goal-1", "goalId should be unchanged");
 }
 
-async function testResearchItemUpdateNotFound(): Promise<void> {
-  const store = new InMemoryPlanningStore();
+async function testResearchItemUpdateNotFound(storeFactory: () => PlanningStore): Promise<void> {
+  const store = storeFactory();
   const result = await store.updateResearchItem("nonexistent", { status: "resolved" });
   assert(result === null, "Update on missing item should return null");
 }
 
-async function testResearchItemDelete(): Promise<void> {
-  const store = new InMemoryPlanningStore();
+async function testResearchItemDelete(storeFactory: () => PlanningStore): Promise<void> {
+  const store = storeFactory();
   await store.createResearchItem(makeResearchItem());
   const first = await store.deleteResearchItem("ri-1");
   assert(first === true, "First delete should return true");
@@ -279,8 +280,8 @@ async function testResearchItemDelete(): Promise<void> {
   assert(second === false, "Second delete should return false");
 }
 
-async function testResearchItemListScoping(): Promise<void> {
-  const store = new InMemoryPlanningStore();
+async function testResearchItemListScoping(storeFactory: () => PlanningStore): Promise<void> {
+  const store = storeFactory();
   await store.createResearchItem(makeResearchItem({ id: "ri-a", goalId: "goal-A" }));
   await store.createResearchItem(makeResearchItem({ id: "ri-b", goalId: "goal-B" }));
   const itemsA = await store.listResearchItems("goal-A");
@@ -290,8 +291,8 @@ async function testResearchItemListScoping(): Promise<void> {
 }
 
 // Validation
-async function testResearchItemInvalidCategory(): Promise<void> {
-  const store = new InMemoryPlanningStore();
+async function testResearchItemInvalidCategory(storeFactory: () => PlanningStore): Promise<void> {
+  const store = storeFactory();
   let threw = false;
   try {
     await store.createResearchItem(makeResearchItem({ category: "invalid" as any }));
@@ -301,8 +302,8 @@ async function testResearchItemInvalidCategory(): Promise<void> {
   assert(threw, "Should throw for invalid category");
 }
 
-async function testResearchItemInvalidStatus(): Promise<void> {
-  const store = new InMemoryPlanningStore();
+async function testResearchItemInvalidStatus(storeFactory: () => PlanningStore): Promise<void> {
+  const store = storeFactory();
   let threw = false;
   try {
     await store.createResearchItem(makeResearchItem({ status: "done" as any }));
@@ -312,8 +313,8 @@ async function testResearchItemInvalidStatus(): Promise<void> {
   assert(threw, "Should throw for invalid status");
 }
 
-async function testResearchItemUpdateInvalidStatus(): Promise<void> {
-  const store = new InMemoryPlanningStore();
+async function testResearchItemUpdateInvalidStatus(storeFactory: () => PlanningStore): Promise<void> {
+  const store = storeFactory();
   await store.createResearchItem(makeResearchItem());
   let threw = false;
   try {
@@ -328,36 +329,36 @@ async function testResearchItemUpdateInvalidStatus(): Promise<void> {
 // Milestone Tests
 // ============================================================
 
-async function testMilestoneCreateAndGet(): Promise<void> {
-  const store = new InMemoryPlanningStore();
+async function testMilestoneCreateAndGet(storeFactory: () => PlanningStore): Promise<void> {
+  const store = storeFactory();
   await store.createMilestone(makeMilestone());
   const fetched = await store.getMilestone("ms-1");
   assert(fetched !== null, "Should find the milestone");
   assert(fetched!.name === "Milestone 1", "Name should match");
 }
 
-async function testMilestoneGetNotFound(): Promise<void> {
-  const store = new InMemoryPlanningStore();
+async function testMilestoneGetNotFound(storeFactory: () => PlanningStore): Promise<void> {
+  const store = storeFactory();
   const result = await store.getMilestone("nonexistent");
   assert(result === null, "Should return null for missing milestone");
 }
 
-async function testMilestoneListEmpty(): Promise<void> {
-  const store = new InMemoryPlanningStore();
+async function testMilestoneListEmpty(storeFactory: () => PlanningStore): Promise<void> {
+  const store = storeFactory();
   const milestones = await store.listMilestones("goal-1");
   assert(Array.isArray(milestones), "Should return an array");
   assert(milestones.length === 0, "Should be empty for new store");
 }
 
-async function testMilestoneCreateAndList(): Promise<void> {
-  const store = new InMemoryPlanningStore();
+async function testMilestoneCreateAndList(storeFactory: () => PlanningStore): Promise<void> {
+  const store = storeFactory();
   await store.createMilestone(makeMilestone());
   const milestones = await store.listMilestones("goal-1");
   assert(milestones.length === 1, "Should have 1 milestone");
 }
 
-async function testMilestoneUpdate(): Promise<void> {
-  const store = new InMemoryPlanningStore();
+async function testMilestoneUpdate(storeFactory: () => PlanningStore): Promise<void> {
+  const store = storeFactory();
   await store.createMilestone(makeMilestone());
   const updated = await store.updateMilestone("ms-1", { status: "ready", name: "Updated name" });
   assert(updated !== null, "Update should succeed");
@@ -367,14 +368,14 @@ async function testMilestoneUpdate(): Promise<void> {
   assert(updated!.goalId === "goal-1", "goalId should be unchanged");
 }
 
-async function testMilestoneUpdateNotFound(): Promise<void> {
-  const store = new InMemoryPlanningStore();
+async function testMilestoneUpdateNotFound(storeFactory: () => PlanningStore): Promise<void> {
+  const store = storeFactory();
   const result = await store.updateMilestone("nonexistent", { name: "X" });
   assert(result === null, "Update on missing milestone should return null");
 }
 
-async function testMilestoneDelete(): Promise<void> {
-  const store = new InMemoryPlanningStore();
+async function testMilestoneDelete(storeFactory: () => PlanningStore): Promise<void> {
+  const store = storeFactory();
   await store.createMilestone(makeMilestone());
   const first = await store.deleteMilestone("ms-1");
   assert(first === true, "First delete should return true");
@@ -384,8 +385,8 @@ async function testMilestoneDelete(): Promise<void> {
   assert(fetched === null, "Milestone should be gone after delete");
 }
 
-async function testMilestoneListScoping(): Promise<void> {
-  const store = new InMemoryPlanningStore();
+async function testMilestoneListScoping(storeFactory: () => PlanningStore): Promise<void> {
+  const store = storeFactory();
   await store.createMilestone(makeMilestone({ id: "ms-a", goalId: "goal-A" }));
   await store.createMilestone(makeMilestone({ id: "ms-b", goalId: "goal-B" }));
   const milestonesA = await store.listMilestones("goal-A");
@@ -394,8 +395,8 @@ async function testMilestoneListScoping(): Promise<void> {
   assert(milestonesB.length === 1 && milestonesB[0].id === "ms-b", "Goal B should only see its milestone");
 }
 
-async function testMilestoneListOrdering(): Promise<void> {
-  const store = new InMemoryPlanningStore();
+async function testMilestoneListOrdering(storeFactory: () => PlanningStore): Promise<void> {
+  const store = storeFactory();
   await store.createMilestone(makeMilestone({ id: "ms-3", goalId: "g1", order: 3 }));
   await store.createMilestone(makeMilestone({ id: "ms-1", goalId: "g1", order: 1 }));
   await store.createMilestone(makeMilestone({ id: "ms-2", goalId: "g1", order: 2 }));
@@ -406,8 +407,8 @@ async function testMilestoneListOrdering(): Promise<void> {
 }
 
 // Validation
-async function testMilestoneInvalidStatus(): Promise<void> {
-  const store = new InMemoryPlanningStore();
+async function testMilestoneInvalidStatus(storeFactory: () => PlanningStore): Promise<void> {
+  const store = storeFactory();
   let threw = false;
   try {
     await store.createMilestone(makeMilestone({ status: "invalid" as any }));
@@ -417,8 +418,8 @@ async function testMilestoneInvalidStatus(): Promise<void> {
   assert(threw, "Should throw for invalid status");
 }
 
-async function testMilestoneNegativeOrder(): Promise<void> {
-  const store = new InMemoryPlanningStore();
+async function testMilestoneNegativeOrder(storeFactory: () => PlanningStore): Promise<void> {
+  const store = storeFactory();
   let threwNegative = false;
   try {
     await store.createMilestone(makeMilestone({ order: -1 }));
@@ -436,8 +437,8 @@ async function testMilestoneNegativeOrder(): Promise<void> {
   assert(threwZero, "Should throw for order = 0 (1-based)");
 }
 
-async function testMilestoneUpdateInvalidStatus(): Promise<void> {
-  const store = new InMemoryPlanningStore();
+async function testMilestoneUpdateInvalidStatus(storeFactory: () => PlanningStore): Promise<void> {
+  const store = storeFactory();
   await store.createMilestone(makeMilestone());
   let threw = false;
   try {
@@ -452,36 +453,36 @@ async function testMilestoneUpdateInvalidStatus(): Promise<void> {
 // IssueDraft Tests
 // ============================================================
 
-async function testIssueDraftCreateAndGet(): Promise<void> {
-  const store = new InMemoryPlanningStore();
+async function testIssueDraftCreateAndGet(storeFactory: () => PlanningStore): Promise<void> {
+  const store = storeFactory();
   await store.createIssueDraft(makeIssueDraft());
   const fetched = await store.getIssueDraft("draft-1");
   assert(fetched !== null, "Should find the issue draft");
   assert(fetched!.title === "Implement login endpoint", "Title should match");
 }
 
-async function testIssueDraftGetNotFound(): Promise<void> {
-  const store = new InMemoryPlanningStore();
+async function testIssueDraftGetNotFound(storeFactory: () => PlanningStore): Promise<void> {
+  const store = storeFactory();
   const result = await store.getIssueDraft("nonexistent");
   assert(result === null, "Should return null for missing draft");
 }
 
-async function testIssueDraftListEmpty(): Promise<void> {
-  const store = new InMemoryPlanningStore();
+async function testIssueDraftListEmpty(storeFactory: () => PlanningStore): Promise<void> {
+  const store = storeFactory();
   const drafts = await store.listIssueDrafts("ms-1");
   assert(Array.isArray(drafts), "Should return an array");
   assert(drafts.length === 0, "Should be empty for new store");
 }
 
-async function testIssueDraftCreateAndList(): Promise<void> {
-  const store = new InMemoryPlanningStore();
+async function testIssueDraftCreateAndList(storeFactory: () => PlanningStore): Promise<void> {
+  const store = storeFactory();
   await store.createIssueDraft(makeIssueDraft());
   const drafts = await store.listIssueDrafts("ms-1");
   assert(drafts.length === 1, "Should have 1 draft");
 }
 
-async function testIssueDraftUpdate(): Promise<void> {
-  const store = new InMemoryPlanningStore();
+async function testIssueDraftUpdate(storeFactory: () => PlanningStore): Promise<void> {
+  const store = storeFactory();
   await store.createIssueDraft(makeIssueDraft());
   const updated = await store.updateIssueDraft("draft-1", { status: "ready", title: "Updated title" });
   assert(updated !== null, "Update should succeed");
@@ -491,14 +492,14 @@ async function testIssueDraftUpdate(): Promise<void> {
   assert(updated!.milestoneId === "ms-1", "milestoneId should be unchanged");
 }
 
-async function testIssueDraftUpdateNotFound(): Promise<void> {
-  const store = new InMemoryPlanningStore();
+async function testIssueDraftUpdateNotFound(storeFactory: () => PlanningStore): Promise<void> {
+  const store = storeFactory();
   const result = await store.updateIssueDraft("nonexistent", { title: "X" });
   assert(result === null, "Update on missing draft should return null");
 }
 
-async function testIssueDraftDelete(): Promise<void> {
-  const store = new InMemoryPlanningStore();
+async function testIssueDraftDelete(storeFactory: () => PlanningStore): Promise<void> {
+  const store = storeFactory();
   await store.createIssueDraft(makeIssueDraft());
   const first = await store.deleteIssueDraft("draft-1");
   assert(first === true, "First delete should return true");
@@ -508,8 +509,8 @@ async function testIssueDraftDelete(): Promise<void> {
   assert(fetched === null, "Draft should be gone after delete");
 }
 
-async function testIssueDraftListScoping(): Promise<void> {
-  const store = new InMemoryPlanningStore();
+async function testIssueDraftListScoping(storeFactory: () => PlanningStore): Promise<void> {
+  const store = storeFactory();
   await store.createIssueDraft(makeIssueDraft({ id: "d-a", milestoneId: "ms-A" }));
   await store.createIssueDraft(makeIssueDraft({ id: "d-b", milestoneId: "ms-B" }));
   const draftsA = await store.listIssueDrafts("ms-A");
@@ -518,8 +519,8 @@ async function testIssueDraftListScoping(): Promise<void> {
   assert(draftsB.length === 1 && draftsB[0].id === "d-b", "Milestone B should only see its draft");
 }
 
-async function testIssueDraftListOrdering(): Promise<void> {
-  const store = new InMemoryPlanningStore();
+async function testIssueDraftListOrdering(storeFactory: () => PlanningStore): Promise<void> {
+  const store = storeFactory();
   await store.createIssueDraft(makeIssueDraft({ id: "d-3", milestoneId: "ms-1", order: 3 }));
   await store.createIssueDraft(makeIssueDraft({ id: "d-1", milestoneId: "ms-1", order: 1 }));
   await store.createIssueDraft(makeIssueDraft({ id: "d-2", milestoneId: "ms-1", order: 2 }));
@@ -530,8 +531,8 @@ async function testIssueDraftListOrdering(): Promise<void> {
 }
 
 // Validation
-async function testIssueDraftInvalidStatus(): Promise<void> {
-  const store = new InMemoryPlanningStore();
+async function testIssueDraftInvalidStatus(storeFactory: () => PlanningStore): Promise<void> {
+  const store = storeFactory();
   let threw = false;
   try {
     await store.createIssueDraft(makeIssueDraft({ status: "invalid" as any }));
@@ -541,8 +542,8 @@ async function testIssueDraftInvalidStatus(): Promise<void> {
   assert(threw, "Should throw for invalid status");
 }
 
-async function testIssueDraftNegativeOrder(): Promise<void> {
-  const store = new InMemoryPlanningStore();
+async function testIssueDraftNegativeOrder(storeFactory: () => PlanningStore): Promise<void> {
+  const store = storeFactory();
   let threwNegative = false;
   try {
     await store.createIssueDraft(makeIssueDraft({ order: -5 }));
@@ -560,8 +561,8 @@ async function testIssueDraftNegativeOrder(): Promise<void> {
   assert(threwZero, "Should throw for order = 0 (1-based)");
 }
 
-async function testIssueDraftUpdateInvalidStatus(): Promise<void> {
-  const store = new InMemoryPlanningStore();
+async function testIssueDraftUpdateInvalidStatus(storeFactory: () => PlanningStore): Promise<void> {
+  const store = storeFactory();
   await store.createIssueDraft(makeIssueDraft());
   let threw = false;
   try {
@@ -572,8 +573,8 @@ async function testIssueDraftUpdateInvalidStatus(): Promise<void> {
   assert(threw, "Should throw for invalid status on update");
 }
 
-async function testIssueDraftMissingTitle(): Promise<void> {
-  const store = new InMemoryPlanningStore();
+async function testIssueDraftMissingTitle(storeFactory: () => PlanningStore): Promise<void> {
+  const store = storeFactory();
   let threw = false;
   try {
     await store.createIssueDraft(makeIssueDraft({ title: "" }));
@@ -583,8 +584,8 @@ async function testIssueDraftMissingTitle(): Promise<void> {
   assert(threw, "Should throw for empty title");
 }
 
-async function testIssueDraftFileRefEmptyPath(): Promise<void> {
-  const store = new InMemoryPlanningStore();
+async function testIssueDraftFileRefEmptyPath(storeFactory: () => PlanningStore): Promise<void> {
+  const store = storeFactory();
   const badRef: FileRef = { path: "", reason: "Some reason" };
   let threw = false;
   try {
@@ -595,8 +596,8 @@ async function testIssueDraftFileRefEmptyPath(): Promise<void> {
   assert(threw, "Should throw for filesToModify element with empty path");
 }
 
-async function testIssueDraftFileRefEmptyReason(): Promise<void> {
-  const store = new InMemoryPlanningStore();
+async function testIssueDraftFileRefEmptyReason(storeFactory: () => PlanningStore): Promise<void> {
+  const store = storeFactory();
   const badRef: FileRef = { path: "server.ts", reason: "" };
   let threw = false;
   try {
@@ -607,8 +608,8 @@ async function testIssueDraftFileRefEmptyReason(): Promise<void> {
   assert(threw, "Should throw for filesToModify element with empty reason");
 }
 
-async function testIssueDraftFilesToReadEmptyPath(): Promise<void> {
-  const store = new InMemoryPlanningStore();
+async function testIssueDraftFilesToReadEmptyPath(storeFactory: () => PlanningStore): Promise<void> {
+  const store = storeFactory();
   const badRef: FileRef = { path: "   ", reason: "Read for context" };
   let threw = false;
   try {
@@ -619,8 +620,8 @@ async function testIssueDraftFilesToReadEmptyPath(): Promise<void> {
   assert(threw, "Should throw for filesToRead element with whitespace-only path");
 }
 
-async function testIssueDraftFilesToReadEmptyReason(): Promise<void> {
-  const store = new InMemoryPlanningStore();
+async function testIssueDraftFilesToReadEmptyReason(storeFactory: () => PlanningStore): Promise<void> {
+  const store = storeFactory();
   const badRef: FileRef = { path: "tools.ts", reason: "  " };
   let threw = false;
   try {
@@ -631,8 +632,8 @@ async function testIssueDraftFilesToReadEmptyReason(): Promise<void> {
   assert(threw, "Should throw for filesToRead element with whitespace-only reason");
 }
 
-async function testIssueDraftValidFileRefs(): Promise<void> {
-  const store = new InMemoryPlanningStore();
+async function testIssueDraftValidFileRefs(storeFactory: () => PlanningStore): Promise<void> {
+  const store = storeFactory();
   const modRef: FileRef = { path: "server.ts", reason: "Add new endpoint" };
   const readRef: FileRef = { path: "tools.ts", reason: "Follow existing pattern" };
   const draft = makeIssueDraft({
@@ -654,8 +655,8 @@ async function testIssueDraftValidFileRefs(): Promise<void> {
   assert(created.verificationCommands.length === 2, "Should store verificationCommands");
 }
 
-async function testIssueDraftFileRefNonStringPath(): Promise<void> {
-  const store = new InMemoryPlanningStore();
+async function testIssueDraftFileRefNonStringPath(storeFactory: () => PlanningStore): Promise<void> {
+  const store = storeFactory();
   const badRef = { path: null as unknown as string, reason: "Some reason" };
   let threw = false;
   try {
@@ -666,8 +667,8 @@ async function testIssueDraftFileRefNonStringPath(): Promise<void> {
   assert(threw, "Should throw for filesToModify element with null path");
 }
 
-async function testIssueDraftFileRefNonStringReason(): Promise<void> {
-  const store = new InMemoryPlanningStore();
+async function testIssueDraftFileRefNonStringReason(storeFactory: () => PlanningStore): Promise<void> {
+  const store = storeFactory();
   const badRef = { path: "server.ts", reason: undefined as unknown as string };
   let threw = false;
   try {
@@ -678,8 +679,8 @@ async function testIssueDraftFileRefNonStringReason(): Promise<void> {
   assert(threw, "Should throw for filesToRead element with undefined reason");
 }
 
-async function testIssueDraftFileRefNullElement(): Promise<void> {
-  const store = new InMemoryPlanningStore();
+async function testIssueDraftFileRefNullElement(storeFactory: () => PlanningStore): Promise<void> {
+  const store = storeFactory();
   let threw = false;
   try {
     await store.createIssueDraft(makeIssueDraft({ filesToModify: [null as unknown as FileRef] }));
@@ -689,8 +690,8 @@ async function testIssueDraftFileRefNullElement(): Promise<void> {
   assert(threw, "Should throw for filesToModify containing a null element");
 }
 
-async function testIssueDraftFilesToModifyNotArray(): Promise<void> {
-  const store = new InMemoryPlanningStore();
+async function testIssueDraftFilesToModifyNotArray(storeFactory: () => PlanningStore): Promise<void> {
+  const store = storeFactory();
   let threw = false;
   try {
     await store.createIssueDraft(makeIssueDraft({ filesToModify: null as unknown as FileRef[] }));
@@ -700,8 +701,8 @@ async function testIssueDraftFilesToModifyNotArray(): Promise<void> {
   assert(threw, "Should throw when filesToModify is not an array");
 }
 
-async function testIssueDraftFilesToReadNotArray(): Promise<void> {
-  const store = new InMemoryPlanningStore();
+async function testIssueDraftFilesToReadNotArray(storeFactory: () => PlanningStore): Promise<void> {
+  const store = storeFactory();
   let threw = false;
   try {
     await store.createIssueDraft(makeIssueDraft({ filesToRead: "bad" as unknown as FileRef[] }));
@@ -711,8 +712,8 @@ async function testIssueDraftFilesToReadNotArray(): Promise<void> {
   assert(threw, "Should throw when filesToRead is not an array");
 }
 
-async function testIssueDraftUpdateFileRefValidation(): Promise<void> {
-  const store = new InMemoryPlanningStore();
+async function testIssueDraftUpdateFileRefValidation(storeFactory: () => PlanningStore): Promise<void> {
+  const store = storeFactory();
   await store.createIssueDraft(makeIssueDraft());
   let threw = false;
   try {
@@ -725,8 +726,8 @@ async function testIssueDraftUpdateFileRefValidation(): Promise<void> {
   assert(threw, "Should throw when updateIssueDraft receives filesToModify with empty path");
 }
 
-async function testIssueDraftUpdateFilesToReadNotArray(): Promise<void> {
-  const store = new InMemoryPlanningStore();
+async function testIssueDraftUpdateFilesToReadNotArray(storeFactory: () => PlanningStore): Promise<void> {
+  const store = storeFactory();
   await store.createIssueDraft(makeIssueDraft());
   let threw = false;
   try {
@@ -743,8 +744,8 @@ async function testIssueDraftUpdateFilesToReadNotArray(): Promise<void> {
 // Deep Copy / Isolation Tests
 // ============================================================
 
-async function testGoalArrayIsolation(): Promise<void> {
-  const store = new InMemoryPlanningStore();
+async function testGoalArrayIsolation(storeFactory: () => PlanningStore): Promise<void> {
+  const store = storeFactory();
   const goal = makeGoal({ successCriteria: ["original"] });
   const created = await store.createGoal(goal);
   // Mutating the returned copy should not affect stored state
@@ -757,8 +758,8 @@ async function testGoalArrayIsolation(): Promise<void> {
   assert(fetched2!.assumptions.length === 0, "Stored assumptions should not be mutated via input reference");
 }
 
-async function testMilestoneArrayIsolation(): Promise<void> {
-  const store = new InMemoryPlanningStore();
+async function testMilestoneArrayIsolation(storeFactory: () => PlanningStore): Promise<void> {
+  const store = storeFactory();
   const milestone = makeMilestone({ acceptanceCriteria: ["criterion 1"], dependencies: [] });
   const created = await store.createMilestone(milestone);
   created.acceptanceCriteria.push("injected");
@@ -766,8 +767,8 @@ async function testMilestoneArrayIsolation(): Promise<void> {
   assert(fetched!.acceptanceCriteria.length === 1, "Stored acceptanceCriteria should not be mutated via returned copy");
 }
 
-async function testIssueDraftArrayIsolation(): Promise<void> {
-  const store = new InMemoryPlanningStore();
+async function testIssueDraftArrayIsolation(storeFactory: () => PlanningStore): Promise<void> {
+  const store = storeFactory();
   const draft = makeIssueDraft({ dependencies: [], acceptanceCriteria: ["ac1"] });
   const created = await store.createIssueDraft(draft);
   created.dependencies.push("injected");
@@ -779,91 +780,126 @@ async function testIssueDraftArrayIsolation(): Promise<void> {
 // Main
 // ============================================================
 
-async function main() {
-  console.log("═══════════════════════════════════════════════");
-  console.log("  PlanningStore — Unit Tests");
-  console.log("═══════════════════════════════════════════════\n");
+async function runPlanningStoreTests(label: string, factory: () => PlanningStore) {
+  console.log(`\n═══════════════════════════════════════════════`);
+  console.log(`  PlanningStore — ${label}`);
+  console.log(`═══════════════════════════════════════════════\n`);
 
   console.log("── Goal CRUD ──\n");
-  await run("createGoal + getGoal round-trip", testGoalCreateAndGet);
-  await run("getGoal returns null for non-existent", testGoalGetNotFound);
-  await run("listGoals returns empty array for new store", testGoalListEmpty);
-  await run("createGoal + listGoals includes it", testGoalCreateAndList);
-  await run("updateGoal returns updated data", testGoalUpdate);
-  await run("updateGoal returns null for non-existent", testGoalUpdateNotFound);
-  await run("deleteGoal removes goal; second delete returns false", testGoalDelete);
-  await run("listGoals scoped by sessionId", testGoalListScoping);
-  await run("listGoals ordered by createdAt ascending", testGoalListOrdering);
+  await run("createGoal + getGoal round-trip", () => testGoalCreateAndGet(factory));
+  await run("getGoal returns null for non-existent", () => testGoalGetNotFound(factory));
+  await run("listGoals returns empty array for new store", () => testGoalListEmpty(factory));
+  await run("createGoal + listGoals includes it", () => testGoalCreateAndList(factory));
+  await run("updateGoal returns updated data", () => testGoalUpdate(factory));
+  await run("updateGoal returns null for non-existent", () => testGoalUpdateNotFound(factory));
+  await run("deleteGoal removes goal; second delete returns false", () => testGoalDelete(factory));
+  await run("listGoals scoped by sessionId", () => testGoalListScoping(factory));
+  await run("listGoals ordered by createdAt ascending", () => testGoalListOrdering(factory));
 
   console.log("\n── Goal Validation ──\n");
-  await run("createGoal throws for missing id", testGoalCreateMissingId);
-  await run("createGoal throws for missing sessionId", testGoalCreateMissingSessionId);
-  await run("createGoal throws for whitespace-only intent", testGoalCreateMissingIntent);
+  await run("createGoal throws for missing id", () => testGoalCreateMissingId(factory));
+  await run("createGoal throws for missing sessionId", () => testGoalCreateMissingSessionId(factory));
+  await run("createGoal throws for whitespace-only intent", () => testGoalCreateMissingIntent(factory));
 
   console.log("\n── ResearchItem CRUD ──\n");
-  await run("createResearchItem + getResearchItem round-trip", testResearchItemCreateAndGet);
-  await run("getResearchItem returns null for non-existent", testResearchItemGetNotFound);
-  await run("listResearchItems returns empty array for new store", testResearchItemListEmpty);
-  await run("createResearchItem + listResearchItems includes it", testResearchItemCreateAndList);
-  await run("updateResearchItem returns updated data", testResearchItemUpdate);
-  await run("updateResearchItem returns null for non-existent", testResearchItemUpdateNotFound);
-  await run("deleteResearchItem removes item; second delete returns false", testResearchItemDelete);
-  await run("listResearchItems scoped by goalId", testResearchItemListScoping);
+  await run("createResearchItem + getResearchItem round-trip", () => testResearchItemCreateAndGet(factory));
+  await run("getResearchItem returns null for non-existent", () => testResearchItemGetNotFound(factory));
+  await run("listResearchItems returns empty array for new store", () => testResearchItemListEmpty(factory));
+  await run("createResearchItem + listResearchItems includes it", () => testResearchItemCreateAndList(factory));
+  await run("updateResearchItem returns updated data", () => testResearchItemUpdate(factory));
+  await run("updateResearchItem returns null for non-existent", () => testResearchItemUpdateNotFound(factory));
+  await run("deleteResearchItem removes item; second delete returns false", () => testResearchItemDelete(factory));
+  await run("listResearchItems scoped by goalId", () => testResearchItemListScoping(factory));
 
   console.log("\n── ResearchItem Validation ──\n");
-  await run("createResearchItem throws for invalid category", testResearchItemInvalidCategory);
-  await run("createResearchItem throws for invalid status", testResearchItemInvalidStatus);
-  await run("updateResearchItem throws for invalid status", testResearchItemUpdateInvalidStatus);
+  await run("createResearchItem throws for invalid category", () => testResearchItemInvalidCategory(factory));
+  await run("createResearchItem throws for invalid status", () => testResearchItemInvalidStatus(factory));
+  await run("updateResearchItem throws for invalid status", () => testResearchItemUpdateInvalidStatus(factory));
 
   console.log("\n── Milestone CRUD ──\n");
-  await run("createMilestone + getMilestone round-trip", testMilestoneCreateAndGet);
-  await run("getMilestone returns null for non-existent", testMilestoneGetNotFound);
-  await run("listMilestones returns empty array for new store", testMilestoneListEmpty);
-  await run("createMilestone + listMilestones includes it", testMilestoneCreateAndList);
-  await run("updateMilestone returns updated data", testMilestoneUpdate);
-  await run("updateMilestone returns null for non-existent", testMilestoneUpdateNotFound);
-  await run("deleteMilestone removes milestone; second delete returns false", testMilestoneDelete);
-  await run("listMilestones scoped by goalId", testMilestoneListScoping);
-  await run("listMilestones ordered by order ascending", testMilestoneListOrdering);
+  await run("createMilestone + getMilestone round-trip", () => testMilestoneCreateAndGet(factory));
+  await run("getMilestone returns null for non-existent", () => testMilestoneGetNotFound(factory));
+  await run("listMilestones returns empty array for new store", () => testMilestoneListEmpty(factory));
+  await run("createMilestone + listMilestones includes it", () => testMilestoneCreateAndList(factory));
+  await run("updateMilestone returns updated data", () => testMilestoneUpdate(factory));
+  await run("updateMilestone returns null for non-existent", () => testMilestoneUpdateNotFound(factory));
+  await run("deleteMilestone removes milestone; second delete returns false", () => testMilestoneDelete(factory));
+  await run("listMilestones scoped by goalId", () => testMilestoneListScoping(factory));
+  await run("listMilestones ordered by order ascending", () => testMilestoneListOrdering(factory));
 
   console.log("\n── Milestone Validation ──\n");
-  await run("createMilestone throws for invalid status", testMilestoneInvalidStatus);
-  await run("createMilestone throws for negative/zero order", testMilestoneNegativeOrder);
-  await run("updateMilestone throws for invalid status", testMilestoneUpdateInvalidStatus);
+  await run("createMilestone throws for invalid status", () => testMilestoneInvalidStatus(factory));
+  await run("createMilestone throws for negative/zero order", () => testMilestoneNegativeOrder(factory));
+  await run("updateMilestone throws for invalid status", () => testMilestoneUpdateInvalidStatus(factory));
 
   console.log("\n── IssueDraft CRUD ──\n");
-  await run("createIssueDraft + getIssueDraft round-trip", testIssueDraftCreateAndGet);
-  await run("getIssueDraft returns null for non-existent", testIssueDraftGetNotFound);
-  await run("listIssueDrafts returns empty array for new store", testIssueDraftListEmpty);
-  await run("createIssueDraft + listIssueDrafts includes it", testIssueDraftCreateAndList);
-  await run("updateIssueDraft returns updated data", testIssueDraftUpdate);
-  await run("updateIssueDraft returns null for non-existent", testIssueDraftUpdateNotFound);
-  await run("deleteIssueDraft removes draft; second delete returns false", testIssueDraftDelete);
-  await run("listIssueDrafts scoped by milestoneId", testIssueDraftListScoping);
-  await run("listIssueDrafts ordered by order ascending", testIssueDraftListOrdering);
+  await run("createIssueDraft + getIssueDraft round-trip", () => testIssueDraftCreateAndGet(factory));
+  await run("getIssueDraft returns null for non-existent", () => testIssueDraftGetNotFound(factory));
+  await run("listIssueDrafts returns empty array for new store", () => testIssueDraftListEmpty(factory));
+  await run("createIssueDraft + listIssueDrafts includes it", () => testIssueDraftCreateAndList(factory));
+  await run("updateIssueDraft returns updated data", () => testIssueDraftUpdate(factory));
+  await run("updateIssueDraft returns null for non-existent", () => testIssueDraftUpdateNotFound(factory));
+  await run("deleteIssueDraft removes draft; second delete returns false", () => testIssueDraftDelete(factory));
+  await run("listIssueDrafts scoped by milestoneId", () => testIssueDraftListScoping(factory));
+  await run("listIssueDrafts ordered by order ascending", () => testIssueDraftListOrdering(factory));
 
   console.log("\n── IssueDraft Validation ──\n");
-  await run("createIssueDraft throws for invalid status", testIssueDraftInvalidStatus);
-  await run("createIssueDraft throws for negative/zero order", testIssueDraftNegativeOrder);
-  await run("updateIssueDraft throws for invalid status", testIssueDraftUpdateInvalidStatus);
-  await run("createIssueDraft throws for empty title", testIssueDraftMissingTitle);
-  await run("createIssueDraft throws for filesToModify element with empty path", testIssueDraftFileRefEmptyPath);
-  await run("createIssueDraft throws for filesToModify element with empty reason", testIssueDraftFileRefEmptyReason);
-  await run("createIssueDraft throws for filesToRead element with whitespace-only path", testIssueDraftFilesToReadEmptyPath);
-  await run("createIssueDraft throws for filesToRead element with whitespace-only reason", testIssueDraftFilesToReadEmptyReason);
-  await run("createIssueDraft accepts valid FileRef arrays and stores all new fields", testIssueDraftValidFileRefs);
-  await run("createIssueDraft throws for filesToModify element with null path", testIssueDraftFileRefNonStringPath);
-  await run("createIssueDraft throws for filesToRead element with undefined reason", testIssueDraftFileRefNonStringReason);
-  await run("createIssueDraft throws for filesToModify containing a null element", testIssueDraftFileRefNullElement);
-  await run("createIssueDraft throws when filesToModify is not an array", testIssueDraftFilesToModifyNotArray);
-  await run("createIssueDraft throws when filesToRead is not an array", testIssueDraftFilesToReadNotArray);
-  await run("updateIssueDraft throws for filesToModify with invalid FileRef", testIssueDraftUpdateFileRefValidation);
-  await run("updateIssueDraft throws when filesToRead is not an array", testIssueDraftUpdateFilesToReadNotArray);
+  await run("createIssueDraft throws for invalid status", () => testIssueDraftInvalidStatus(factory));
+  await run("createIssueDraft throws for negative/zero order", () => testIssueDraftNegativeOrder(factory));
+  await run("updateIssueDraft throws for invalid status", () => testIssueDraftUpdateInvalidStatus(factory));
+  await run("createIssueDraft throws for empty title", () => testIssueDraftMissingTitle(factory));
+  await run("createIssueDraft throws for filesToModify element with empty path", () => testIssueDraftFileRefEmptyPath(factory));
+  await run("createIssueDraft throws for filesToModify element with empty reason", () => testIssueDraftFileRefEmptyReason(factory));
+  await run("createIssueDraft throws for filesToRead element with whitespace-only path", () => testIssueDraftFilesToReadEmptyPath(factory));
+  await run("createIssueDraft throws for filesToRead element with whitespace-only reason", () => testIssueDraftFilesToReadEmptyReason(factory));
+  await run("createIssueDraft accepts valid FileRef arrays and stores all new fields", () => testIssueDraftValidFileRefs(factory));
+  await run("createIssueDraft throws for filesToModify element with null path", () => testIssueDraftFileRefNonStringPath(factory));
+  await run("createIssueDraft throws for filesToRead element with undefined reason", () => testIssueDraftFileRefNonStringReason(factory));
+  await run("createIssueDraft throws for filesToModify containing a null element", () => testIssueDraftFileRefNullElement(factory));
+  await run("createIssueDraft throws when filesToModify is not an array", () => testIssueDraftFilesToModifyNotArray(factory));
+  await run("createIssueDraft throws when filesToRead is not an array", () => testIssueDraftFilesToReadNotArray(factory));
+  await run("updateIssueDraft throws for filesToModify with invalid FileRef", () => testIssueDraftUpdateFileRefValidation(factory));
+  await run("updateIssueDraft throws when filesToRead is not an array", () => testIssueDraftUpdateFilesToReadNotArray(factory));
 
   console.log("\n── Deep Copy / Isolation ──\n");
-  await run("Goal array fields are deep-copied (structuredClone)", testGoalArrayIsolation);
-  await run("Milestone array fields are deep-copied (structuredClone)", testMilestoneArrayIsolation);
-  await run("IssueDraft array fields are deep-copied (structuredClone)", testIssueDraftArrayIsolation);
+  await run("Goal array fields are deep-copied (structuredClone)", () => testGoalArrayIsolation(factory));
+  await run("Milestone array fields are deep-copied (structuredClone)", () => testMilestoneArrayIsolation(factory));
+  await run("IssueDraft array fields are deep-copied (structuredClone)", () => testIssueDraftArrayIsolation(factory));
+}
+
+async function main() {
+  // Always run against InMemoryPlanningStore
+  await runPlanningStoreTests("InMemoryPlanningStore", () => new InMemoryPlanningStore());
+
+  // Run against AzurePlanningStore if AZURE_STORAGE_ACCOUNT_NAME is set
+  const azureAccount = process.env.AZURE_STORAGE_ACCOUNT_NAME;
+  if (azureAccount) {
+    console.log(`\nInitializing AzurePlanningStore for account: ${azureAccount}`);
+    const azureStore = new AzurePlanningStore(azureAccount);
+    try {
+      await azureStore.initialize();
+    } catch (err: any) {
+      console.error(`Failed to initialize AzurePlanningStore: ${err.message}`);
+      console.log("Skipping Azure tests.");
+    }
+    // Each test gets a fresh store instance (but backed by Azure tables; isolation via unique IDs in fixtures)
+    await runPlanningStoreTests("AzurePlanningStore", () => new AzurePlanningStore(azureAccount));
+  } else {
+    console.log("\n(Skipping AzurePlanningStore tests — set AZURE_STORAGE_ACCOUNT_NAME to enable)");
+  }
+
+  const label = `createPlanningStore factory`;
+  console.log(`\n── ${label} ──\n`);
+  const memStore = createPlanningStore(undefined);
+  await run("createPlanningStore() without accountName returns InMemoryPlanningStore", async () => {
+    assert(memStore instanceof InMemoryPlanningStore, "Should return InMemoryPlanningStore when no accountName");
+  });
+  if (azureAccount) {
+    const azStore = createPlanningStore(azureAccount);
+    await run("createPlanningStore() with accountName returns AzurePlanningStore", async () => {
+      assert(azStore instanceof AzurePlanningStore, "Should return AzurePlanningStore when accountName provided");
+    });
+  }
 
   console.log("\n═══════════════════════════════════════════════");
   console.log(`  ${passed + failed} tests: ${passed} passed, ${failed} failed`);
