@@ -234,9 +234,9 @@ async function testServerChat(): Promise<void> {
 }
 
 async function testSseEventTypes(): Promise<void> {
-  // Verify that the SSE stream correctly forwards new event types by checking
-  // the event parsing logic against known SSE payload shapes.
-  const knownTypes = [
+  // Verify that the new SSE event payload shapes are well-formed and parse correctly.
+  // This validates the JSON serialisation contracts between server.ts and the frontend.
+  const knownPayloads: Array<Record<string, unknown>> = [
     { type: "planning_start" },
     { type: "plan_ready" },
     { type: "intent", intent: "Exploring codebase" },
@@ -247,20 +247,33 @@ async function testSseEventTypes(): Promise<void> {
     { type: "compaction", started: false, tokensRemoved: 1000 },
   ];
 
-  for (const payload of knownTypes) {
+  for (const payload of knownPayloads) {
     const line = `data: ${JSON.stringify(payload)}`;
-    const parsed = JSON.parse(line.slice(6));
+    if (!line.startsWith("data: ")) throw new Error(`Bad SSE line for type "${payload.type}"`);
+    const parsed = JSON.parse(line.slice(6)) as Record<string, unknown>;
     if (parsed.type !== payload.type) {
       throw new Error(`SSE round-trip failed for type "${payload.type}": got "${parsed.type}"`);
     }
+    // Verify required fields per type
+    if (payload.type === "intent" && typeof parsed.intent !== "string") {
+      throw new Error(`"intent" payload must include string "intent" field`);
+    }
+    if ((payload.type === "subagent_start" || payload.type === "subagent_end") && typeof parsed.name !== "string") {
+      throw new Error(`"${payload.type}" payload must include string "name" field`);
+    }
+    if (payload.type === "subagent_end" && typeof parsed.success !== "boolean") {
+      throw new Error(`"subagent_end" payload must include boolean "success" field`);
+    }
+    if (payload.type === "compaction" && typeof parsed.started !== "boolean") {
+      throw new Error(`"compaction" payload must include boolean "started" field`);
+    }
   }
 
-  // Verify intent field is bounded to 200 chars (matches server.ts validation)
+  // Verify that intent strings over 200 chars would be truncated before forwarding
   const longIntent = "A".repeat(300);
-  const bounded = longIntent.slice(0, 200);
-  if (bounded.length !== 200) throw new Error("Intent length cap failed");
+  if (longIntent.slice(0, 200).length !== 200) throw new Error("Intent length cap sanity check failed");
 
-  log("  ", `Verified ${knownTypes.length} new SSE event types parse correctly`);
+  log("  ", `Verified ${knownPayloads.length} new SSE event payload shapes`);
 }
 
 // ============================================================

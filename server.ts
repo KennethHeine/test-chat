@@ -96,6 +96,17 @@ const safePermissionHandler: PermissionHandler = async (request) => {
   return { kind: "denied-by-rules", rules: [{ description: `Denied ${request.kind}: only custom tools and read operations are auto-approved` }] };
 };
 
+// Extract a display name from a sub-agent event, preferring agentDisplayName over agentName
+function extractSubagentName(data: { agentDisplayName?: unknown; agentName?: unknown } | undefined): string {
+  if (typeof data?.agentDisplayName === "string" && data.agentDisplayName) {
+    return data.agentDisplayName.slice(0, 100);
+  }
+  if (typeof data?.agentName === "string" && data.agentName) {
+    return data.agentName.slice(0, 100);
+  }
+  return "Sub-agent";
+}
+
 // Build the shared session config used for both new and resumed sessions
 function buildSessionConfig(token: string, model: string): SessionConfig {
   return {
@@ -464,29 +475,21 @@ app.post("/api/chat", async (req: Request, res: Response) => {
     // Sub-agent lifecycle events
     unsubscribers.push(
       session.on("subagent.started", (event) => {
-        const name = typeof event.data?.agentDisplayName === "string"
-          ? event.data.agentDisplayName.slice(0, 100)
-          : typeof event.data?.agentName === "string"
-            ? event.data.agentName.slice(0, 100)
-            : "Sub-agent";
+        const name = extractSubagentName(event.data);
         res.write(`data: ${JSON.stringify({ type: "subagent_start", name })}\n\n`);
       })
     );
 
     unsubscribers.push(
       session.on("subagent.completed", (event) => {
-        const name = typeof event.data?.agentDisplayName === "string"
-          ? event.data.agentDisplayName.slice(0, 100)
-          : typeof event.data?.agentName === "string"
-            ? event.data.agentName.slice(0, 100)
-            : "Sub-agent";
+        const name = extractSubagentName(event.data);
         res.write(`data: ${JSON.stringify({ type: "subagent_end", name, success: true })}\n\n`);
       })
     );
 
     unsubscribers.push(
       session.on("subagent.failed", (event) => {
-        const name = typeof event.data?.agentName === "string" ? event.data.agentName.slice(0, 100) : "Sub-agent";
+        const name = extractSubagentName(event.data);
         const error = typeof event.data?.error === "string" ? event.data.error.slice(0, 200) : "Sub-agent failed";
         res.write(`data: ${JSON.stringify({ type: "subagent_end", name, success: false, error })}\n\n`);
       })
