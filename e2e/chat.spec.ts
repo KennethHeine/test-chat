@@ -858,6 +858,7 @@ async function stubGoalRoutes(page: Page) {
 test("goals dashboard: list renders with counts from stubbed API", async ({ page }) => {
   await stubGoalRoutes(page);
   await page.goto("/");
+  await page.evaluate(() => localStorage.setItem("copilot_github_token", "fake-test-token"));
 
   // Switch to dashboard view (goals page is default)
   await page.locator("#view-toggle-btn").click();
@@ -880,6 +881,7 @@ test("goals dashboard: list renders with counts from stubbed API", async ({ page
 test("goals dashboard: click on goal opens detail view", async ({ page }) => {
   await stubGoalRoutes(page);
   await page.goto("/");
+  await page.evaluate(() => localStorage.setItem("copilot_github_token", "fake-test-token"));
 
   // Switch to dashboard and wait for goal list
   await page.locator("#view-toggle-btn").click();
@@ -912,6 +914,7 @@ test("goals dashboard: click on goal opens detail view", async ({ page }) => {
 test("goals dashboard: keyboard Enter opens detail view", async ({ page }) => {
   await stubGoalRoutes(page);
   await page.goto("/");
+  await page.evaluate(() => localStorage.setItem("copilot_github_token", "fake-test-token"));
 
   await page.locator("#view-toggle-btn").click();
   const listItem = page.locator(".goal-list-item").first();
@@ -928,6 +931,7 @@ test("goals dashboard: keyboard Enter opens detail view", async ({ page }) => {
 test("goals dashboard: back button returns to goal list", async ({ page }) => {
   await stubGoalRoutes(page);
   await page.goto("/");
+  await page.evaluate(() => localStorage.setItem("copilot_github_token", "fake-test-token"));
 
   await page.locator("#view-toggle-btn").click();
   const listItem = page.locator(".goal-list-item").first();
