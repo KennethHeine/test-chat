@@ -45,13 +45,13 @@ async function githubWrite(
     const errorBody = await res.text().catch(() => "");
     throw new Error(`GitHub API ${res.status}: ${errorBody.slice(0, 200)}`);
   }
-  // 204 No Content (e.g., DELETE) — return null
-  if (res.status === 204) return null;
-  // Monitor rate limits; pause 1s when remaining is critically low
+  // Monitor rate limits; pause 1s when remaining is critically low (applies to all responses incl. 204)
   const remaining = res.headers.get("x-ratelimit-remaining");
   if (remaining !== null && parseInt(remaining, 10) < 10) {
     await new Promise<void>((resolve) => setTimeout(resolve, 1000));
   }
+  // 204 No Content (e.g., DELETE) — return null
+  if (res.status === 204) return null;
   return res.json();
 }
 
@@ -331,66 +331,70 @@ export function createGitHubTools(token: string, planningStore?: PlanningStore):
     },
     handler: async (args: any) => {
       if (!planningStore) {
-        return { error: "Planning store not available" };
+        throw new Error("Planning store not available");
       }
 
       // Validate required string fields
       if (typeof args.milestoneId !== "string" || args.milestoneId.trim().length === 0) {
-        return { error: "milestoneId must be a non-empty string" };
+        throw new Error("milestoneId must be a non-empty string");
       }
       if (typeof args.goalId !== "string" || args.goalId.trim().length === 0) {
-        return { error: "goalId must be a non-empty string" };
+        throw new Error("goalId must be a non-empty string");
       }
       if (typeof args.sessionId !== "string" || args.sessionId.trim().length === 0) {
-        return { error: "sessionId must be a non-empty string" };
+        throw new Error("sessionId must be a non-empty string");
       }
       if (typeof args.owner !== "string" || args.owner.trim().length === 0) {
-        return { error: "owner must be a non-empty string" };
+        throw new Error("owner must be a non-empty string");
       }
       if (typeof args.repo !== "string" || args.repo.trim().length === 0) {
-        return { error: "repo must be a non-empty string" };
+        throw new Error("repo must be a non-empty string");
       }
 
       // Validate optional dueDate (must be valid ISO 8601: YYYY-MM-DDTHH:MM:SSZ)
       if (args.dueDate !== undefined && args.dueDate !== null && args.dueDate !== "") {
         if (typeof args.dueDate !== "string" || !isValidIsoDate(args.dueDate)) {
-          return { error: "dueDate must be a valid ISO 8601 date string (YYYY-MM-DDTHH:MM:SSZ)" };
+          throw new Error("dueDate must be a valid ISO 8601 date string (YYYY-MM-DDTHH:MM:SSZ)");
         }
       }
 
       // Ownership check: verify goal belongs to caller's session
       const goal = await planningStore.getGoal(args.goalId);
       if (!goal || goal.sessionId !== args.sessionId) {
-        return { error: `Goal not found: ${args.goalId}` };
+        throw new Error(`Goal not found: ${args.goalId}`);
       }
 
       // Verify milestone belongs to the stated goal
       const milestone = await planningStore.getMilestone(args.milestoneId);
       if (!milestone || milestone.goalId !== args.goalId) {
-        return { error: `Milestone not found: ${args.milestoneId}` };
+        throw new Error(`Milestone not found: ${args.milestoneId}`);
       }
 
       const { owner, repo } = args;
       const title = milestone.name;
       const description = milestone.goal;
 
-      // Idempotency: check if a GitHub milestone with this title already exists
+      // Idempotency: paginate all open GitHub milestones to find a title match
       let githubNumber: number | undefined;
       let githubUrl: string | undefined;
-
-      try {
+      let page = 1;
+      while (githubNumber === undefined) {
         const existing = (await githubFetch(
           token,
-          `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/milestones?state=open&per_page=100`
+          `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/milestones?state=open&per_page=100&page=${page}`
         )) as any[];
 
         const match = existing.find((m: any) => m.title === title);
         if (match) {
           githubNumber = match.number;
           githubUrl = match.html_url;
+          break;
         }
-      } catch (err: any) {
-        return { error: `Failed to list milestones: ${err.message}` };
+        if (existing.length < 100) {
+          // No more pages
+          break;
+        }
+        page += 1;
       }
 
       // Create the milestone if it doesn't already exist
@@ -402,37 +406,29 @@ export function createGitHubTools(token: string, planningStore?: PlanningStore):
         if (args.dueDate) {
           body.due_on = args.dueDate;
         }
-        try {
-          const created = (await githubWrite(
-            token,
-            "POST",
-            `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/milestones`,
-            body
-          )) as any;
-          githubNumber = created.number;
-          githubUrl = created.html_url;
-        } catch (err: any) {
-          return { error: `Failed to create GitHub milestone: ${err.message}` };
-        }
+        const created = (await githubWrite(
+          token,
+          "POST",
+          `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/milestones`,
+          body
+        )) as any;
+        githubNumber = created.number;
+        githubUrl = created.html_url;
       }
 
       // Store GitHub milestone data back on the planning entity
-      try {
-        const updated = await planningStore.updateMilestone(args.milestoneId, {
-          githubNumber,
-          githubUrl,
-        });
-        if (!updated) {
-          return { error: `Milestone not found after update: ${args.milestoneId}` };
-        }
-        return {
-          milestoneId: args.milestoneId,
-          githubNumber,
-          githubUrl,
-        };
-      } catch (err: any) {
-        return { error: `Failed to update planning milestone: ${err.message}` };
+      const updated = await planningStore.updateMilestone(args.milestoneId, {
+        githubNumber,
+        githubUrl,
+      });
+      if (!updated) {
+        throw new Error(`Milestone not found after update: ${args.milestoneId}`);
       }
+      return {
+        milestoneId: args.milestoneId,
+        githubNumber,
+        githubUrl,
+      };
     },
   };
 

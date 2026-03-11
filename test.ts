@@ -1499,7 +1499,6 @@ async function testCreateGithubMilestoneCreatesNew(): Promise<void> {
       { milestoneId, goalId, sessionId, owner: "owner", repo: "repo" },
       STUB_INVOCATION
     );
-    if (result.error) throw new Error(`Unexpected error: ${result.error}`);
     if (result.githubNumber !== 7) throw new Error(`Expected githubNumber 7, got ${result.githubNumber}`);
     if (result.githubUrl !== "https://github.com/owner/repo/milestone/7") {
       throw new Error(`Unexpected githubUrl: ${result.githubUrl}`);
@@ -1530,7 +1529,6 @@ async function testCreateGithubMilestoneIdempotentWhenExists(): Promise<void> {
       { milestoneId, goalId, sessionId, owner: "owner", repo: "repo" },
       STUB_INVOCATION
     );
-    if (result.error) throw new Error(`Unexpected error: ${result.error}`);
     if (result.githubNumber !== 3) throw new Error(`Expected githubNumber 3, got ${result.githubNumber}`);
     // Verify the existing number was stored (not a new one)
     const updated = await store.getMilestone(milestoneId);
@@ -1555,64 +1553,85 @@ async function testCreateGithubMilestoneWithDueDate(): Promise<void> {
       { milestoneId, goalId, sessionId, owner: "owner", repo: "repo", dueDate: "2026-06-01T00:00:00Z" },
       STUB_INVOCATION
     );
-    if (result.error) throw new Error(`Unexpected error: ${result.error}`);
     if (result.githubNumber !== 9) throw new Error(`Expected githubNumber 9, got ${result.githubNumber}`);
   } finally {
     restore();
   }
 }
 
-async function testCreateGithubMilestoneInvalidDueDateReturnsError(): Promise<void> {
+async function testCreateGithubMilestoneInvalidDueDateThrows(): Promise<void> {
   const store = new InMemoryPlanningStore();
   const { goalId, milestoneId, sessionId } = await seedGoalAndMilestone(store);
   const tools = createGitHubTools("test-token", store);
   const tool = tools.find((t) => t.name === "create_github_milestone")!;
 
-  const result: any = await tool.handler(
-    { milestoneId, goalId, sessionId, owner: "owner", repo: "repo", dueDate: "not-a-date" },
-    STUB_INVOCATION
-  );
-  if (!result.error) throw new Error("Expected error for invalid dueDate");
-  if (!result.error.includes("dueDate")) throw new Error(`Expected error to mention 'dueDate', got: ${result.error}`);
+  try {
+    await tool.handler(
+      { milestoneId, goalId, sessionId, owner: "owner", repo: "repo", dueDate: "not-a-date" },
+      STUB_INVOCATION
+    );
+    throw new Error("Expected error to be thrown for invalid dueDate");
+  } catch (err: any) {
+    if (!err.message.includes("dueDate")) {
+      throw new Error(`Expected error to mention 'dueDate', got: ${err.message}`);
+    }
+  }
 }
 
-async function testCreateGithubMilestoneWrongSessionReturnsError(): Promise<void> {
+async function testCreateGithubMilestoneWrongSessionThrows(): Promise<void> {
   const store = new InMemoryPlanningStore();
   const { goalId, milestoneId } = await seedGoalAndMilestone(store);
   const tools = createGitHubTools("test-token", store);
   const tool = tools.find((t) => t.name === "create_github_milestone")!;
 
-  const result: any = await tool.handler(
-    { milestoneId, goalId, sessionId: "wrong-session", owner: "owner", repo: "repo" },
-    STUB_INVOCATION
-  );
-  if (!result.error) throw new Error("Expected error for wrong sessionId");
+  try {
+    await tool.handler(
+      { milestoneId, goalId, sessionId: "wrong-session", owner: "owner", repo: "repo" },
+      STUB_INVOCATION
+    );
+    throw new Error("Expected error to be thrown for wrong sessionId");
+  } catch (err: any) {
+    if (!err.message.includes("Goal not found")) {
+      throw new Error(`Expected 'Goal not found' error, got: ${err.message}`);
+    }
+  }
 }
 
-async function testCreateGithubMilestoneMissingOwnerReturnsError(): Promise<void> {
+async function testCreateGithubMilestoneMissingOwnerThrows(): Promise<void> {
   const store = new InMemoryPlanningStore();
   const { goalId, milestoneId, sessionId } = await seedGoalAndMilestone(store);
   const tools = createGitHubTools("test-token", store);
   const tool = tools.find((t) => t.name === "create_github_milestone")!;
 
-  const result: any = await tool.handler(
-    { milestoneId, goalId, sessionId, owner: "", repo: "repo" },
-    STUB_INVOCATION
-  );
-  if (!result.error) throw new Error("Expected error for empty owner");
-  if (!result.error.includes("owner")) throw new Error(`Expected error to mention 'owner', got: ${result.error}`);
+  try {
+    await tool.handler(
+      { milestoneId, goalId, sessionId, owner: "", repo: "repo" },
+      STUB_INVOCATION
+    );
+    throw new Error("Expected error to be thrown for empty owner");
+  } catch (err: any) {
+    if (!err.message.includes("owner")) {
+      throw new Error(`Expected error to mention 'owner', got: ${err.message}`);
+    }
+  }
 }
 
-async function testCreateGithubMilestoneWithoutPlanningStoreReturnsError(): Promise<void> {
-  // When createGitHubTools is called without a planningStore, the tool should report an error
+async function testCreateGithubMilestoneWithoutPlanningStoreThrows(): Promise<void> {
+  // When createGitHubTools is called without a planningStore, the tool should throw
   const tools = createGitHubTools("test-token"); // no planningStore
   const tool = tools.find((t) => t.name === "create_github_milestone")!;
 
-  const result: any = await tool.handler(
-    { milestoneId: "m1", goalId: "g1", sessionId: "s1", owner: "owner", repo: "repo" },
-    STUB_INVOCATION
-  );
-  if (!result.error) throw new Error("Expected error when planningStore is not provided");
+  try {
+    await tool.handler(
+      { milestoneId: "m1", goalId: "g1", sessionId: "s1", owner: "owner", repo: "repo" },
+      STUB_INVOCATION
+    );
+    throw new Error("Expected error to be thrown when planningStore is not provided");
+  } catch (err: any) {
+    if (!err.message.includes("Planning store not available")) {
+      throw new Error(`Expected 'Planning store not available', got: ${err.message}`);
+    }
+  }
 }
 
 // ============================================================
@@ -2032,10 +2051,10 @@ async function main() {
   await run("create_github_milestone: creates new when none exists", testCreateGithubMilestoneCreatesNew);
   await run("create_github_milestone: idempotent when milestone exists on GitHub", testCreateGithubMilestoneIdempotentWhenExists);
   await run("create_github_milestone: accepts valid dueDate", testCreateGithubMilestoneWithDueDate);
-  await run("create_github_milestone: invalid dueDate returns error", testCreateGithubMilestoneInvalidDueDateReturnsError);
-  await run("create_github_milestone: wrong sessionId returns error", testCreateGithubMilestoneWrongSessionReturnsError);
-  await run("create_github_milestone: empty owner returns error", testCreateGithubMilestoneMissingOwnerReturnsError);
-  await run("create_github_milestone: missing planningStore returns error", testCreateGithubMilestoneWithoutPlanningStoreReturnsError);
+  await run("create_github_milestone: invalid dueDate throws", testCreateGithubMilestoneInvalidDueDateThrows);
+  await run("create_github_milestone: wrong sessionId throws", testCreateGithubMilestoneWrongSessionThrows);
+  await run("create_github_milestone: empty owner throws", testCreateGithubMilestoneMissingOwnerThrows);
+  await run("create_github_milestone: missing planningStore throws", testCreateGithubMilestoneWithoutPlanningStoreThrows);
 
   // --- Summary ---
   console.log("\n═══════════════════════════════════════════════");
