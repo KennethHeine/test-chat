@@ -24,6 +24,13 @@ const usageText = document.getElementById("usage-text");
 const quotaDisplay = document.getElementById("quota-display");
 const quotaText = document.getElementById("quota-text");
 const sidebarBackdrop = document.getElementById("sidebar-backdrop");
+const fleetBtn = document.getElementById("fleet-btn");
+const fleetDialogOverlay = document.getElementById("fleet-dialog-overlay");
+const fleetPromptInput = document.getElementById("fleet-prompt-input");
+const launchFleetBtn = document.getElementById("launch-fleet-btn");
+const cancelFleetBtn = document.getElementById("cancel-fleet-btn");
+const fleetStatusEl = document.getElementById("fleet-status");
+const fleetDialogError = document.getElementById("fleet-dialog-error");
 
 // --- Token Management ---
 function getToken() {
@@ -164,6 +171,7 @@ function deleteSavedSession(sid) {
     sessionId = null;
     localStorage.removeItem("copilot_last_session");
     clearChatUI();
+    updateFleetBtnState();
   }
 
   renderSessionList();
@@ -191,6 +199,7 @@ function switchToSession(sid) {
   }
 
   renderSessionList();
+  updateFleetBtnState();
   closeSidebarOnMobile();
   inputEl.focus();
 }
@@ -327,6 +336,7 @@ function restoreLastSession() {
   }
 
   renderSessionList();
+  updateFleetBtnState();
 }
 
 // --- Backend Session Loading ---
@@ -412,7 +422,73 @@ stopBtn.addEventListener("click", async () => {
   }
 });
 
-// --- Tool Activity Helpers ---
+// --- Fleet Button State ---
+function updateFleetBtnState() {
+  fleetBtn.disabled = !sessionId || isStreaming;
+}
+
+// --- Fleet Dispatch ---
+
+function openFleetDialog() {
+  fleetPromptInput.value = "";
+  fleetDialogError.style.display = "none";
+  fleetDialogError.textContent = "";
+  launchFleetBtn.disabled = false;
+  fleetDialogOverlay.classList.add("open");
+  fleetPromptInput.focus();
+}
+
+function closeFleetDialog() {
+  fleetDialogOverlay.classList.remove("open");
+}
+
+function showFleetStatus(agentCount) {
+  fleetStatusEl.textContent = `Fleet active: ${agentCount} agents`;
+  fleetStatusEl.style.display = "inline";
+}
+
+async function dispatchFleet() {
+  const prompt = fleetPromptInput.value.trim();
+
+  fleetDialogError.style.display = "none";
+  fleetDialogError.textContent = "";
+  launchFleetBtn.disabled = true;
+
+  try {
+    const body = { sessionId };
+    if (prompt) body.prompt = prompt;
+
+    const res = await fetch("/api/fleet/start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify(body),
+    });
+
+    const data = await res.json().catch(() => ({}));
+
+    if (!res.ok) {
+      const errMsg = data.error || `HTTP ${res.status}`;
+      fleetDialogError.textContent = errMsg;
+      fleetDialogError.style.display = "block";
+      return;
+    }
+
+    closeFleetDialog();
+    showFleetStatus(data.subagentCount ?? 0);
+  } catch (err) {
+    fleetDialogError.textContent = err.message || "Failed to dispatch fleet";
+    fleetDialogError.style.display = "block";
+  } finally {
+    launchFleetBtn.disabled = false;
+  }
+}
+
+fleetBtn.addEventListener("click", openFleetDialog);
+cancelFleetBtn.addEventListener("click", closeFleetDialog);
+fleetDialogOverlay.addEventListener("click", (e) => {
+  if (e.target === fleetDialogOverlay) closeFleetDialog();
+});
+launchFleetBtn.addEventListener("click", dispatchFleet);
 const TOOL_DISPLAY_NAMES = {
   "read_file": "📄 Reading file",
   "edit_file": "✏️ Editing file",
@@ -569,6 +645,7 @@ newChatBtn.addEventListener("click", () => {
   localStorage.removeItem("copilot_last_session");
   clearChatUI();
   renderSessionList();
+  updateFleetBtnState();
   inputEl.focus();
 });
 
@@ -647,6 +724,7 @@ async function sendMessage() {
   sendBtn.disabled = true;
   sendBtn.style.display = "none";
   stopBtn.style.display = "inline-block";
+  updateFleetBtnState();
 
   try {
     const body = JSON.stringify({
@@ -728,6 +806,7 @@ async function sendMessage() {
     sendBtn.style.display = "inline-block";
     stopBtn.style.display = "none";
     hideToolActivity();
+    updateFleetBtnState();
     inputEl.focus();
   }
 }
