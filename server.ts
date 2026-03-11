@@ -629,6 +629,30 @@ app.get("/api/goals/:id/research", async (req: Request, res: Response) => {
   }
 });
 
+// Get milestones for a specific goal, scoped to the authenticated user
+app.get("/api/goals/:id/milestones", async (req: Request, res: Response) => {
+  const token = extractToken(req);
+  if (!token) {
+    res.status(401).json({ error: "Missing token. Provide Authorization: Bearer <token> header." });
+    return;
+  }
+
+  const goalId = req.params.id as string;
+
+  try {
+    const goal = await getOwnedGoal(token, goalId);
+    if (!goal) {
+      res.status(404).json({ error: "Goal not found" });
+      return;
+    }
+
+    const milestones = await planningStore.listMilestones(goalId);
+    res.json({ milestones });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Failed to get milestones" });
+  }
+});
+
 // Test-only: seed a goal directly into the planning store (only active when ENABLE_GOAL_SEED=true)
 if (process.env.ENABLE_GOAL_SEED === "true") {
   app.post("/api/test/seed-goal", async (req: Request, res: Response) => {
@@ -706,6 +730,39 @@ if (process.env.ENABLE_GOAL_SEED === "true") {
       }
     } catch (err: any) {
       res.status(500).json({ error: err.message || "Failed to seed research item" });
+    }
+  });
+
+  app.post("/api/test/seed-milestone", async (req: Request, res: Response) => {
+    const token = extractToken(req);
+    if (!token) {
+      res.status(401).json({ error: "Missing token. Provide Authorization: Bearer <token> header." });
+      return;
+    }
+    try {
+      const milestone = req.body as import("./planning-types.js").Milestone;
+
+      if (typeof milestone.goalId !== "string" || milestone.goalId.trim().length === 0) {
+        res.status(400).json({ error: "goalId is required and must be a string" });
+        return;
+      }
+
+      const goal = await getOwnedGoal(token, milestone.goalId);
+      if (!goal) {
+        res.status(404).json({ error: "Referenced goal does not exist or does not belong to the authenticated user" });
+        return;
+      }
+
+      try {
+        const created = await planningStore.createMilestone(milestone);
+        res.status(201).json(created);
+      } catch (err: any) {
+        // Validation or domain errors from createMilestone → 400 Bad Request
+        res.status(400).json({ error: err.message || "Invalid milestone" });
+      }
+    } catch (err: any) {
+      // Unexpected errors (e.g., getOwnedGoal/session store failures) → 500 Internal Server Error
+      res.status(500).json({ error: err.message || "Failed to seed milestone" });
     }
   });
 }
