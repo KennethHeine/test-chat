@@ -1324,6 +1324,78 @@ async function testGetMilestonesUnknownGoalReturnsError(): Promise<void> {
   if (!result.error) throw new Error("Expected error for unknown goalId");
 }
 
+async function testUpdateMilestoneOrderCollisionReturnsError(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const goalId = await seedGoal(store);
+  const tools = createPlanningTools("test-token", store);
+  const create = tools.find((t) => t.name === "create_milestone_plan")!;
+  const update = tools.find((t) => t.name === "update_milestone")!;
+
+  // Create two milestones with orders 1 and 2
+  const createResult: any = await create.handler(
+    {
+      sessionId: makeValidSaveGoalArgs().sessionId,
+      goalId,
+      milestones: makeValidMilestoneSpecs(),
+    },
+    STUB_INVOCATION
+  );
+  const m2Id = createResult.milestones[1].id; // order=2
+
+  // Try to update milestone 2's order to 1 — should collide with milestone 1
+  const result: any = await update.handler(
+    {
+      milestoneId: m2Id,
+      goalId,
+      sessionId: makeValidSaveGoalArgs().sessionId,
+      order: 1,
+    },
+    STUB_INVOCATION
+  );
+  if (!result.error) throw new Error("Expected error for duplicate order on update");
+  if (!result.error.includes("order 1")) {
+    throw new Error(`Expected error to mention order 1, got: ${result.error}`);
+  }
+}
+
+async function testCreateMilestonePlanNameLengthAfterSanitizationReturnsError(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const goalId = await seedGoal(store);
+  const tools = createPlanningTools("test-token", store);
+  const create = tools.find((t) => t.name === "create_milestone_plan")!;
+
+  // A name that is exactly at the limit before sanitization but exceeds it after HTML-escaping
+  // "<" becomes "&lt;" (4 chars → 4 chars net gain per character), so 97 "<" chars = 97 * 4 = 388 chars after escape
+  // We need something that is <= 100 chars raw but > 100 after sanitization
+  // "&&&&...100 chars" → each "&" becomes "&amp;" (5 chars instead of 1), so 20 "&" = 100 chars raw → 100 chars after = ok
+  // Actually we need 100 raw chars where escaping pushes it over. Use 20 "&" + spaces = 100 raw chars
+  // 20 * "&amp;" = 100 chars — still 100, not over. Need to use more special chars.
+  // Use 25 "&" chars = 25 raw chars → 125 after ("&amp;" = 5 each), well over 100
+  const name = "&".repeat(25) + "x"; // 26 chars raw → 26 * 5 = 130 after "&amp;", well over 100
+  const result: any = await create.handler(
+    {
+      sessionId: makeValidSaveGoalArgs().sessionId,
+      goalId,
+      milestones: [
+        {
+          name,
+          goal: "Test",
+          scope: "Test scope",
+          order: 1,
+          dependencies: [],
+          acceptanceCriteria: ["done"],
+          exitCriteria: [],
+        },
+      ],
+    },
+    STUB_INVOCATION
+  );
+  if (!result.error) throw new Error("Expected error when sanitized name exceeds max length");
+  if (!result.error.includes("sanitization")) {
+    throw new Error(`Expected error to mention 'sanitization', got: ${result.error}`);
+  }
+}
+
 // ============================================================
 // 7. Research API endpoint tests (HTTP)
 // ============================================================
@@ -1579,6 +1651,8 @@ async function main() {
   await run("get_milestones: returns milestones ordered by position", testGetMilestonesReturnsOrdered);
   await run("get_milestones: wrong sessionId returns error", testGetMilestonesWrongSessionReturnsError);
   await run("get_milestones: unknown goalId returns error", testGetMilestonesUnknownGoalReturnsError);
+  await run("update_milestone: order collision returns error", testUpdateMilestoneOrderCollisionReturnsError);
+  await run("create_milestone_plan: name exceeding max length after sanitization returns error", testCreateMilestonePlanNameLengthAfterSanitizationReturnsError);
 
   // --- Summary ---
   console.log("\n═══════════════════════════════════════════════");

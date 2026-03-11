@@ -731,12 +731,13 @@ export function createPlanningTools(token: string, planningStore: PlanningStore)
                 description: `Work included in (and excluded from) this milestone. Max ${MAX_MILESTONE_SCOPE_LENGTH} chars.`,
               },
               order: {
-                type: "number",
+                type: "integer",
+                minimum: 1,
                 description: "Position in the delivery sequence (1-based, must be unique across this batch).",
               },
               dependencies: {
                 type: "array",
-                items: { type: "number" },
+                items: { type: "integer", minimum: 1 },
                 description: "Order values of milestones in this batch that must complete before this one.",
               },
               acceptanceCriteria: {
@@ -777,19 +778,42 @@ export function createPlanningTools(token: string, planningStore: PlanningStore)
         return { error: `milestones must have at most ${MAX_MILESTONES_PER_PLAN} entries` };
       }
 
-      // Validate each milestone spec
+      // Validate each milestone spec and pre-compute sanitized values
+      type SanitizedSpec = {
+        name: string;
+        goal: string;
+        scope: string;
+        order: number;
+        rawDependencies: number[];
+        acceptanceCriteria: string[];
+        exitCriteria: string[];
+      };
+      const sanitizedSpecs: SanitizedSpec[] = [];
+
       for (let i = 0; i < args.milestones.length; i++) {
         const spec = args.milestones[i];
         const prefix = `milestones[${i}]`;
 
         const nameErr = validateStringField(spec.name, `${prefix}.name`, MAX_MILESTONE_NAME_LENGTH);
         if (nameErr) return { error: nameErr };
+        const sanitizedName = sanitizeMilestoneName(spec.name as string);
+        if (sanitizedName.length > MAX_MILESTONE_NAME_LENGTH) {
+          return { error: `${prefix}.name exceeds ${MAX_MILESTONE_NAME_LENGTH} characters after sanitization` };
+        }
 
         const msGoalErr = validateStringField(spec.goal, `${prefix}.goal`, MAX_MILESTONE_GOAL_LENGTH);
         if (msGoalErr) return { error: msGoalErr };
+        const sanitizedGoal = sanitizeText(spec.goal as string);
+        if (sanitizedGoal.length > MAX_MILESTONE_GOAL_LENGTH) {
+          return { error: `${prefix}.goal exceeds ${MAX_MILESTONE_GOAL_LENGTH} characters after sanitization` };
+        }
 
         const scopeErr = validateStringField(spec.scope, `${prefix}.scope`, MAX_MILESTONE_SCOPE_LENGTH);
         if (scopeErr) return { error: scopeErr };
+        const sanitizedScope = sanitizeText(spec.scope as string);
+        if (sanitizedScope.length > MAX_MILESTONE_SCOPE_LENGTH) {
+          return { error: `${prefix}.scope exceeds ${MAX_MILESTONE_SCOPE_LENGTH} characters after sanitization` };
+        }
 
         if (typeof spec.order !== "number" || !Number.isInteger(spec.order) || spec.order < 1) {
           return { error: `${prefix}.order must be a positive integer` };
@@ -810,22 +834,30 @@ export function createPlanningTools(token: string, planningStore: PlanningStore)
 
         const ecErr = validateCriteriaArray(spec.exitCriteria, `${prefix}.exitCriteria`);
         if (ecErr) return { error: ecErr };
+
+        sanitizedSpecs.push({
+          name: sanitizedName,
+          goal: sanitizedGoal,
+          scope: sanitizedScope,
+          order: spec.order as number,
+          rawDependencies: spec.dependencies as number[],
+          acceptanceCriteria: (spec.acceptanceCriteria as string[]).map(sanitizeText),
+          exitCriteria: (spec.exitCriteria as string[]).map(sanitizeText),
+        });
       }
 
       // Validate unique order values
       const orderSet = new Set<number>();
-      for (let i = 0; i < args.milestones.length; i++) {
-        const order = args.milestones[i].order as number;
-        if (orderSet.has(order)) {
-          return { error: `Duplicate order value: ${order}` };
+      for (const s of sanitizedSpecs) {
+        if (orderSet.has(s.order)) {
+          return { error: `Duplicate order value: ${s.order}` };
         }
-        orderSet.add(order);
+        orderSet.add(s.order);
       }
 
       // Validate that all dependency order values reference milestones in this batch
-      for (let i = 0; i < args.milestones.length; i++) {
-        const spec = args.milestones[i];
-        for (const depOrder of spec.dependencies as number[]) {
+      for (let i = 0; i < sanitizedSpecs.length; i++) {
+        for (const depOrder of sanitizedSpecs[i].rawDependencies) {
           if (!orderSet.has(depOrder)) {
             return { error: `milestones[${i}].dependencies references unknown order: ${depOrder}` };
           }
@@ -834,42 +866,50 @@ export function createPlanningTools(token: string, planningStore: PlanningStore)
 
       // Assign UUIDs and build order→id map
       const orderToId = new Map<number, string>();
-      const milestoneIds: string[] = args.milestones.map((spec: any) => {
+      const milestoneIds: string[] = sanitizedSpecs.map((s) => {
         const id = crypto.randomUUID();
-        orderToId.set(spec.order as number, id);
+        orderToId.set(s.order, id);
         return id;
       });
 
       // Detect circular dependencies
-      const depGraph = args.milestones.map((spec: any, i: number) => ({
+      const depGraph = sanitizedSpecs.map((s, i) => ({
         id: milestoneIds[i],
-        dependencyIds: (spec.dependencies as number[]).map((depOrder) => orderToId.get(depOrder)!),
+        dependencyIds: s.rawDependencies.map((depOrder) => orderToId.get(depOrder)!),
       }));
       if (hasCircularDependencies(depGraph)) {
         return { error: "Circular dependency detected among milestones" };
       }
 
-      // Persist milestones
+      // Persist milestones; on failure, roll back any milestones already created
       const created: Milestone[] = [];
-      for (let i = 0; i < args.milestones.length; i++) {
-        const spec = args.milestones[i];
+      for (let i = 0; i < sanitizedSpecs.length; i++) {
+        const s = sanitizedSpecs[i];
         const milestone: Milestone = {
           id: milestoneIds[i],
           goalId: args.goalId,
-          name: sanitizeMilestoneName(spec.name as string),
-          goal: sanitizeText(spec.goal as string),
-          scope: sanitizeText(spec.scope as string),
-          order: spec.order as number,
-          dependencies: (spec.dependencies as number[]).map((depOrder) => orderToId.get(depOrder)!),
-          acceptanceCriteria: (spec.acceptanceCriteria as string[]).map(sanitizeText),
-          exitCriteria: (spec.exitCriteria as string[]).map(sanitizeText),
+          name: s.name,
+          goal: s.goal,
+          scope: s.scope,
+          order: s.order,
+          dependencies: s.rawDependencies.map((depOrder) => orderToId.get(depOrder)!),
+          acceptanceCriteria: s.acceptanceCriteria,
+          exitCriteria: s.exitCriteria,
           status: "draft",
         };
         try {
           const saved = await planningStore.createMilestone(milestone);
           created.push(saved);
         } catch (err: any) {
-          return { error: err.message ?? `Failed to create milestones[${i}]` };
+          // Best-effort rollback: delete any milestones created in this batch before failing
+          try {
+            if (created.length > 0) {
+              await Promise.all(created.map((m) => planningStore.deleteMilestone(m.id)));
+            }
+          } catch {
+            // Ignore rollback errors; report the original failure
+          }
+          return { error: err?.message ?? `Failed to create milestones[${i}]` };
         }
       }
 
@@ -919,7 +959,8 @@ export function createPlanningTools(token: string, planningStore: PlanningStore)
           description: `Updated scope description. Max ${MAX_MILESTONE_SCOPE_LENGTH} chars.`,
         },
         order: {
-          type: "number",
+          type: "integer",
+          minimum: 1,
           description: "Updated position in the delivery sequence (1-based).",
         },
         status: {
@@ -972,24 +1013,44 @@ export function createPlanningTools(token: string, planningStore: PlanningStore)
       if (args.name !== undefined && args.name !== null) {
         const nameErr = validateStringField(args.name, "name", MAX_MILESTONE_NAME_LENGTH);
         if (nameErr) return { error: nameErr };
-        updates.name = sanitizeMilestoneName(args.name as string);
+        const sanitizedName = sanitizeMilestoneName(args.name as string);
+        if (sanitizedName.length > MAX_MILESTONE_NAME_LENGTH) {
+          return { error: `name exceeds ${MAX_MILESTONE_NAME_LENGTH} characters after sanitization` };
+        }
+        updates.name = sanitizedName;
       }
 
       if (args.goal !== undefined && args.goal !== null) {
         const msGoalErr = validateStringField(args.goal, "goal", MAX_MILESTONE_GOAL_LENGTH);
         if (msGoalErr) return { error: msGoalErr };
-        updates.goal = sanitizeText(args.goal as string);
+        const sanitizedGoal = sanitizeText(args.goal as string);
+        if (sanitizedGoal.length > MAX_MILESTONE_GOAL_LENGTH) {
+          return { error: `goal exceeds ${MAX_MILESTONE_GOAL_LENGTH} characters after sanitization` };
+        }
+        updates.goal = sanitizedGoal;
       }
 
       if (args.scope !== undefined && args.scope !== null) {
         const scopeErr = validateStringField(args.scope, "scope", MAX_MILESTONE_SCOPE_LENGTH);
         if (scopeErr) return { error: scopeErr };
-        updates.scope = sanitizeText(args.scope as string);
+        const sanitizedScope = sanitizeText(args.scope as string);
+        if (sanitizedScope.length > MAX_MILESTONE_SCOPE_LENGTH) {
+          return { error: `scope exceeds ${MAX_MILESTONE_SCOPE_LENGTH} characters after sanitization` };
+        }
+        updates.scope = sanitizedScope;
       }
 
       if (args.order !== undefined && args.order !== null) {
         if (typeof args.order !== "number" || !Number.isInteger(args.order) || args.order < 1) {
           return { error: "order must be a positive integer" };
+        }
+        // Enforce unique order within the goal, consistent with create_milestone_plan
+        const allMilestonesForGoal = await planningStore.listMilestones(args.goalId);
+        const conflicting = allMilestonesForGoal.find(
+          (ms) => ms.id !== args.milestoneId && ms.order === args.order
+        );
+        if (conflicting) {
+          return { error: `Another milestone in this goal already has order ${args.order}` };
         }
         updates.order = args.order as number;
       }
