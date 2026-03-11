@@ -829,10 +829,12 @@ export function createPlanningTools(token: string, planningStore: PlanningStore)
           }
         }
 
-        const acErr = validateCriteriaArray(spec.acceptanceCriteria, `${prefix}.acceptanceCriteria`);
+        const sanitizedAcceptanceCriteria = (spec.acceptanceCriteria as string[]).map(sanitizeText);
+        const acErr = validateCriteriaArray(sanitizedAcceptanceCriteria, `${prefix}.acceptanceCriteria`);
         if (acErr) return { error: acErr };
 
-        const ecErr = validateCriteriaArray(spec.exitCriteria, `${prefix}.exitCriteria`);
+        const sanitizedExitCriteria = (spec.exitCriteria as string[]).map(sanitizeText);
+        const ecErr = validateCriteriaArray(sanitizedExitCriteria, `${prefix}.exitCriteria`);
         if (ecErr) return { error: ecErr };
 
         sanitizedSpecs.push({
@@ -841,8 +843,8 @@ export function createPlanningTools(token: string, planningStore: PlanningStore)
           scope: sanitizedScope,
           order: spec.order as number,
           rawDependencies: spec.dependencies as number[],
-          acceptanceCriteria: (spec.acceptanceCriteria as string[]).map(sanitizeText),
-          exitCriteria: (spec.exitCriteria as string[]).map(sanitizeText),
+          acceptanceCriteria: sanitizedAcceptanceCriteria,
+          exitCriteria: sanitizedExitCriteria,
         });
       }
 
@@ -1096,15 +1098,17 @@ export function createPlanningTools(token: string, planningStore: PlanningStore)
       }
 
       if (args.acceptanceCriteria !== undefined && args.acceptanceCriteria !== null) {
-        const acErr = validateCriteriaArray(args.acceptanceCriteria, "acceptanceCriteria");
+        const sanitizedAcceptance = (args.acceptanceCriteria as string[]).map(sanitizeText);
+        const acErr = validateCriteriaArray(sanitizedAcceptance, "acceptanceCriteria");
         if (acErr) return { error: acErr };
-        updates.acceptanceCriteria = (args.acceptanceCriteria as string[]).map(sanitizeText);
+        updates.acceptanceCriteria = sanitizedAcceptance;
       }
 
       if (args.exitCriteria !== undefined && args.exitCriteria !== null) {
-        const ecErr = validateCriteriaArray(args.exitCriteria, "exitCriteria");
+        const sanitizedExit = (args.exitCriteria as string[]).map(sanitizeText);
+        const ecErr = validateCriteriaArray(sanitizedExit, "exitCriteria");
         if (ecErr) return { error: ecErr };
-        updates.exitCriteria = (args.exitCriteria as string[]).map(sanitizeText);
+        updates.exitCriteria = sanitizedExit;
       }
 
       try {

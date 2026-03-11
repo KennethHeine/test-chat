@@ -1364,14 +1364,10 @@ async function testCreateMilestonePlanNameLengthAfterSanitizationReturnsError():
   const tools = createPlanningTools("test-token", store);
   const create = tools.find((t) => t.name === "create_milestone_plan")!;
 
-  // A name that is exactly at the limit before sanitization but exceeds it after HTML-escaping
-  // "<" becomes "&lt;" (4 chars → 4 chars net gain per character), so 97 "<" chars = 97 * 4 = 388 chars after escape
-  // We need something that is <= 100 chars raw but > 100 after sanitization
-  // "&&&&...100 chars" → each "&" becomes "&amp;" (5 chars instead of 1), so 20 "&" = 100 chars raw → 100 chars after = ok
-  // Actually we need 100 raw chars where escaping pushes it over. Use 20 "&" + spaces = 100 raw chars
-  // 20 * "&amp;" = 100 chars — still 100, not over. Need to use more special chars.
-  // Use 25 "&" chars = 25 raw chars → 125 after ("&amp;" = 5 each), well over 100
-  const name = "&".repeat(25) + "x"; // 26 chars raw → 26 * 5 = 130 after "&amp;", well over 100
+  // A name that is comfortably under the limit before sanitization but exceeds it after HTML-escaping.
+  // Each "&" becomes "&amp;" (5 chars instead of 1), so 25 "&" chars = 25 * 5 = 125 chars after escape,
+  // and the trailing "x" stays as 1 char → total sanitized length = 25 * 5 + 1 = 126 (> 100).
+  const name = "&".repeat(25) + "x"; // 26 chars raw → 25 * 5 + 1 = 126 chars after escaping, well over 100
   const result: any = await create.handler(
     {
       sessionId: makeValidSaveGoalArgs().sessionId,
