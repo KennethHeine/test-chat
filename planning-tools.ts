@@ -91,7 +91,10 @@ function validateUrl(value: string, fieldName: string): string | null {
 
 /**
  * Sanitizes a milestone name for safe use as a GitHub milestone title.
- * Strips control characters, normalizes whitespace, and escapes HTML-special characters.
+ * - Strips ASCII control characters (newlines, tabs, etc.) that would break
+ *   single-line title display in GitHub's UI
+ * - Normalizes runs of whitespace to a single space for clean titles
+ * - HTML-escapes special characters to prevent XSS if rendered in a browser
  */
 function sanitizeMilestoneName(name: string): string {
   return sanitizeText(name.replace(/[\x00-\x1F\x7F]/g, " ").replace(/\s+/g, " ").trim());
@@ -119,7 +122,14 @@ function validateCriteriaArray(arr: unknown, fieldName: string): string | null {
 }
 
 /**
- * Detects circular dependencies among a set of milestones.
+ * Detects circular dependencies among a set of milestones using DFS.
+ *
+ * Algorithm: depth-first search with two state sets:
+ * - `visited`: nodes that have been fully explored (all descendants processed);
+ *   re-visiting these is safe and terminates the search early.
+ * - `inStack`: nodes on the current DFS call stack; if we reach a node that is
+ *   already in the stack, we have found a back edge — i.e., a cycle.
+ *
  * @param milestones - array of { id, dependencyIds } entries
  * @returns true if a cycle is detected, false otherwise
  */
@@ -134,8 +144,8 @@ function hasCircularDependencies(
   const inStack = new Set<string>();
 
   function dfs(id: string): boolean {
-    if (inStack.has(id)) return true;
-    if (visited.has(id)) return false;
+    if (inStack.has(id)) return true;   // back edge: cycle detected
+    if (visited.has(id)) return false;  // already fully explored: safe
     visited.add(id);
     inStack.add(id);
     for (const dep of graph.get(id) ?? []) {
