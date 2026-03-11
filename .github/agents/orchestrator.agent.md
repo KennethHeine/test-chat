@@ -455,3 +455,7 @@ Both labels auto-remove after workflow completes (re-add to re-trigger).
 10. **Checkpoints combat context degradation.** Signal the user every 8 iterations.
 11. **Retrospectives catch recurring problems.** Dispatch at checkpoints and stage end to identify patterns and propose improvements.
 12. **Observations must be compact.** One-line details only — the retrospective agent does the analysis.
+13. **Only ONE review per PR.** Request review once, fix all comments, then go to CI. No re-reviews.
+14. **Use MCP `assign_copilot_to_issue` to assign Copilot.** Never post `@copilot` as a comment on an issue.
+15. **Documentation updates are frequently missed on first pass.** Issue template now includes explicit docs checklist.
+16. **Constants must be module-scoped and derived from source of truth.** Added to coding conventions to prevent recurring review comments.

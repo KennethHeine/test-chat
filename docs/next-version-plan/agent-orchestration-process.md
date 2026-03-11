@@ -143,7 +143,7 @@ After review fixes are applied:
 1. **Add CI labels to the PR** to trigger workflows:
    - Add `run-e2e` label → triggers `e2e-local.yml` (local E2E tests)
    - Add `deploy-ephemeral` label → triggers `deploy-ephemeral.yml` (ephemeral env deploy + E2E tests)
-   - Or use the helper script: `./scripts/orchestrator/trigger-ci-label.sh <owner> <repo> <pr_number> --all`
+   - Or use the helper script: `./scripts/orchestrator/trigger-ci-label.ps1 <owner> <repo> <pr_number> -All`
    - Labels are automatically removed after the workflow runs, so they can be re-added to re-trigger
 2. **Monitor workflow status** by polling `list_workflow_runs` filtered to the branch
 3. **Wait until all triggered workflows complete** — both local and ephemeral E2E tests must pass

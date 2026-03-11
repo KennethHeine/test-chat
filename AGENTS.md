@@ -33,6 +33,13 @@
 
 > **No linter or formatter is configured** in this repo. Typecheck with `npx tsc --noEmit` is the primary static analysis step.
 
+## Coding Conventions
+
+- Hoist shared constants to module scope — do not define them inside functions
+- Derive values from a single source of truth (e.g., `Object.keys(LABELS)` instead of maintaining a separate array)
+- When ownership/authorization checks are repeated across endpoints, extract a shared helper rather than duplicating the pattern
+- API endpoints must use correct HTTP status codes: 400 (bad input), 401 (missing auth), 403 (forbidden), 404 (not found)
+
 ## Project Map
 
 ```
@@ -67,6 +74,19 @@
 │   ├── deploy-infra.yml   # Deploy Bicep templates to Azure
 │   ├── e2e-tests.yml      # E2E tests against production (post-deploy)
 │   └── e2e-local.yml      # E2E tests against local server (PRs + non-main)
+├── .github/agents/        # Custom agent definitions (sub-agents for orchestrator)
+│   ├── orchestrator.agent.md    # Stage orchestration — dispatches sub-agents
+│   ├── gather-context.agent.md  # Reads plan docs, returns structured JSON
+│   ├── stage-setup.agent.md     # Creates stage branch + issues
+│   ├── issue-lifecycle.agent.md # Advances one issue through PR lifecycle
+│   ├── stage-finalize.agent.md  # Creates full-stage PR, manages review/CI
+│   └── retrospective.agent.md   # Analyzes observations, proposes improvements
+├── scripts/orchestrator/  # PowerShell helper scripts for polling/waiting
+│   ├── wait-for-agent.ps1       # Wait for Copilot coding agent to finish
+│   ├── wait-for-review.ps1      # Wait for Copilot code review to complete
+│   ├── trigger-ci-label.ps1     # Add CI labels + wait for workflows
+│   ├── trigger-and-wait-ci.ps1  # Trigger CI and wait for completion
+│   └── get-ci-failure-summary.ps1 # Extract failure logs from CI runs
 ├── package.json           # Dependencies and scripts
 ├── tsconfig.json          # TypeScript config (ES2022, strict, bundler resolution)
 ├── Dockerfile             # Production container (node:22-alpine)

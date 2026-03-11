@@ -70,6 +70,8 @@ This is **Issue {X} of {Y}** in **Stage {N}: {Stage Name}** of the [Next Version
 ### Patterns to follow
 
 - Follow existing patterns in the files listed above
+- Hoist shared constants to module scope — do not define them inside functions
+- Derive values from a single source of truth (e.g., `Object.keys(LABELS)` instead of a separate array)
 
 ## Acceptance Criteria
 
@@ -90,7 +92,9 @@ This is **Issue {X} of {Y}** in **Stage {N}: {Stage Name}** of the [Next Version
 
 ## Documentation Standards
 
-- Update relevant docs when behavior changes
+- [ ] Update relevant docs in `docs/` when behavior, configuration, or API changes
+- [ ] Update `README.md` if user-facing behavior changed
+- [ ] Update `AGENTS.md` Project Map if new files are added
 
 ## Process Tracking
 

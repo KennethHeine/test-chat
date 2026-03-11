@@ -17,6 +17,8 @@ You are an **issue-lifecycle sub-agent** for the orchestrator. You advance one i
 6. **`assign_copilot_to_issue` does NOT mean the agent is done** — it only assigns. The agent creates a draft PR immediately, then codes, then marks it non-draft when finished. You MUST run `wait-for-agent.ps1` which waits for the PR to become non-draft.
 7. **A review that says "couldn't review any files" or has 0 changed files is NOT a valid review** — this means the review happened before code was ready. Return status `review-requested` to re-request the review.
 8. **NEVER merge a PR that has not received a substantive Copilot code review** — if the only review says "unable to review" or similar, the PR is not ready to merge.
+9. **NEVER post `@copilot` as a comment on an issue** — always use the `assign_copilot_to_issue` MCP tool to assign Copilot to an issue. Commenting `@copilot` on an issue does NOT work.
+10. **Only ONE review per PR** — request a Copilot review once. If the review has actionable comments, fix ALL of them in one pass, then proceed directly to CI. Do NOT re-request another review after fixing.
 
 ## Input
 
@@ -64,9 +66,9 @@ The orchestrator provides a JSON object:
 
 ### `review-fixes-needed`
 1. **Check limit:** if `reviewFixAttempts >= 3` → return status `escalated` with summary
-2. Post `@copilot` comment on PR with fix instructions (be explicit: line numbers, quotes, expected behavior)
+2. Post `@copilot` comment on PR with fix instructions for ALL review comments (be explicit: line numbers, quotes, expected behavior)
 3. Run: `./scripts/orchestrator/wait-for-agent.ps1 {owner} {repo} {issueNumber}`
-4. Exit 0 → return status `pr-ready` (will re-review), increment `reviewFixAttempts`
+4. Exit 0 → return status `ci-ready` (skip re-review — go directly to CI), increment `reviewFixAttempts`
 5. Exit 1 → return status `agent-timeout`
 
 ### `ci-ready` *(new intermediate state)*

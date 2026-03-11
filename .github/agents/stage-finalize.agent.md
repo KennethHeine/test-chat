@@ -14,6 +14,7 @@ You are a **stage-finalize sub-agent** for the orchestrator. Your job is to crea
 3. **On timeout (exit code 1):** return the appropriate status — do NOT retry
 4. **Check retry limits** — if `reviewFixAttempts >= 3` or `ciFixAttempts >= 3`, return status `escalated`
 5. **Never merge to main** — the final merge is for the user to do manually
+6. **Only ONE review per PR** — request a Copilot review once. If the review has actionable comments, fix ALL of them in one pass, then proceed directly to CI. Do NOT re-request another review after fixing.
 
 ## Input
 
@@ -54,7 +55,7 @@ The orchestrator provides a JSON object:
 1. **Check limit:** if `reviewFixAttempts >= 3` → return status `escalated`
 2. **Apply fixes directly:** Checkout the stage branch via terminal, read the review comments, make the required edits (use edit tools or terminal), commit and push. If changes are complex, create a sub-PR targeting the stage branch, merge it, then return.
 3. Increment `reviewFixAttempts`
-4. Return status `pr-created` (will re-request review)
+4. Return status `ci-ready` (skip re-review — go directly to CI after fixing)
 
 ### `ci-ready`
 1. Run: `./scripts/orchestrator/trigger-ci-label.ps1 {owner} {repo} {prNumber} -All`
