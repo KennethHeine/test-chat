@@ -1,5 +1,6 @@
 import type { Tool } from "@github/copilot-sdk";
 import type { PlanningStore } from "./planning-store.js";
+import type { IssueDraft, ResearchItem } from "./planning-types.js";
 
 // --- GitHub API helper ---
 
@@ -73,10 +74,103 @@ export const GITHUB_TOOL_NAMES = [
   "list_issues",
   "search_code",
   "create_github_milestone",
+  "create_github_issue",
 ] as const;
 
 // Max file size returned by read_repo_file (100KB) to prevent blowing up LLM context
 const MAX_FILE_SIZE = 100 * 1024;
+
+/**
+ * Builds a formatted Markdown body for a GitHub issue from an IssueDraft
+ * and its associated ResearchItems (for the Research Context section).
+ * Renders the relevant implementation fields: purpose, problem, expected outcome,
+ * scope boundaries, technical context, acceptance criteria, testing expectations,
+ * files to modify/read, pattern reference, security checklist, verification commands,
+ * and a research context section. Internal planning fields (order, status, dependencies)
+ * are intentionally omitted as they are not useful in the rendered issue body.
+ */
+function buildIssueBody(draft: IssueDraft, researchItems: ResearchItem[]): string {
+  const lines: string[] = [];
+
+  /**
+   * Escapes pipe characters and strips newlines in a Markdown table cell value
+   * to prevent the rendered table from breaking in the GitHub issue body.
+   * @param value - The raw cell string to escape.
+   * @returns The sanitized string safe for use inside a Markdown table cell.
+   */
+  function escapeTableCell(value: string): string {
+    return value.replace(/\r?\n/g, " ").replace(/\\/g, "\\\\").replace(/\|/g, "\\|");
+  }
+
+  lines.push("## Purpose", "", draft.purpose, "");
+  lines.push("## Problem", "", draft.problem, "");
+  lines.push("## Expected Outcome", "", draft.expectedOutcome, "");
+  lines.push("## Scope Boundaries", "", draft.scopeBoundaries, "");
+  lines.push("## Technical Context", "", draft.technicalContext, "");
+
+  lines.push("## Acceptance Criteria", "");
+  for (const criterion of draft.acceptanceCriteria) {
+    lines.push(`- [ ] ${criterion}`);
+  }
+  lines.push("");
+
+  lines.push("## Testing Expectations", "", draft.testingExpectations, "");
+
+  if (draft.filesToModify.length > 0) {
+    lines.push("## Files to Modify", "");
+    lines.push("| File | Reason |");
+    lines.push("|------|--------|");
+    for (const f of draft.filesToModify) {
+      lines.push(`| \`${escapeTableCell(f.path)}\` | ${escapeTableCell(f.reason)} |`);
+    }
+    lines.push("");
+  }
+
+  if (draft.filesToRead.length > 0) {
+    lines.push("## Files to Read", "");
+    lines.push("| File | Reason |");
+    lines.push("|------|--------|");
+    for (const f of draft.filesToRead) {
+      lines.push(`| \`${escapeTableCell(f.path)}\` | ${escapeTableCell(f.reason)} |`);
+    }
+    lines.push("");
+  }
+
+  if (draft.patternReference) {
+    lines.push("## Pattern Reference", "", draft.patternReference, "");
+  }
+
+  if (draft.securityChecklist.length > 0) {
+    lines.push("## Security Checklist", "");
+    for (const item of draft.securityChecklist) {
+      lines.push(`- [ ] ${item}`);
+    }
+    lines.push("");
+  }
+
+  if (draft.verificationCommands.length > 0) {
+    lines.push("## Verification Commands", "");
+    for (const cmd of draft.verificationCommands) {
+      lines.push(`    ${cmd}`);
+    }
+    lines.push("");
+  }
+
+  if (researchItems.length > 0) {
+    lines.push("## Research Context", "");
+    for (const item of researchItems) {
+      lines.push(`### ${item.question}`, "");
+      if (item.findings) {
+        lines.push(`**Findings:** ${item.findings}`, "");
+      }
+      if (item.decision) {
+        lines.push(`**Decision:** ${item.decision}`, "");
+      }
+    }
+  }
+
+  return lines.join("\n");
+}
 
 export function createGitHubTools(token: string, planningStore?: PlanningStore): Tool[] {
   const listRepos: Tool = {
@@ -432,5 +526,194 @@ export function createGitHubTools(token: string, planningStore?: PlanningStore):
     },
   };
 
-  return [listRepos, getRepoStructure, readRepoFile, listIssues, searchCode, createGithubMilestone];
+  /**
+   * create_github_issue: Creates a real GitHub issue from an IssueDraft.
+   * Formats the issue body as Markdown containing all IssueDraft fields including
+   * R9 quality fields and a Research Context section built from researchLinks.
+   * Idempotent: if the draft is already 'created', returns existing data.
+   * Updates the IssueDraft status to 'created' and stores the GitHub issue number.
+   *
+   * Requires a planningStore to be provided to createGitHubTools.
+   */
+  const createGithubIssue: Tool = {
+    name: "create_github_issue",
+    description:
+      "Create a real GitHub issue from an IssueDraft. " +
+      "Formats the issue body as Markdown with all relevant fields (purpose, problem, " +
+      "expected outcome, scope, technical context, acceptance criteria, testing expectations, " +
+      "files, security checklist, verification commands) and a Research Context section " +
+      "built from researchLinks. Associates the issue with a GitHub Milestone if one " +
+      "has been created. Idempotent: if the draft is already created, returns existing data. " +
+      "Updates the IssueDraft status to 'created' and stores the GitHub issue number.",
+    parameters: {
+      type: "object",
+      properties: {
+        draftId: {
+          type: "string",
+          description: "The ID of the IssueDraft to push to GitHub.",
+        },
+        goalId: {
+          type: "string",
+          description: "The goal ID that owns the milestone this draft belongs to (used for ownership check).",
+        },
+        sessionId: {
+          type: "string",
+          description: "The session identifier of the caller. Must match the goal's sessionId.",
+        },
+        owner: {
+          type: "string",
+          description: "GitHub repository owner (user or organization).",
+        },
+        repo: {
+          type: "string",
+          description: "GitHub repository name.",
+        },
+        labels: {
+          type: "array",
+          items: { type: "string" },
+          description: "Optional list of label names to apply to the created issue.",
+        },
+      },
+      required: ["draftId", "goalId", "sessionId", "owner", "repo"],
+    },
+    handler: async (args: any) => {
+      if (!planningStore) {
+        throw new Error("Planning store not available");
+      }
+
+      // Validate required string fields
+      if (typeof args.draftId !== "string" || args.draftId.trim().length === 0) {
+        throw new Error("draftId must be a non-empty string");
+      }
+      if (typeof args.goalId !== "string" || args.goalId.trim().length === 0) {
+        throw new Error("goalId must be a non-empty string");
+      }
+      if (typeof args.sessionId !== "string" || args.sessionId.trim().length === 0) {
+        throw new Error("sessionId must be a non-empty string");
+      }
+      if (typeof args.owner !== "string" || args.owner.trim().length === 0) {
+        throw new Error("owner must be a non-empty string");
+      }
+      if (typeof args.repo !== "string" || args.repo.trim().length === 0) {
+        throw new Error("repo must be a non-empty string");
+      }
+
+      // Ownership check: verify goal belongs to caller's session
+      const goal = await planningStore.getGoal(args.goalId);
+      if (!goal || goal.sessionId !== args.sessionId) {
+        throw new Error(`Goal not found: ${args.goalId}`);
+      }
+
+      // Look up the draft and verify it belongs to a milestone under this goal
+      const draft = await planningStore.getIssueDraft(args.draftId);
+      if (!draft) {
+        throw new Error(`Issue draft not found: ${args.draftId}`);
+      }
+      const milestone = await planningStore.getMilestone(draft.milestoneId);
+      if (!milestone || milestone.goalId !== args.goalId) {
+        throw new Error(`Issue draft not found: ${args.draftId}`);
+      }
+
+      // Idempotency: if already created with a valid issue number, return existing data
+      if (draft.status === "created") {
+        if (draft.githubIssueNumber === undefined) {
+          throw new Error(`Issue draft ${args.draftId} has status 'created' but is missing githubIssueNumber — data integrity error`);
+        }
+        return {
+          draftId: args.draftId,
+          githubIssueNumber: draft.githubIssueNumber,
+          alreadyCreated: true,
+        };
+      }
+
+      // Reject drafts that are not ready to push to GitHub
+      if (draft.status !== "ready") {
+        throw new Error(`Issue draft ${args.draftId} has status '${draft.status}' — only drafts with status 'ready' can be pushed to GitHub`);
+      }
+
+      const { owner, repo } = args;
+
+      // Fetch ResearchItems for the Research Context section
+      const researchItems: ResearchItem[] = [];
+      for (const researchId of draft.researchLinks) {
+        const item = await planningStore.getResearchItem(researchId);
+        if (item) researchItems.push(item);
+      }
+
+      // Build the Markdown body
+      const body = buildIssueBody(draft, researchItems);
+
+      // Build the request body for the GitHub Issues API
+      const requestBody: Record<string, unknown> = {
+        title: draft.title,
+        body,
+      };
+
+      // Associate with GitHub Milestone if one has been created
+      if (milestone.githubNumber !== undefined) {
+        requestBody.milestone = milestone.githubNumber;
+      }
+
+      // Apply labels if provided — validate, trim, and deduplicate
+      if (Array.isArray(args.labels) && args.labels.length > 0) {
+        const labels = Array.from(
+          new Set(
+            args.labels
+              .filter((label: unknown): label is string => typeof label === "string")
+              .map((label: string) => label.trim())
+              .filter((label: string) => label.length > 0)
+          )
+        );
+        if (labels.length > 0) {
+          requestBody.labels = labels;
+        }
+      }
+
+      // Create the GitHub issue
+      const created = (await githubWrite(
+        token,
+        "POST",
+        `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues`,
+        requestBody
+      )) as any;
+
+      // Verify response: treat missing/invalid issue number as hard failure
+      if (!created.number || !Number.isFinite(created.number)) {
+        throw new Error("GitHub API response is missing a valid issue number — issue creation may have failed silently");
+      }
+
+      // Verify other response fields (silent failure detection — emit warnings, not errors)
+      const warnings: string[] = [];
+      if (created.state !== "open") {
+        warnings.push(`Expected issue state 'open', got '${created.state}'`);
+      }
+      if (created.title !== draft.title) {
+        warnings.push(`Issue title mismatch: expected '${draft.title}', got '${created.title}'`);
+      }
+      if (milestone.githubNumber !== undefined && created.milestone?.number !== milestone.githubNumber) {
+        warnings.push(`Milestone association may have been dropped (expected ${milestone.githubNumber}, got ${created.milestone?.number})`);
+      }
+
+      // Update IssueDraft status to 'created' and store the GitHub issue number
+      const updatedDraft = await planningStore.updateIssueDraft(args.draftId, {
+        status: "created",
+        githubIssueNumber: created.number,
+      });
+      if (!updatedDraft) {
+        throw new Error(`Issue draft not found after update: ${args.draftId}`);
+      }
+
+      const result: Record<string, unknown> = {
+        draftId: args.draftId,
+        githubIssueNumber: created.number,
+        githubIssueUrl: created.html_url,
+      };
+      if (warnings.length > 0) {
+        result.warnings = warnings;
+      }
+      return result;
+    },
+  };
+
+  return [listRepos, getRepoStructure, readRepoFile, listIssues, searchCode, createGithubMilestone, createGithubIssue];
 }
