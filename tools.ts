@@ -92,7 +92,12 @@ const MAX_FILE_SIZE = 100 * 1024;
 function buildIssueBody(draft: IssueDraft, researchItems: ResearchItem[]): string {
   const lines: string[] = [];
 
-  /** Escapes pipe characters and strips newlines in Markdown table cell values. */
+  /**
+   * Escapes pipe characters and strips newlines in a Markdown table cell value
+   * to prevent the rendered table from breaking in the GitHub issue body.
+   * @param value - The raw cell string to escape.
+   * @returns The sanitized string safe for use inside a Markdown table cell.
+   */
   function escapeTableCell(value: string): string {
     return value.replace(/\r?\n/g, " ").replace(/\|/g, "\\|");
   }
