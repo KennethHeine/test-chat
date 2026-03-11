@@ -81,11 +81,21 @@ export const GITHUB_TOOL_NAMES = [
 const MAX_FILE_SIZE = 100 * 1024;
 
 /**
- * Builds a fully formatted Markdown body for a GitHub issue from an IssueDraft
+ * Builds a formatted Markdown body for a GitHub issue from an IssueDraft
  * and its associated ResearchItems (for the Research Context section).
+ * Renders the relevant implementation fields: purpose, problem, expected outcome,
+ * scope boundaries, technical context, acceptance criteria, testing expectations,
+ * files to modify/read, pattern reference, security checklist, verification commands,
+ * and a research context section. Internal planning fields (order, status, dependencies)
+ * are intentionally omitted as they are not useful in the rendered issue body.
  */
 function buildIssueBody(draft: IssueDraft, researchItems: ResearchItem[]): string {
   const lines: string[] = [];
+
+  /** Escapes pipe characters and strips newlines in Markdown table cell values. */
+  function escapeTableCell(value: string): string {
+    return value.replace(/\r?\n/g, " ").replace(/\|/g, "\\|");
+  }
 
   lines.push("## Purpose", "", draft.purpose, "");
   lines.push("## Problem", "", draft.problem, "");
@@ -106,7 +116,7 @@ function buildIssueBody(draft: IssueDraft, researchItems: ResearchItem[]): strin
     lines.push("| File | Reason |");
     lines.push("|------|--------|");
     for (const f of draft.filesToModify) {
-      lines.push(`| \`${f.path}\` | ${f.reason} |`);
+      lines.push(`| \`${escapeTableCell(f.path)}\` | ${escapeTableCell(f.reason)} |`);
     }
     lines.push("");
   }
@@ -116,7 +126,7 @@ function buildIssueBody(draft: IssueDraft, researchItems: ResearchItem[]): strin
     lines.push("| File | Reason |");
     lines.push("|------|--------|");
     for (const f of draft.filesToRead) {
-      lines.push(`| \`${f.path}\` | ${f.reason} |`);
+      lines.push(`| \`${escapeTableCell(f.path)}\` | ${escapeTableCell(f.reason)} |`);
     }
     lines.push("");
   }
@@ -135,11 +145,10 @@ function buildIssueBody(draft: IssueDraft, researchItems: ResearchItem[]): strin
 
   if (draft.verificationCommands.length > 0) {
     lines.push("## Verification Commands", "");
-    lines.push("```");
     for (const cmd of draft.verificationCommands) {
-      lines.push(cmd);
+      lines.push(`    ${cmd}`);
     }
-    lines.push("```", "");
+    lines.push("");
   }
 
   if (researchItems.length > 0) {
@@ -600,13 +609,21 @@ export function createGitHubTools(token: string, planningStore?: PlanningStore):
         throw new Error(`Issue draft not found: ${args.draftId}`);
       }
 
-      // Idempotency: if already created, return existing data
-      if (draft.status === "created" && draft.githubIssueNumber !== undefined) {
+      // Idempotency: if already created with a valid issue number, return existing data
+      if (draft.status === "created") {
+        if (draft.githubIssueNumber === undefined) {
+          throw new Error(`Issue draft ${args.draftId} has status 'created' but is missing githubIssueNumber — data integrity error`);
+        }
         return {
           draftId: args.draftId,
           githubIssueNumber: draft.githubIssueNumber,
           alreadyCreated: true,
         };
+      }
+
+      // Reject drafts that are not ready to push to GitHub
+      if (draft.status !== "ready") {
+        throw new Error(`Issue draft ${args.draftId} has status '${draft.status}' — only drafts with status 'ready' can be pushed to GitHub`);
       }
 
       const { owner, repo } = args;
@@ -632,9 +649,19 @@ export function createGitHubTools(token: string, planningStore?: PlanningStore):
         requestBody.milestone = milestone.githubNumber;
       }
 
-      // Apply labels if provided
+      // Apply labels if provided — validate, trim, and deduplicate
       if (Array.isArray(args.labels) && args.labels.length > 0) {
-        requestBody.labels = args.labels;
+        const labels = Array.from(
+          new Set(
+            args.labels
+              .filter((label: unknown): label is string => typeof label === "string")
+              .map((label: string) => label.trim())
+              .filter((label: string) => label.length > 0)
+          )
+        );
+        if (labels.length > 0) {
+          requestBody.labels = labels;
+        }
       }
 
       // Create the GitHub issue
@@ -645,11 +672,13 @@ export function createGitHubTools(token: string, planningStore?: PlanningStore):
         requestBody
       )) as any;
 
-      // Verify response fields (silent failure detection)
-      const warnings: string[] = [];
-      if (!created.number) {
-        warnings.push("Response missing issue number — creation may have failed silently");
+      // Verify response: treat missing/invalid issue number as hard failure
+      if (!created.number || !Number.isFinite(created.number)) {
+        throw new Error("GitHub API response is missing a valid issue number — issue creation may have failed silently");
       }
+
+      // Verify other response fields (silent failure detection — emit warnings, not errors)
+      const warnings: string[] = [];
       if (created.state !== "open") {
         warnings.push(`Expected issue state 'open', got '${created.state}'`);
       }

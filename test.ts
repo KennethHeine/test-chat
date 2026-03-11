@@ -2082,6 +2082,12 @@ async function seedGoalMilestoneAndDraft(
   );
   if (result.error) throw new Error(`seedGoalMilestoneAndDraft failed: ${result.error}`);
   const draftId = result.issues[0].id;
+  // Transition the draft to "ready" — create_github_issue requires status "ready"
+  const updateResult: any = await planningTools.find((t) => t.name === "update_issue_draft")!.handler(
+    { draftId, goalId, sessionId, status: "ready" },
+    STUB_INVOCATION
+  );
+  if (updateResult.error) throw new Error(`seedGoalMilestoneAndDraft: failed to set status ready: ${updateResult.error}`);
   return { goalId, milestoneId, draftId, sessionId };
 }
 
@@ -2418,6 +2424,9 @@ async function testCreateGithubIssueIncludesResearchContext(): Promise<void> {
     STUB_INVOCATION
   );
   const draftId = draftsResult.issues[0].id;
+  // Transition the draft to "ready" — create_github_issue requires status "ready"
+  const updateDraft = planningTools.find((t) => t.name === "update_issue_draft")!;
+  await updateDraft.handler({ draftId, goalId, sessionId, status: "ready" }, STUB_INVOCATION);
 
   const tools = createGitHubTools("test-token", store);
   const tool = tools.find((t) => t.name === "create_github_issue")!;
@@ -2590,6 +2599,63 @@ async function testCreateGithubIssueBodyContainsAllSections(): Promise<void> {
       if (!body.includes(section)) {
         throw new Error(`Expected section '${section}' in issue body`);
       }
+    }
+  } finally {
+    (global as any).fetch = orig;
+  }
+}
+
+async function testCreateGithubIssueDraftNotReadyThrows(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  // seedGoalMilestoneAndDraft already sets status to "ready"; revert to "draft" to test rejection
+  const { goalId, draftId, sessionId } = await seedGoalMilestoneAndDraft(store);
+  await store.updateIssueDraft(draftId, { status: "draft" });
+
+  const tools = createGitHubTools("test-token", store);
+  const tool = tools.find((t) => t.name === "create_github_issue")!;
+
+  try {
+    await tool.handler(
+      { draftId, goalId, sessionId, owner: "owner", repo: "repo" },
+      STUB_INVOCATION
+    );
+    throw new Error("Expected error to be thrown for draft status");
+  } catch (err: any) {
+    if (!err.message.includes("status 'draft'") || !err.message.includes("ready")) {
+      throw new Error(`Expected error about 'draft' status and 'ready', got: ${err.message}`);
+    }
+  }
+}
+
+async function testCreateGithubIssueMissingNumberThrows(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const { goalId, draftId, sessionId } = await seedGoalMilestoneAndDraft(store);
+  const tools = createGitHubTools("test-token", store);
+  const tool = tools.find((t) => t.name === "create_github_issue")!;
+
+  // Simulate GitHub returning a response without a number field
+  const orig = global.fetch;
+  (global as any).fetch = async (url: string, init?: any) => {
+    const method = init?.method ?? "GET";
+    if (method === "POST" && String(url).includes("/issues")) {
+      return {
+        ok: true,
+        status: 201,
+        json: async () => ({ html_url: "https://github.com/owner/repo/issues/", state: "open", title: "Implement login endpoint" }),
+        headers: { get: () => null },
+      };
+    }
+    return orig(url as any, init);
+  };
+  try {
+    await tool.handler(
+      { draftId, goalId, sessionId, owner: "owner", repo: "repo" },
+      STUB_INVOCATION
+    );
+    throw new Error("Expected error for missing issue number");
+  } catch (err: any) {
+    if (!err.message.includes("missing a valid issue number")) {
+      throw new Error(`Expected error about missing issue number, got: ${err.message}`);
     }
   } finally {
     (global as any).fetch = orig;
@@ -3249,6 +3315,8 @@ async function main() {
   await run("create_github_issue: missing planningStore throws", testCreateGithubIssueWithoutPlanningStoreThrows);
   await run("create_github_issue: missing draft throws", testCreateGithubIssueMissingDraftThrows);
   await run("create_github_issue: issue body contains all required sections", testCreateGithubIssueBodyContainsAllSections);
+  await run("create_github_issue: draft with status 'draft' is rejected", testCreateGithubIssueDraftNotReadyThrows);
+  await run("create_github_issue: missing issue number in response throws", testCreateGithubIssueMissingNumberThrows);
 
   // --- Summary ---
   console.log("\n═══════════════════════════════════════════════");
