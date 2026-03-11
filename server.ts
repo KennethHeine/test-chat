@@ -872,7 +872,7 @@ async function startServer() {
       console.log("Azure Planning Store initialized (4 tables)");
     } catch (err: any) {
       console.error("Failed to initialize Azure Planning Store:", err.message);
-      console.log("Falling back to in-memory planning storage");
+      console.log("Falling back to in-memory planning storage (planning data will not persist)");
       planningStore = new InMemoryPlanningStore();
     }
   } else {

@@ -517,8 +517,8 @@ function entityToResearchItem(entity: any): ResearchItem {
     findings: entity.findings as string,
     decision: entity.decision as string,
   };
-  if (entity.resolvedAt) item.resolvedAt = entity.resolvedAt as string;
-  if (entity.sourceUrl) item.sourceUrl = entity.sourceUrl as string;
+  if (entity.resolvedAt !== "") item.resolvedAt = entity.resolvedAt as string;
+  if (entity.sourceUrl !== "") item.sourceUrl = entity.sourceUrl as string;
   return item;
 }
 
@@ -552,8 +552,8 @@ function entityToMilestone(entity: any): Milestone {
     exitCriteria: JSON.parse(entity.exitCriteria as string) as string[],
     status: entity.status as Milestone["status"],
   };
-  if (entity.githubNumber) milestone.githubNumber = entity.githubNumber as number;
-  if (entity.githubUrl) milestone.githubUrl = entity.githubUrl as string;
+  if (entity.githubNumber !== 0) milestone.githubNumber = entity.githubNumber as number;
+  if (entity.githubUrl !== "") milestone.githubUrl = entity.githubUrl as string;
   return milestone;
 }
 
@@ -603,8 +603,8 @@ function entityToIssueDraft(entity: any): IssueDraft {
     securityChecklist: JSON.parse(entity.securityChecklist as string) as string[],
     verificationCommands: JSON.parse(entity.verificationCommands as string) as string[],
   };
-  if (entity.githubIssueNumber) draft.githubIssueNumber = entity.githubIssueNumber as number;
-  if (entity.patternReference) draft.patternReference = entity.patternReference as string;
+  if (entity.githubIssueNumber !== 0) draft.githubIssueNumber = entity.githubIssueNumber as number;
+  if (entity.patternReference !== "") draft.patternReference = entity.patternReference as string;
   return draft;
 }
 
