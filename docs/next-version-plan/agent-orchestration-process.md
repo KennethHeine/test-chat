@@ -2,15 +2,29 @@
 
 > Reusable process for orchestrating GitHub Copilot coding agents through staged implementation work. Each stage follows the same branch → issue → PR → review → fix → merge cycle.
 
-> **Custom agent available:** This process is now encoded as a custom Copilot coding agent in [`.github/agents/orchestrator.agent.md`](../../.github/agents/orchestrator.agent.md). You can invoke it by selecting the `orchestrator` agent when assigning the Copilot coding agent to an issue. Helper scripts for automated polling are in [`scripts/orchestrator/`](../../scripts/orchestrator/).
+> **Custom agents available:** This process is encoded as a set of custom Copilot agents in [`.github/agents/`](../../.github/agents/). The **orchestrator** is a thin coordination agent that dispatches **5 sub-agents** — it never writes code or interacts with GitHub directly (except to read state). Helper scripts for automated polling and CI are in [`scripts/orchestrator/`](../../scripts/orchestrator/).
 
 ---
 
 ## Overview
 
-This document defines the end-to-end process for using a **Copilot Chat agent as an orchestrator** to drive GitHub Copilot coding agents through multi-issue implementation stages. The orchestrator never writes code directly — it creates issues, assigns agents, manages reviews, validates CI, and merges PRs.
+This document defines the end-to-end process for using a **sub-agent architecture** to drive GitHub Copilot coding agents through multi-issue implementation stages. The **orchestrator** is a thin coordinator that reads state, dispatches the right sub-agent, updates state, and repeats. It never writes code directly.
 
-**Core principle:** All code is written by the Copilot coding agent. The orchestrator's job is to ensure quality through reviews, CI validation, and structured branching.
+**Core principle:** All code is written by the Copilot coding agent. The orchestrator ensures quality through sub-agent delegation, state tracking, reviews, CI validation, and structured branching.
+
+### Sub-Agent Architecture
+
+Each sub-agent is a dedicated `.agent.md` file in `.github/agents/` with its own tools, instructions, and context window. The orchestrator invokes them via `runSubagent` with JSON payloads.
+
+| Sub-Agent | File | Purpose | When |
+|-----------|------|---------|------|
+| **gather-context** | `gather-context.agent.md` | Reads plan docs, returns structured JSON summary | Before stage-setup |
+| **stage-setup** | `stage-setup.agent.md` | Creates stage branch + all issues | Once per stage |
+| **issue-lifecycle** | `issue-lifecycle.agent.md` | Advances one issue through the PR lifecycle | Per-issue, per-status-transition |
+| **stage-finalize** | `stage-finalize.agent.md` | Creates full-stage PR → review → CI → notify user | After all issues merged |
+| **retrospective** | `retrospective.agent.md` | Analyzes observations, identifies patterns, proposes improvements | At checkpoints + stage end |
+
+**Context is precious.** The orchestrator may run for hours. It never reads plan documents or repo files directly — it delegates to sub-agents and consumes only their returned JSON summaries.
 
 ---
 
@@ -42,174 +56,331 @@ Both labels are automatically removed after the workflow completes, allowing the
 ┌─────────────────────────────────────────────────────────────────────┐
 │                        Stage Lifecycle                              │
 │                                                                     │
-│  1. Create stage branch from main                                   │
-│  2. Create all issues for the stage                                 │
-│  3. For each issue (in dependency order):                           │
+│  1. Orchestrator reads/creates state file                           │
+│  2. Dispatch gather-context → returns stage JSON                    │
+│  3. Dispatch stage-setup → creates branch + issues                  │
+│  4. For each issue (in dependency order):                           │
 │     ┌─────────────────────────────────────────────────────────┐     │
-│     │  a. Assign Copilot coding agent to issue                │     │
-│     │  b. Wait for coding agent to complete                   │     │
-│     │  c. Mark PR ready for review                            │     │
-│     │  d. Request Copilot code review                         │     │
-│     │  e. Wait for review comments                            │     │
-│     │  f. Post @copilot comment with fix instructions         │     │
-│     │  g. Wait for fixes to be applied                        │     │
-│     │  h. Validate CI workflows pass                          │     │
-│     │     - If CI fails → @copilot fix with workflow run link │     │
-│     │     - Repeat until CI passes                            │     │
-│     │  i. Merge PR to stage branch (squash)                   │     │
+│     │  Dispatch issue-lifecycle with issue status:             │     │
+│     │                                                         │     │
+│     │  pending → assign agent, wait-for-agent.ps1             │     │
+│     │  agent-timeout → extended wait (60 min)                 │     │
+│     │  pr-ready → undraft PR, verify base branch              │     │
+│     │  review-requested → request review, wait-for-review.ps1 │     │
+│     │  review-fixes-needed → @copilot fix, wait-for-agent.ps1 │     │
+│     │  ci-ready → trigger-ci-label.ps1                        │     │
+│     │  ci-failed → @copilot fix, wait, re-trigger CI          │     │
+│     │  ci-passed → pre-merge review check, squash merge       │     │
+│     │                                                         │     │
+│     │  Terminal states: merged, escalated                     │     │
 │     └─────────────────────────────────────────────────────────┘     │
-│  4. Create PR from stage branch → main                              │
-│  5. Request Copilot review on full-stage PR                         │
-│  6. Address any review comments                                     │
-│  7. Validate CI on full-stage PR                                    │
-│  8. Manual merge of stage PR to main                                │
+│  5. Dispatch stage-finalize → creates PR to main, review, CI       │
+│  6. Dispatch retrospective → analyzes observations                  │
+│  7. Notify user: stage PR ready for manual merge                    │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
+## State File: `.github/orchestrator-state.json`
+
+The state file is the **single source of truth** for crash recovery and inter-agent communication. The orchestrator reads it at every invocation and updates it after every sub-agent completes.
+
+### Schema (v2)
+
+```json
+{
+  "version": 2,
+  "owner": "KennethHeine",
+  "repo": "test-chat",
+  "stage": {
+    "number": 1,
+    "name": "Goal Definition",
+    "branch": "stage-1/goal-definition",
+    "status": "in-progress"
+  },
+  "issues": [
+    {
+      "sequence": 1,
+      "title": "Define planning data model",
+      "issueNumber": 42,
+      "status": "merged",
+      "prNumber": 45,
+      "ciRuns": [],
+      "reviewFixAttempts": 0,
+      "ciFixAttempts": 0
+    }
+  ],
+  "stagePR": {
+    "prNumber": null,
+    "status": "not-started",
+    "reviewFixAttempts": 0,
+    "ciFixAttempts": 0
+  },
+  "retryLimits": {
+    "maxReviewFixAttempts": 3,
+    "maxCiFixAttempts": 3,
+    "maxAgentTimeouts": 2
+  },
+  "heartbeat": {
+    "timestamp": "2026-03-10T12:00:00Z",
+    "currentAction": "Dispatching issue-lifecycle for issue #43",
+    "iterationCount": 5
+  },
+  "checkpoint": {
+    "lastCheckpointAt": 0,
+    "checkpointInterval": 8
+  },
+  "observations": [],
+  "retrospectives": [],
+  "lastUpdated": "2026-03-10T12:00:00Z",
+  "lastAction": "issue-lifecycle completed for issue #42 → merged as PR #45"
+}
+```
+
+### Issue Status Values
+
+| Status | Meaning | Next Action |
+|--------|---------|-------------|
+| `pending` | Issue created, not yet assigned | Dispatch `issue-lifecycle` |
+| `agent-working` | Coding agent assigned, waiting | Dispatch `issue-lifecycle` (will wait) |
+| `agent-timeout` | Wait script timed out | Dispatch `issue-lifecycle` (extended timeout) |
+| `pr-ready` | PR exists, needs review setup | Dispatch `issue-lifecycle` (undraft + set base) |
+| `review-requested` | Review requested, waiting | Dispatch `issue-lifecycle` (wait for review) |
+| `review-fixes-needed` | Review has actionable comments | Dispatch `issue-lifecycle` (post fixes) |
+| `ci-ready` | Review passed, CI not yet triggered | Dispatch `issue-lifecycle` (trigger CI) |
+| `ci-failed` | CI failed | Dispatch `issue-lifecycle` (post fix + wait) |
+| `ci-passed` | All CI green | Dispatch `issue-lifecycle` (merge) |
+| `merged` | PR merged to stage branch | Done — move to next issue |
+| `escalated` | Hit retry limit, needs human | Skip — notify user |
+
+### Stage PR Status Values
+
+| Status | Meaning |
+|--------|---------|
+| `not-started` | Not all issues merged yet |
+| `pr-created` | Full-stage PR exists |
+| `review-fixes-needed` | Review has comments |
+| `ci-ready` | Review passed, CI not triggered |
+| `ci-failed` | CI failed on stage PR |
+| `ready-for-user` | All checks passed, waiting for manual merge |
+| `escalated` | Hit retry limit, needs human |
+
+---
+
 ## Detailed Steps
 
-### Step 1: Create Stage Branch
+### Step 1: Startup and State Recovery
 
-Before creating any issues, create a dedicated branch for the stage:
+Every time the orchestrator is invoked:
 
-```
-main → stage-0/data-model-foundation
-```
+1. **Read the state file** (`.github/orchestrator-state.json`)
+2. **If no state file exists:** Ask the user which stage to start, then dispatch `gather-context` → `stage-setup`
+3. **If state file exists:** Resume from current state using the resume logic:
+   - Find the first issue (by sequence) with status NOT in `["merged", "escalated"]`
+   - Check retry limits before dispatching
+   - Dispatch `issue-lifecycle` with that issue's current status
+   - If all issues are done, dispatch `stage-finalize`
+   - If stage PR is `ready-for-user`, notify user and stop
+
+### Step 2: Gather Context (Sub-Agent)
+
+The orchestrator dispatches `gather-context` with a stage number. This sub-agent:
+
+1. Reads `AGENTS.md`, `.github/copilot-instructions.md`, plan docs
+2. Returns a structured JSON summary with stage name, branch name, issues, conventions, and test commands
+3. The orchestrator passes this JSON (unmodified) to `stage-setup`
+
+### Step 3: Stage Setup (Sub-Agent)
+
+The orchestrator dispatches `stage-setup` with the context JSON. This sub-agent:
+
+1. **Creates the stage branch** from `main` using `create_branch`
+2. **Creates all issues** using the issue template (see Issue Template section below)
+3. Returns issue numbers in a JSON response
 
 **Naming convention:** `stage-{N}/{short-description}`
 
-All PRs for the stage target this branch, not `main`. This isolates stage work and enables a full-stage review at the end.
+All issue PRs target this branch, not `main`.
 
-### Step 2: Create Issues
+### Step 4: Issue Lifecycle (Sub-Agent)
 
-Create all issues for the stage upfront. Each issue should include:
+For each issue, the orchestrator dispatches `issue-lifecycle` with the issue's current status. The sub-agent advances through the lifecycle using **helper scripts for all waiting** (never MCP tool polling loops).
 
-- **Parent context** — which stage, issue number (e.g., "Issue 2 of 3 in Stage 0"), dependencies
-- **Purpose** — what the issue achieves
-- **Problem to solve** — what gap it fills
-- **Expected outcome** — concrete deliverables
-- **Scope boundaries** — what's in/out of scope
-- **Technical context** — code patterns to follow, files to read, existing conventions
-- **Acceptance criteria** — checkboxes for done definition
-- **Testing expectations** — what tests to add/update, which commands to run
-- **Security checklist** — no secrets in code, input validation, etc.
-- **Documentation standards** — what docs to update
-- **Process tracking** — stage number, issue sequence, dependencies, what it blocks
+#### `pending` → Assign and wait for agent
 
-**Important:** Explicitly state that PRs should target the stage branch, not `main`.
+1. `assign_copilot_to_issue` — **note: this only assigns, the agent is NOT done yet**
+2. Run `./scripts/orchestrator/wait-for-agent.ps1 {owner} {repo} {issueNumber}`
+   - The script waits for `copilot_work_finished` / `copilot_work_finished_failure` timeline events
+   - Exit 0 → return `pr-ready`
+   - Exit 1 → return `agent-timeout`
 
-### Step 3: Assign Copilot Coding Agent
+#### `agent-timeout` → Extended wait
 
-For each issue (respecting dependency order):
+1. Run with extended timeout: `$env:POLL_TIMEOUT=3600; ./scripts/orchestrator/wait-for-agent.ps1 ...`
+2. Exit 0 → return `pr-ready`
+3. Exit 1 → return `agent-timeout` (orchestrator will check timeout count and may escalate)
 
-1. **Assign Copilot** to the issue
-2. **Poll status** with ~20-second intervals until the coding agent completes
-3. The agent creates a PR automatically
+#### `pr-ready` → Prepare for review
 
-### Step 4: Mark PR Ready for Review
+1. Verify PR is non-draft, update if needed
+2. Verify PR targets the stage branch — update base branch if needed
+3. Return `review-requested`
 
-The coding agent creates PRs as drafts. Before requesting review:
+#### `review-requested` → Request and wait for review
 
-1. **Mark the PR as ready** (`draft: false`)
-2. Verify the PR targets the **stage branch** (not `main`)
+1. `request_copilot_review` on the PR
+2. Run `./scripts/orchestrator/wait-for-review.ps1 {owner} {repo} {prNumber}`
+3. **Validate the review is substantive:**
+   - If review says "couldn't review any files" or similar → **INVALID**, return `review-requested` to re-try
+   - If no actionable comments → return `ci-ready`
+   - If actionable comments → return `review-fixes-needed`
 
-### Step 5: Request Copilot Code Review
+**Important:** Only ONE review per PR. After review fixes, go directly to CI — do NOT re-request a review.
 
-1. **Request Copilot review** on the PR
-2. **Poll for review completion** with ~20-second intervals
-3. **Read review comments** — both the summary review and inline comments
+#### `review-fixes-needed` → Post fix instructions
 
-### Step 6: Address Review Comments
+1. Check retry limit: if `reviewFixAttempts >= 3` → return `escalated`
+2. Post `@copilot` comment on PR with **explicit** fix instructions (line numbers, quotes, expected behavior)
+3. Run `wait-for-agent.ps1` to wait for fixes
+4. Return `ci-ready`, increment `reviewFixAttempts`
 
-If the review has actionable feedback:
+**Important:** Never post `@copilot` as a comment on an **issue** — always use `assign_copilot_to_issue` for issues. `@copilot` comments only work on **PRs**.
 
-1. **Post a `@copilot` comment** on the PR with clear fix instructions
-   - Reference each review comment specifically
-   - Include the suggested changes or describe what needs to change
-   - Be explicit — the coding agent needs clear, unambiguous instructions
-2. **Wait for the coding agent** to pick up the comment and apply fixes
-3. **Poll status** with ~20-second intervals until complete
+#### `ci-ready` → Trigger CI
 
-If the review has no actionable comments, skip to CI validation.
+1. Run `./scripts/orchestrator/trigger-ci-label.ps1 {owner} {repo} {prNumber} -E2e`
+   - **Use `-E2e` for issue PRs** (targeting stage branch)
+   - **Use `-All` only for the final stage PR** (targeting main)
+2. Exit 0 → return `ci-passed`
+3. Exit 1 → extract failing run IDs, get failure logs via `get-ci-failure-summary.ps1`, return `ci-failed`
+4. Exit 2 (timeout) → return `ci-failed` with timeout summary
 
-### Step 7: Validate CI Workflows
+#### `ci-failed` → Fix CI failures
 
-**Critical: Do not start CI validation until review fixes are complete.**
+1. Check retry limit: if `ciFixAttempts >= 3` → return `escalated`
+2. Post `@copilot` comment on PR with failure summary and fix instructions
+3. Run `wait-for-agent.ps1` to wait for fixes
+4. Return `ci-ready` (will re-run CI), increment `ciFixAttempts`
 
-After review fixes are applied:
+#### `ci-passed` → Merge
 
-1. **Add CI labels to the PR** to trigger workflows:
-   - Add `run-e2e` label → triggers `e2e-local.yml` (local E2E tests)
-   - Add `deploy-ephemeral` label → triggers `deploy-ephemeral.yml` (ephemeral env deploy + E2E tests)
-   - Or use the helper script: `./scripts/orchestrator/trigger-ci-label.ps1 <owner> <repo> <pr_number> -All`
-   - Labels are automatically removed after the workflow runs, so they can be re-added to re-trigger
-2. **Monitor workflow status** by polling `list_workflow_runs` filtered to the branch
-3. **Wait until all triggered workflows complete** — both local and ephemeral E2E tests must pass
+1. **Pre-merge validation:** Verify the PR has at least one substantive Copilot review. If not, return `review-requested` instead of merging.
+2. `merge_pull_request` with squash merge into the stage branch
+3. Return `merged`
 
-#### Why Labels Instead of `workflow_dispatch`
+### Step 5: Stage Finalize (Sub-Agent)
 
-Label-based triggers use `pull_request_target` events, which give the workflow direct access to the PR context (number, head SHA, base branch). This means:
-- The ephemeral deploy automatically knows which PR to use for naming
-- The checkout uses the correct PR head commit
-- Re-triggering is as simple as re-adding the label
-- Labels provide a visible signal on the PR that CI was requested
+After all issues are merged, the orchestrator dispatches `stage-finalize`. This sub-agent:
 
-#### Handling CI Failures
-
-If any workflow fails:
-
-1. **Get the failing workflow run URL** from the workflow runs list
-2. **Get the job logs** using `get_job_logs` for the failing job to understand the error
-3. **Post a `@copilot` comment** on the PR:
-   ```
-   @copilot The CI workflow failed. Please investigate and fix the issue.
-   
-   Failing workflow run: https://github.com/{owner}/{repo}/actions/runs/{run_id}
-   
-   Error summary: {brief description of the failure from logs}
-   
-   Check the workflow logs for the specific error and apply a fix.
-   ```
-4. **Wait for the coding agent** to apply fixes
-5. **Re-trigger CI** by re-adding the labels (`run-e2e`, `deploy-ephemeral`) after fixes are pushed
-6. **Repeat** until all workflows pass
-
-This ensures problems are caught and fixed quickly within each PR, before they compound.
-
-### Step 8: Merge PR to Stage Branch
-
-Once CI passes and review fixes are applied:
-
-1. **Squash merge** the PR into the stage branch
-2. Move to the next issue in the stage
-
-### Step 9: Full-Stage PR and Review
-
-After all issues in the stage are merged to the stage branch:
-
-1. **Create a PR** from the stage branch to `main`
+1. **Creates a PR** from the stage branch to `main`
    - Title: `Stage {N}: {Stage Name}`
-   - Body: Summary of all changes across the stage, listing each issue/PR that was merged
-2. **Request Copilot review** on the full-stage PR
-   - This gives a holistic review of all changes together, catching cross-cutting issues that per-issue reviews might miss
-3. **Address any review comments** using the same `@copilot` fix flow
-4. **Trigger CI** on the full-stage PR by adding labels (`run-e2e`, `deploy-ephemeral`) — all tests should pass against the combined changes
-5. **Hand off to user for manual merge** — the orchestrator notifies the user that the stage PR is ready for final review and merge. The user merges to `main` manually (merge commit, not squash, to preserve stage history)
+   - Body: summary of all merged issues/PRs
+2. **Requests Copilot review** and waits via `wait-for-review.ps1`
+3. **Applies review fixes directly** — unlike issue lifecycle which posts `@copilot` comments, stage-finalize checks out the branch and edits files itself (since there's no coding agent assigned)
+4. **Triggers CI** with `trigger-ci-label.ps1 ... -All` (both E2E and ephemeral)
+5. **Applies CI fixes directly** if needed
+6. Returns status `ready-for-user` when all checks pass
+
+**The orchestrator never merges to main.** The final merge is for the user to do manually.
+
+### Step 6: Retrospective (Sub-Agent)
+
+At checkpoints (every 8 iterations by default) and at stage end, the orchestrator dispatches `retrospective` with:
+- All observations collected since last retrospective
+- Computed metrics (iterations, fix attempts, timeouts, etc.)
+- Issue outcomes (final status, attempts used)
+
+The retrospective agent analyzes along 5 dimensions:
+1. **Recurring failures** — same types of review/CI issues across issues
+2. **Bottlenecks** — which lifecycle phases take the most iterations
+3. **Process gaps** — missing info in issue templates
+4. **Agent quality** — do fixes actually resolve issues or introduce new ones
+5. **Self-improvement** — proposed changes to agents, scripts, templates, or limits
+
+Returns a JSON with patterns, proposals, lessons learned, and a health score.
 
 > **Why manual merge to main?** The final merge to `main` is a high-impact, hard-to-reverse operation that affects the production branch. The user should make this decision after reviewing the full-stage PR summary, Copilot review results, and CI status.
 
 ---
 
-## Polling Strategy
+## Helper Scripts
 
-- **Interval:** 20 seconds between status checks
-- **What to poll:**
-  - `get_copilot_job_status` — for coding agent completion
-  - `get_reviews` — for Copilot review completion
-  - `list_workflow_runs` / `get_check_runs` — for CI status
-- **Timeout:** If a job hasn't progressed in 10+ minutes, investigate manually
+All waiting and CI validation is handled by PowerShell scripts in `scripts/orchestrator/`. **Agents must never poll with MCP tools in a loop** — always use these scripts.
+
+| Script | Purpose | Default Timeout | Exit Codes |
+|--------|---------|-----------------|------------|
+| `wait-for-agent.ps1` | Wait for coding agent via timeline events (`copilot_work_finished`) | 1800s (30 min) | 0=done, 1=timeout/failure |
+| `wait-for-review.ps1` | Wait for Copilot review completion | 600s (10 min) | 0=done, 1=timeout |
+| `trigger-ci-label.ps1` | Add CI labels (`run-e2e`, `deploy-ephemeral`) and wait for workflow completion | 1200s (20 min) | 0=pass, 1=fail, 2=timeout |
+| `trigger-and-wait-ci.ps1` | Trigger workflows via `workflow_dispatch` and wait | 1200s (20 min) | 0=pass, 1=fail, 2=timeout |
+| `get-ci-failure-summary.ps1` | Extract failure logs from a workflow run | N/A | 0=summary generated, 1=error |
+
+All scripts support `POLL_INTERVAL` (default 20s) and `POLL_TIMEOUT` environment variable overrides.
+
+### Agent Completion Detection
+
+`wait-for-agent.ps1` detects completion via GitHub timeline events on the PR linked to the issue:
+- `copilot_work_started` — agent is working
+- `copilot_work_finished` — agent completed successfully
+- `copilot_work_finished_failure` — agent failed
+
+### CI Label Triggers
+
+Label-based triggers use `pull_request_target` events, giving the workflow direct PR context:
+- `run-e2e` label → triggers `e2e-local.yml` (local E2E tests)
+- `deploy-ephemeral` label → triggers `deploy-ephemeral.yml` (ephemeral env deploy + E2E tests)
+- Labels are automatically removed after the workflow runs, so they can be re-added to re-trigger
+- **Use `-E2e` for issue PRs** targeting the stage branch
+- **Use `-All` for the final stage PR** targeting main
+
+---
+
+## Retry Limits and Escalation
+
+Enforced by both the orchestrator and sub-agents. If a sub-agent returns `escalated`, the orchestrator accepts it. If a sub-agent doesn't enforce limits, the orchestrator enforces them before dispatching.
+
+| Counter | Limit | Escalation |
+|---------|-------|------------|
+| `reviewFixAttempts` | 3 | Issue → `escalated`, notify user, skip to next issue |
+| `ciFixAttempts` | 3 | Issue → `escalated`, notify user, skip to next issue |
+| Agent timeout count | 2 | After initial + 1 extended retry → `escalated` |
+
+---
+
+## Heartbeat and Checkpoints
+
+### Heartbeat
+
+The orchestrator updates the `heartbeat` section of the state file **before every sub-agent dispatch**, enabling external monitoring:
+
+```json
+{
+  "heartbeat": {
+    "timestamp": "2026-03-10T12:34:56Z",
+    "currentAction": "Dispatching issue-lifecycle for issue #43 (status: ci-failed, attempt 2/3)",
+    "iterationCount": 7
+  }
+}
+```
+
+### Checkpoints
+
+Every `checkpoint.checkpointInterval` iterations (default: 8), the orchestrator:
+1. Writes a checkpoint summary to the user with stage progress
+2. Dispatches the `retrospective` sub-agent with observations since the last checkpoint
+3. Appends the retrospective result to `state.retrospectives[]`
+4. Presents high-priority improvement proposals to the user
+5. Continues processing (does not stop unless user asks)
+
+This provides visibility, an escape hatch if context degrades, and continuous process improvement.
+
+### Observations
+
+After every sub-agent returns, the orchestrator appends a brief observation to `state.observations[]`:
+- Status transitions indicating problems: `review-fixes-needed`, `ci-failed`, `agent-timeout`, `escalated`
+- Successful terminal transitions: `merged`, `ci-passed`
+- Routine transitions (`pending` → `agent-working`) are NOT recorded
 
 ---
 
@@ -275,13 +446,17 @@ This is **Issue {X} of {Y}** in **Stage {N}: {Stage Name}** of the [Next Version
 ## Security Checklist
 
 - [ ] No secrets, tokens, or real user data in code or examples
-- [ ] Input validation at system boundaries
-- [ ] {Domain-specific security items}
+- [ ] Input validation at system boundaries — list each input and its validation rules
+- [ ] All user-provided string fields sanitized before storage
+- [ ] Resource ownership verified — user can only access their own data (e.g., goals scoped to user token)
+- [ ] API error responses use correct HTTP status codes (400 for invalid input, 401 for missing auth, 403 for forbidden, 404 for not found)
+- [ ] URL fields validated if accepted
 
 ## Documentation Standards
 
-- Update {relevant doc files} when behavior changes
-- {Any specific doc requirements}
+- [ ] Update relevant docs in `docs/` when behavior, configuration, or API changes
+- [ ] Update `README.md` if user-facing behavior changed
+- [ ] Update `AGENTS.md` Project Map if new files are added
 
 ## Process Tracking
 
@@ -294,9 +469,9 @@ This is **Issue {X} of {Y}** in **Stage {N}: {Stage Name}** of the [Next Version
 
 ---
 
-## Lessons Learned (Stage 0)
+## Lessons Learned
 
-These observations come from orchestrating Stage 0 (3 issues, 3 PRs):
+These observations come from orchestrating Stages 0–3:
 
 1. **Copilot reviews catch real issues.** PR #34 review found shallow copy bugs (`structuredClone` needed), validation mismatches (0-based vs 1-based order), and missing doc updates. PR #35 review found 3 documentation accuracy issues. Always run reviews.
 
@@ -304,32 +479,69 @@ These observations come from orchestrating Stage 0 (3 issues, 3 PRs):
 
 3. **Mark PRs ready before requesting review.** Copilot review doesn't work on draft PRs. Always set `draft: false` first.
 
-4. **20-second polling is a good balance.** Shorter intervals waste API calls; longer intervals slow the feedback loop.
+4. **Helper scripts are mandatory.** Never poll with MCP tools in a loop — always use the PowerShell scripts in `scripts/orchestrator/`. They handle edge cases (timeline event parsing, workflow filtering by start time, etc.).
 
 5. **Documentation-only PRs still benefit from review.** PR #35 (docs) had 3 accuracy errors caught by Copilot review — wrong immutability claims, incorrect field descriptions.
 
 6. **CI failures should be caught per-PR, not at the end.** Fixing CI issues in the PR where they're introduced is much easier than debugging failures in a full-stage PR.
 
+7. **Only ONE review per PR.** After review fixes, go directly to CI. Do NOT re-request another review — this wastes time and can produce contradictory feedback.
+
+8. **Validate reviews are substantive.** Reviews that say "couldn't review any files" or "unable to review" are invalid — the review happened before code was ready. Return to `review-requested` to re-try.
+
+9. **Never merge without a substantive review.** Even if CI passes, the pre-merge check must verify a real Copilot review exists.
+
+10. **`assign_copilot_to_issue` is not `@copilot` on an issue.** Commenting `@copilot` on an issue does NOT work. Use the MCP tool `assign_copilot_to_issue`. `@copilot` comments only work on PRs.
+
+11. **`-E2e` for issue PRs, `-All` for stage PRs.** Issue PRs targeting the stage branch only need E2E tests. The full-stage PR targeting main needs both E2E and ephemeral deployment tests.
+
+12. **Stage-finalize applies fixes directly.** Unlike issue PRs where `@copilot` comments trigger the coding agent, the stage-finalize sub-agent checks out the branch and edits files itself (no coding agent is assigned to the stage PR).
+
 ---
 
 ## Tools Used
 
-The orchestrator uses these GitHub MCP tools:
+The orchestrator system uses these tools, distributed across sub-agents:
 
+### Orchestrator (coordination only)
 | Tool | Purpose |
 |------|---------|
-| `issue_write` (create) | Create issues with full context |
+| `runSubagent` | Dispatch sub-agents |
+| `readFile` | Read state file |
+| `createFile` / `editFiles` | Write state file |
+| `list_issues` / `list_pull_requests` | Read GitHub state |
+
+### issue-lifecycle
+| Tool | Purpose |
+|------|---------|
 | `assign_copilot_to_issue` | Start the coding agent on an issue |
-| `get_copilot_job_status` | Poll coding agent progress |
-| `update_pull_request` | Mark PR ready (`draft: false`), update target branch |
 | `request_copilot_review` | Trigger Copilot code review |
-| `pull_request_read` (get_reviews) | Check if review is complete |
-| `pull_request_read` (get_review_comments) | Read inline review feedback |
+| `pull_request_read` | Check review status and comments |
+| `update_pull_request` | Mark PR ready (`draft: false`), update target branch |
 | `add_issue_comment` | Post `@copilot` fix instructions on PRs |
-| `issue_write` (update) | Add labels (`run-e2e`, `deploy-ephemeral`) to PRs to trigger CI |
-| `actions_list` (list_workflow_runs) | Check CI workflow status |
-| `actions_get` (get_workflow_run) | Get details of a specific run |
-| `get_job_logs` | Get logs from failing CI jobs for error context |
 | `merge_pull_request` | Merge issue PRs to stage branch (squash) |
+| `runInTerminal` | Execute helper scripts |
+
+### stage-setup
+| Tool | Purpose |
+|------|---------|
 | `create_branch` | Create the stage branch |
+| `issue_write` | Create issues with full context |
+
+### stage-finalize
+| Tool | Purpose |
+|------|---------|
 | `create_pull_request` | Create the full-stage PR to main |
+| `request_copilot_review` | Review the stage PR |
+| `editFiles` | Apply review/CI fixes directly |
+| `runInTerminal` | Execute helper scripts |
+
+### gather-context
+| Tool | Purpose |
+|------|---------|
+| `readFile` / `textSearch` | Read plan docs and repo conventions |
+
+### retrospective
+| Tool | Purpose |
+|------|---------|
+| `readFile` / `textSearch` | Read agent files for analysis |
