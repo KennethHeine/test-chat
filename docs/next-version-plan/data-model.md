@@ -2,11 +2,11 @@
 
 > **Status:** ✅ Implemented (Stage 0). See [project-plan-v2.md](./project-plan-v2.md) for current roadmap.
 >
-> **Quick Reference** — jump directly to an entity: [Goal](#goal) · [ResearchItem](#researchitem) · [Milestone](#milestone) · [IssueDraft](#issuedraft)
+> **Quick Reference** — jump directly to an entity: [Goal](#goal) · [ResearchItem](#researchitem) · [Milestone](#milestone) · [IssueDraft](#issuedraft) · [ExecutionRun](#executionrun) · [ExecutionState](#executionstate) · [ExecutionStep](#executionstep)
 >
 > **Source files:** [`planning-types.ts`](../../planning-types.ts) · [`planning-store.ts`](../../planning-store.ts)
 >
-> **Next:** Stage 4 research item [R5](./research-needed.md#r5-persistent-planning-storage) covers migrating from `InMemoryPlanningStore` to persistent Azure Storage.
+> **Next:** R5 research is complete — Azure Table Storage is the chosen backend. See [R5-persistent-planning-storage.md](./research/R5-persistent-planning-storage.md) for the full schema design. Issue 4.13 implements `AzurePlanningStore`.
 
 ---
 
@@ -29,7 +29,9 @@ User intent
 └─────────────────────────────────────────────────────────┘
 ```
 
-Once an `IssueDraft` is pushed to GitHub, GitHub becomes the source of truth (Issues, Milestones, Projects, PRs). The planning entities in `PlanningStore` are **pre-GitHub** data only.
+Once an `IssueDraft` is pushed to GitHub, GitHub becomes the source of truth (Issues, Milestones, Labels, PRs). The planning entities in `PlanningStore` are **pre-GitHub** data only.
+
+> **Note (R2 decision):** GitHub Projects v2 is **deferred for MVP**. Fine-grained PATs (`github_pat_`) cannot access user-owned Projects v2, which blocks the primary use case (personal repos). Tracking uses Milestones + Labels instead. No project-related entities or fields are needed in the data model. See [R2-github-projects-v2-graphql.md](./research/R2-github-projects-v2-graphql.md) for details and future implementation patterns.
 
 ---
 
@@ -75,6 +77,8 @@ erDiagram
         string[] acceptanceCriteria
         string[] exitCriteria
         string status
+        number githubMilestoneNumber
+        string githubUrl
     }
 
     IssueDraft {
@@ -86,18 +90,46 @@ erDiagram
         string expectedOutcome
         string scopeBoundaries
         string technicalContext
+        FileRef[] filesToModify
+        FileRef[] filesToRead
+        string patternReference
         string[] dependencies
         string[] acceptanceCriteria
         string testingExpectations
+        string[] securityChecklist
+        string[] verificationCommands
         string[] researchLinks
         number order
         string status
         number githubIssueNumber
+        number githubPrNumber
+        string executionStatus
     }
 
     Goal ||--o{ ResearchItem : "has"
     Goal ||--o{ Milestone : "has"
     Milestone ||--o{ IssueDraft : "has"
+```
+
+---
+
+## Shared Types
+
+### FileRef
+
+A `FileRef` identifies a file with a reason for its inclusion. Used by `IssueDraft` to specify which files will be modified and which should be read for context.
+
+**Field table**
+
+| Name | Type | Required? | Max length | Description |
+|------|------|-----------|------------|-------------|
+| `path` | `string` | ✅ | 256 chars | Relative file path (e.g., `server.ts`, `public/app.js`). |
+| `reason` | `string` | ✅ | 500 chars | Why this file is relevant (e.g., "Add new endpoint", "Follow CRUD pattern"). |
+
+**Example**
+
+```json
+{ "path": "tools.ts", "reason": "Add githubWrite() helper following existing githubFetch() pattern" }
 ```
 
 ---
@@ -238,6 +270,8 @@ A `Milestone` represents an ordered delivery phase within a `Goal`. Milestones b
 | `acceptanceCriteria` | `string[]` | ✅ | — | Conditions that must be true for this milestone to be accepted. |
 | `exitCriteria` | `string[]` | ✅ | — | Conditions that must be met before moving to the next milestone. |
 | `status` | `string` (enum) | ✅ | — | Current status: `draft`, `ready`, `in-progress`, or `complete`. |
+| `githubMilestoneNumber` | `number` | ❌ | — | The GitHub milestone number assigned after pushing to GitHub. Only set when the milestone has been created on GitHub. Issues reference milestones by this `number` (not by GitHub ID). |
+| `githubUrl` | `string` | ❌ | — | The GitHub URL (`html_url`) for the milestone. Only set after GitHub creation. |
 
 **Status values**
 
@@ -254,6 +288,7 @@ A `Milestone` represents an ordered delivery phase within a `Goal`. Milestones b
 - `order` must be a number ≥ 1.
 - `status` must be one of `draft`, `ready`, `in-progress`, `complete`.
 - `id` and `goalId` are immutable — `updateMilestone` silently ignores any attempt to change them.
+- `githubMilestoneNumber` and `githubUrl` are optional and start as `undefined`. They are set when the milestone is pushed to GitHub via the `create_github_milestone` tool (Stage 4). GitHub issues reference milestones by `number`, not by ID — this is why the number must be stored.
 - `listMilestones(goalId)` returns milestones sorted by `order` ascending.
 
 **Example**
@@ -275,7 +310,9 @@ A `Milestone` represents an ordered delivery phase within a `Goal`. Milestones b
     "All acceptance criteria pass",
     "Integration test covers the happy path"
   ],
-  "status": "ready"
+  "status": "ready",
+  "githubMilestoneNumber": null,
+  "githubUrl": null
 }
 ```
 
@@ -297,13 +334,20 @@ An `IssueDraft` is an implementation-ready GitHub issue definition tied to a `Mi
 | `expectedOutcome` | `string` | ✅ | 500 chars | The desired end state once this issue is implemented. |
 | `scopeBoundaries` | `string` | ✅ | 1000 chars | What is in scope and explicitly out of scope for this issue. |
 | `technicalContext` | `string` | ✅ | 2000 chars | Background information, patterns, and constraints relevant to implementation. |
+| `filesToModify` | `FileRef[]` | ✅ | — | Files that should be created or modified, with reasons. R9 finding: most impactful missing field — directly determines where the agent works. |
+| `filesToRead` | `FileRef[]` | ✅ | — | Files to read for context (not modified), with reasons. Helps the agent orient before implementation. |
+| `patternReference` | `string` | ❌ | 500 chars | Existing file/pattern to use as implementation reference (e.g., "Follow CRUD pattern in storage.ts"). R9 finding: strongest predictor of clean first-pass code. |
 | `dependencies` | `string[]` | ✅ | — | IDs of other `IssueDraft`s that must be completed before this one. May be empty. |
 | `acceptanceCriteria` | `string[]` | ✅ | — | Conditions that must be true for this issue to be considered complete. |
 | `testingExpectations` | `string` | ✅ | 1000 chars | Description of required tests and testing strategy. |
+| `securityChecklist` | `string[]` | ✅ | — | Security-specific validation rules for this issue (e.g., "Sanitize label names before API submission"). R9 finding: prevents review fix loops. May be empty. |
+| `verificationCommands` | `string[]` | ✅ | — | Exact commands to run for self-verification (e.g., `npx tsc --noEmit`, `npm test`). R9 finding: enables agent self-check. May be empty. |
 | `researchLinks` | `string[]` | ✅ | — | IDs of resolved `ResearchItem`s whose findings are relevant. May be empty. |
 | `order` | `number` | ✅ | — | Position within the milestone. Must be ≥ 1 (1-based). |
 | `status` | `string` (enum) | ✅ | — | Current status: `draft`, `ready`, or `created`. |
 | `githubIssueNumber` | `number` | ❌ | — | The GitHub issue number assigned after pushing to GitHub. Only set when `status` is `created`. |
+| `githubPrNumber` | `number` | ❌ | — | The GitHub PR number created by the Copilot coding agent. Set when the agent creates a PR (detected via `cross-referenced` timeline event). |
+| `executionStatus` | `string` (enum) | ❌ | — | Execution lifecycle status. Only set during Stage 5 execution. See values below. |
 
 **Status values**
 
@@ -313,6 +357,22 @@ An `IssueDraft` is an implementation-ready GitHub issue definition tied to a `Mi
 | `ready` | Fully defined and ready to push to GitHub |
 | `created` | Successfully created as a GitHub issue; `githubIssueNumber` is set |
 
+**Execution status values** (Stage 5 — tracked in `executionStatus` field)
+
+| Value | Meaning |
+|-------|---------|
+| `pending` | Waiting to be assigned to Copilot coding agent |
+| `agent-working` | Copilot coding agent is working on the issue (detected via `copilot_work_started` on PR timeline — R4) |
+| `pr-ready` | Agent created a PR (detected via `cross-referenced` on issue timeline — R4: two-phase polling, Phase 1) |
+| `review-requested` | Copilot code review requested on the PR (reviewer: `copilot-pull-request-reviewer[bot]`) |
+| `review-fixes-needed` | Review comments require fixes; `@copilot` fix posted (reviews are always COMMENTED state — R4) |
+| `ci-ready` | Waiting for CI to run |
+| `ci-passed` | CI passed; ready to merge |
+| `merged` | PR merged to milestone branch |
+| `escalated` | Stop gate triggered; waiting for human resolution (includes `copilot_work_finished_failure` — R4) |
+
+> **Agent constraints (R4):** The Copilot coding agent can only push to `copilot/`-prefixed branches, cannot merge PRs or mark them ready for review, and works on a single repo per task. PRs must be merged by the web app via `PUT .../pulls/{n}/merge`. The API is Public Preview and subject to change.
+
 **Validation rules** (enforced by `PlanningStore.createIssueDraft` and `updateIssueDraft`)
 
 - `id`, `milestoneId`, `title`, `purpose`, `problem`, `expectedOutcome` must be non-empty strings.
@@ -320,6 +380,9 @@ An `IssueDraft` is an implementation-ready GitHub issue definition tied to a `Mi
 - `status` must be one of `draft`, `ready`, `created`.
 - `id` and `milestoneId` are immutable — `updateIssueDraft` silently ignores any attempt to change them.
 - `scopeBoundaries`, `technicalContext`, `testingExpectations` are required fields but not validated for non-emptiness.
+- `filesToModify` and `filesToRead` are required arrays (may be empty). Each element must have non-empty `path` and `reason` strings.
+- `patternReference` is optional. When provided, it should reference an existing file in the codebase.
+- `securityChecklist` and `verificationCommands` are required arrays (may be empty).
 - `listIssueDrafts(milestoneId)` returns drafts sorted by `order` ascending.
 
 **Example**
@@ -334,6 +397,14 @@ An `IssueDraft` is an implementation-ready GitHub issue definition tied to a `Mi
   "expectedOutcome": "Agent can call createGitHubIssue(title, body, labels) and the issue appears in the GitHub repo.",
   "scopeBoundaries": "In scope: single issue creation. Out of scope: batch creation, milestone association.",
   "technicalContext": "Follow the pattern of existing tools in tools.ts. Use the GitHub REST API POST /repos/{owner}/{repo}/issues endpoint.",
+  "filesToModify": [
+    { "path": "tools.ts", "reason": "Add createGitHubIssue tool to createGitHubTools factory" }
+  ],
+  "filesToRead": [
+    { "path": "tools.ts", "reason": "Follow existing githubFetch pattern for new tool" },
+    { "path": "planning-types.ts", "reason": "IssueDraft interface for field mapping" }
+  ],
+  "patternReference": "Follow the existing tool registration pattern in tools.ts createGitHubTools()",
   "dependencies": [],
   "acceptanceCriteria": [
     "Tool is registered in createGitHubTools(token)",
@@ -341,11 +412,102 @@ An `IssueDraft` is an implementation-ready GitHub issue definition tied to a `Mi
     "Returns the created issue number"
   ],
   "testingExpectations": "Add integration test using a real token. Assert the returned issue number is a positive integer.",
+  "securityChecklist": ["Sanitize issue title and body before GitHub API submission", "Use user's own PAT — no elevated permissions"],
+  "verificationCommands": ["npx tsc --noEmit", "npm test"],
   "researchLinks": ["ri-22222222-2222-2222-2222-222222222222"],
   "order": 1,
   "status": "ready"
 }
 ```
+
+---
+
+## Execution State Entities (R8 — Stage 5)
+
+> These entities are defined during Stage 5 implementation. They track the state of autonomous milestone execution and enable crash recovery. See [R8-real-time-progress-updates.md](./research/R8-real-time-progress-updates.md) for the full design.
+
+### ExecutionStep
+
+A literal-union type representing the lifecycle steps of a single issue during execution.
+
+```typescript
+type ExecutionStep =
+  | 'assign_agent' | 'wait_pr' | 'request_review'
+  | 'wait_review' | 'fix_review' | 'wait_ci' | 'merge'
+  | 'done' | 'failed';
+```
+
+| Value | Meaning |
+|-------|---------|
+| `assign_agent` | Assigning Copilot coding agent to the issue |
+| `wait_pr` | Waiting for agent to create a PR (polling issue timeline for `cross-referenced`) |
+| `request_review` | Requesting Copilot code review on the PR |
+| `wait_review` | Waiting for review completion |
+| `fix_review` | Posting `@copilot` fix for review comments |
+| `wait_ci` | Waiting for CI workflow completion |
+| `merge` | Merging the PR to milestone branch |
+| `done` | Issue fully processed and merged |
+| `failed` | Unrecoverable failure; escalated to user |
+
+### ExecutionState
+
+Per-issue execution tracking. Persisted on every step transition (~7 writes per issue).
+
+| Name | Type | Required? | Description |
+|------|------|-----------|-------------|
+| `goalId` | `string` | ✅ | Parent goal ID |
+| `milestoneId` | `string` | ✅ | Parent milestone ID |
+| `issueId` | `string` | ✅ | Planning IssueDraft ID |
+| `githubIssueNumber` | `number` | ✅ | GitHub issue number |
+| `step` | `ExecutionStep` | ✅ | Current lifecycle step |
+| `retryCount` | `number` | ✅ | Number of retries for current step |
+| `prNumber` | `number` | ❌ | GitHub PR number (set when PR detected) |
+| `updatedAt` | `string` | ✅ | ISO 8601 timestamp of last state change |
+| `lastError` | `string` | ❌ | Error message from last failure |
+
+### ExecutionRun
+
+Top-level execution record for a milestone execution. One `ExecutionRun` per execution attempt.
+
+| Name | Type | Required? | Description |
+|------|------|-----------|-------------|
+| `id` | `string` | ✅ | UUID for this execution run |
+| `goalId` | `string` | ✅ | Parent goal ID |
+| `status` | `'running' \| 'paused' \| 'completed' \| 'failed'` | ✅ | Overall execution status |
+| `issues` | `Record<string, ExecutionState>` | ✅ | Per-issue execution state, keyed by issueId |
+| `createdAt` | `string` | ✅ | ISO 8601 timestamp of execution start |
+| `updatedAt` | `string` | ✅ | ISO 8601 timestamp of last update |
+
+**Storage:** Azure Table `executionruns`, PartitionKey = `{tokenHash}` (same pattern as session store), RowKey = `{runId}`. The `issues` record is serialized as a single JSON string property.
+
+**Resume protocol:**
+1. On server start: scan `executionruns` for `status === 'running'` — resume polling loops
+2. On SSE connect: client sends `runId` — server pushes full state snapshot, then streams deltas
+3. On step completion: update `ExecutionState.step`, reset `retryCount`, persist, emit SSE event
+4. Idempotency: each step checks actual GitHub state before acting (e.g., `wait_pr` detects existing PR)
+
+### SSE Event Types
+
+14 event types emitted by the `/api/execute` SSE endpoint:
+
+| Event Type | Key Payload Fields | When Emitted |
+|---|---|---|
+| `issue-start` | `issueNumber`, `title`, `index`, `total` | Issue execution begins |
+| `agent-assigned` | `issueNumber` | Copilot agent assigned |
+| `agent-working` | `issueNumber`, `prNumber`, `elapsed` | Poll confirms agent active |
+| `pr-created` | `issueNumber`, `prNumber`, `prUrl` | PR linked to issue detected |
+| `agent-complete` | `issueNumber`, `prNumber` | `copilot_work_finished` detected |
+| `review-requested` | `prNumber` | Code review requested |
+| `review-complete` | `prNumber`, `state` | Review submitted |
+| `ci-running` | `prNumber`, `runId` | CI workflow detected |
+| `ci-result` | `prNumber`, `conclusion` | CI passed/failed |
+| `merge-complete` | `issueNumber`, `prNumber` | PR merged |
+| `issue-complete` | `issueNumber`, `result` | Issue fully processed |
+| `issue-error` | `issueNumber`, `error`, `recoverable` | Error during processing |
+| `escalation` | `issueNumber`, `reason`, `options[]` | Needs user decision |
+| `heartbeat` | `timestamp` | Every 30s (keep-alive for Azure Container Apps 240s timeout) |
+| `checkpoint` | `milestoneId`, `completedIssues[]`, `cursor` | Recovery bookmark after each issue |
+| `done` | `milestoneId`, `summary` | All issues processed |
 
 ---
 
@@ -406,6 +568,30 @@ The first implementation is in-memory rather than going straight to Azure Storag
 - It follows the exact same pattern as `InMemorySessionStore` in `storage.ts`.
 - A future `AzurePlanningStore` can replace it transparently — the `PlanningStore` interface is the contract.
 
+### Azure Table Storage schema (R5 — decided)
+
+The `AzurePlanningStore` (Issue 4.13) uses **separate tables per entity type** with foreign key PartitionKeys:
+
+| Entity | Table Name | PartitionKey | RowKey |
+|---|---|---|---|
+| Goal | `plangoals` | `{sessionId}` | `{goalId}` |
+| ResearchItem | `planresearch` | `{goalId}` | `{itemId}` |
+| Milestone | `planmilestones` | `{goalId}` | `{milestoneId}` |
+| IssueDraft | `planissues` | `{milestoneId}` | `{draftId}` |
+| ExecutionRun | `executionruns` | `{tokenHash}` | `{runId}` |
+
+**Key design points:**
+- PartitionKey = foreign key enables efficient partition scans for all list queries (e.g., `listMilestones(goalId)` → `PartitionKey eq '{goalId}'`)
+- Array properties (`successCriteria`, `assumptions`, `dependencies`, `securityChecklist`, `verificationCommands`, etc.) serialized as JSON strings (all fit within 64 KiB string property limit)
+- Object array properties (`filesToModify`, `filesToRead`) serialized as JSON strings (each element is a `FileRef` object)
+- No blob offload needed — worst-case entity size ~80 KB (limit is 1 MiB)
+- `getGoal(goalId)` perform a RowKey filter across partitions as fallback (acceptable at <50 goals)
+- Per-user isolation enforced at API layer via `getOwnedGoal()`, not via PartitionKey
+- Factory function: `createPlanningStore(accountName?)` selects Azure or in-memory
+- No Bicep changes — existing storage account supports unlimited tables
+- Cost: <$0.01/month for typical planning operations
+- **ExecutionRun table (R8):** PK=tokenHash (same hashing as session store) scopes execution data per user. `ExecutionState.issues` record is serialized as a single JSON property. ~7 writes per issue (on step transitions, not polling ticks).
+
 ### Separate `PlanningStore` from `SessionStore`
 
 Planning data (goals, research, milestones, issue drafts) is separate from chat session data:
@@ -429,7 +615,7 @@ Status fields (`ResearchItem.status`, `Milestone.status`, `IssueDraft.status`) u
 | File | Purpose |
 |------|---------|
 | [`planning-types.ts`](../../planning-types.ts) | TypeScript interface definitions for `Goal`, `ResearchItem`, `Milestone`, and `IssueDraft` |
-| [`planning-store.ts`](../../planning-store.ts) | `PlanningStore` interface, validation helpers, and `InMemoryPlanningStore` implementation |
+| [`planning-store.ts`](../../planning-store.ts) | `PlanningStore` interface, validation helpers, `InMemoryPlanningStore` implementation, and `AzurePlanningStore` (Issue 4.13) + `createPlanningStore()` factory |
 | [`planning-store.test.ts`](../../planning-store.test.ts) | Unit tests for `InMemoryPlanningStore` — run with `npm run test:planning` |
 
 ---

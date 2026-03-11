@@ -80,7 +80,8 @@
 │   ├── stage-setup.agent.md     # Creates stage branch + issues
 │   ├── issue-lifecycle.agent.md # Advances one issue through PR lifecycle
 │   ├── stage-finalize.agent.md  # Creates full-stage PR, manages review/CI
-│   └── retrospective.agent.md   # Analyzes observations, proposes improvements
+│   ├── retrospective.agent.md   # Analyzes observations, proposes improvements
+│   └── research-worker.agent.md # Executes one research sub-question for the research agent
 ├── scripts/orchestrator/  # PowerShell helper scripts for polling/waiting
 │   ├── wait-for-agent.ps1       # Wait for Copilot coding agent to finish
 │   ├── wait-for-review.ps1      # Wait for Copilot code review to complete

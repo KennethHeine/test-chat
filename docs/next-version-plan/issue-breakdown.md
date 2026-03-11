@@ -35,17 +35,18 @@
 
 | # | Stage | Issue Title | Type | Dependencies |
 |---|-------|------------|------|-------------|
-| 4.1 | 4 | Research GitHub REST API for write operations | Research | None |
-| 4.2 | 4 | Research GitHub Projects v2 GraphQL API | Research | None |
-| 4.3 | 4 | Research Copilot coding agent API surface | Research | None |
-| 4.4 | 4 | Research web app → orchestration bridge architecture | Research | None |
-| 4.5 | 4 | Research persistent storage approach | Research | None |
-| 4.6 | 4 | Create `generate_issue_drafts` tool | Code + Tests | 4.1, Stage 3 |
+| 4.1 | 4 | Research GitHub REST API for write operations | Research | None | ✅ Complete |
+| 4.2 | 4 | Research GitHub Projects v2 GraphQL API | Research | None | ✅ Complete (skip for MVP) |
+| 4.3 | 4 | Research Copilot coding agent API surface | Research | None | ✅ Complete (R3 core + R4 deep-dive) |
+| 4.4 | 4 | Research web app → orchestration bridge architecture | Research | None | ✅ Complete (Option A: direct REST API) |
+| 4.5 | 4 | Research persistent storage approach | Research | None | ✅ Complete (Azure Table Storage, separate tables, FK PartitionKeys) |
+| 4.6a | 4 | Extend `IssueDraft` interface with R9 fields + `FileRef` | Code + Tests | Stage 0 |
+| 4.6 | 4 | Create `generate_issue_drafts` tool | Code + Tests | 4.1, 4.6a, Stage 3 |
 | 4.7 | 4 | Create `update_issue_draft` tool | Code + Tests | 4.6 |
 | 4.8 | 4 | Create `GET /api/milestones/:id/issues` endpoint | Code + Tests | 4.6 |
 | 4.9 | 4 | Create `create_github_issue` tool | Code + Tests | 4.1, 4.6 |
 | 4.10 | 4 | Create `create_github_milestone` tool | Code + Tests | 4.1 |
-| 4.11 | 4 | Create `create_github_project` tool | Code + Tests | 4.2 |
+| 4.11 | 4 | ~~Create `create_github_project` tool~~ (SKIPPED) | ~~Code + Tests~~ | 4.2 |
 | 4.12 | 4 | Create `create_github_branch` and `manage_github_labels` tools | Code + Tests | 4.1 |
 | 4.13 | 4 | Implement persistent PlanningStore backend | Code + Tests | 4.5 |
 | 4.14 | 4 | Planning dashboard layout | Code | None |
@@ -57,23 +58,27 @@
 | 4.20 | 4 | Enhance AI research suggestions | Code + Tests | Stage 2 |
 | 4.21 | 4 | Integration tests for GitHub write tools | Tests | 4.9–4.12 |
 | 4.22 | 4 | Stage 4 documentation | Docs | All Stage 4 |
+| 4.23 | 4 | Add planning/intent/subagent event forwarding to SSE | Code + Tests | None |
+| 4.24 | 4 | Add reasoning effort control (conditional UI + session config) | Code + Tests | None |
+| 4.25 | 4 | Implement user input requests (`onUserInputRequest` + POST endpoint) | Code + Tests | None |
+| 4.26 | 4 | Update `sdk-reference.md` Sections 8-9 (correct outdated entries) | Docs | 4.23 |
 
 ### Stage 5: Execution Orchestration Bridge
 
 | # | Stage | Issue Title | Type | Dependencies |
 |---|-------|------------|------|-------------|
-| 5.1 | 5 | Finalize execution bridge architecture | Research | R3, R4 |
-| 5.2 | 5 | Research real-time progress update mechanism | Research | 5.1 |
-| 5.3 | 5 | Research MCP server integration for SDK ↔ GitHub bridge | Research | R10 |
+| 5.1 | 5 | Document execution bridge architecture (Option A: direct REST API) | Docs | R3 ✅, R4 ✅ |
+| 5.2 | 5 | Research real-time progress update mechanism | Research | 5.1 | ✅ Complete (Polling + SSE primary; Webhooks optional; R8) |
+| 5.3 | 5 | ~~Research MCP server integration~~ (CLOSED by R6, confirmed by R10) | ~~Research~~ | R10 ✅ (closed, confirmed) |
 | 5.4 | 5 | Create execution state model | Code + Tests | 5.1 |
-| 5.5 | 5 | Create `start_execution` API endpoint | Code + Tests | 5.1, Stage 4 |
+| 5.5 | 5 | Create `start_execution` API endpoint (POST /api/execute, SSE) | Code + Tests | 5.1, Stage 4 |
 | 5.6 | 5 | Create execution state machine | Code + Tests | 5.4 |
 | 5.7 | 5 | Create `GET /api/executions/:milestoneId/status` endpoint | Code + Tests | 5.4 |
 | 5.8 | 5 | Create pause/resume execution endpoints | Code + Tests | 5.5 |
-| 5.9 | 5 | Create GitHub Actions workflow for milestone execution | Code | 5.1 |
-| 5.10 | 5 | Create `trigger_execution` tool | Code + Tests | 5.9 |
-| 5.11 | 5 | Implement execution progress polling | Code + Tests | 5.7 |
-| 5.12 | 5 | Implement coding agent assignment mechanism | Code + Tests | 5.1, R4 |
+| 5.9 | 5 | Create `assign_copilot_agent` tool (REST API) | Code + Tests | 5.1 |
+| 5.10 | 5 | Create `request_copilot_review` tool (REST API) | Code + Tests | 5.9 |
+| 5.11 | 5 | Implement execution progress polling (timeline events) | Code + Tests | 5.7 |
+| 5.12 | 5 | Create `post_copilot_fix` tool (@copilot comments) | Code + Tests | 5.11 |
 | 5.13 | 5 | Implement PR review monitoring | Code + Tests | 5.11 |
 | 5.14 | 5 | Implement review fix posting | Code + Tests | 5.13 |
 | 5.15 | 5 | Implement CI status monitoring | Code + Tests | 5.11 |
@@ -315,7 +320,7 @@
 
 > **Goal:** Complete critical research, build GitHub write tools, implement IssueDraft generation, add persistent storage, and create a planning dashboard.
 >
-> **Effort:** ~22 issues | **Prerequisite:** Stages 0–3 ✅
+> **Effort:** ~26 issues | **Prerequisite:** Stages 0–3 ✅
 >
 > **See [project-plan-v2.md](./project-plan-v2.md#stage-4-research-sprint--github-integration--planning-dashboard) for stage overview, security table, and feedback checkpoint.**
 
@@ -325,60 +330,65 @@
 
 ---
 
-### Issue 4.1: Research GitHub REST API for write operations
+### Issue 4.1: Research GitHub REST API for write operations ✅ COMPLETE
 
 **Purpose:** Document the GitHub REST API endpoints needed for creating Issues, Milestones, Labels, and Branches from the web app.
 
-**Research ID:** R1 (BLOCKING) — see [research-needed.md](./research-needed.md)
+**Research ID:** R1 (✅ COMPLETE) — see [R1-github-rest-api-writes.md](./research/R1-github-rest-api-writes.md)
 
 **Expected outcome:**
-- Research document in `docs/next-version-plan/research/github-rest-write-api.md`
+- Research document in `docs/next-version-plan/research/R1-github-rest-api-writes.md`
 - Documents: endpoint URLs, request/response formats, required PAT scopes, rate limits, error handling patterns
-- Tested with curl against a test repo
 
 **Scope:**
 - `POST /repos/{owner}/{repo}/issues` — create issue
 - `POST /repos/{owner}/{repo}/milestones` — create milestone
 - `POST /repos/{owner}/{repo}/labels` — create label
 - `POST /repos/{owner}/{repo}/git/refs` — create branch
-- `PUT /repos/{owner}/{repo}/issues/{number}` — update issue
+- `PATCH /repos/{owner}/{repo}/issues/{number}` — update issue
 - Rate limits and secondary rate limits for creation endpoints
 
 **Dependencies:** None
 
 **Acceptance criteria:**
-- [ ] All endpoints documented with exact request/response formats
-- [ ] PAT scope requirements listed per endpoint
-- [ ] Rate limit strategy documented
-- [ ] Error handling for duplicate names, permission denied, not found
-- [ ] Tested against a test repo with curl
+- [x] All endpoints documented with exact request/response formats
+- [x] PAT scope requirements listed per endpoint (Issues write + Contents write)
+- [x] Rate limit strategy documented (1s delay between writes, monitor `x-ratelimit-remaining`)
+- [x] Error handling for duplicate names, permission denied, not found
+- [x] `githubWrite()` helper pattern proposed for `tools.ts`
 
 **Testing expectations:** Research deliverable only — no code tests
 
 **Security checklist:**
-- [ ] Document required PAT scopes (principle of least privilege)
-- [ ] Document rate limit thresholds to avoid abuse
+- [x] Required PAT scopes documented (Issues write + Contents write — principle of least privilege)
+- [x] Rate limit thresholds documented (5,000/hr primary, 80/min + 500/hr secondary for writes)
 
 ---
 
-### Issue 4.2: Research GitHub Projects v2 GraphQL API
+### Issue 4.2: Research GitHub Projects v2 GraphQL API ✅ COMPLETE
 
 **Purpose:** Determine whether to include GitHub Projects v2 support in MVP, and if so, document the required GraphQL mutations.
 
-**Research ID:** R2 (BLOCKING) — see [research-needed.md](./research-needed.md)
+**Research ID:** R2 (✅ COMPLETE) — see [R2-github-projects-v2-graphql.md](./research/R2-github-projects-v2-graphql.md)
 
 **Expected outcome:**
-- Research document in `docs/next-version-plan/research/github-projects-v2.md`
+- Research document in `docs/next-version-plan/research/R2-github-projects-v2-graphql.md`
 - Decision: Full (GraphQL project management) / Partial (basic project creation + issue linking) / Skip (use Milestones + Labels only)
 - If include: document GraphQL mutations, authentication, rate limits
 
-**Dependencies:** None
+**Key Findings:**
+- Fine-grained PATs (`github_pat_`) cannot access user-owned Projects v2 — documented GitHub limitation, no timeline for resolution
+- All GraphQL mutations exist for full CRUD (`createProjectV2`, `addProjectV2ItemById`, `updateProjectV2ItemFieldValue`)
+- Rate limits generous — 42 mutations uses <1% of hourly budget
+- Raw `githubGraphQL()` helper pattern documented for future use
+
+**Decision:** **(A) Skip Projects v2 for MVP** — use Milestones + Labels for tracking. Fine-grained PAT limitation blocks personal repos (primary use case). Patterns documented for future implementation.
 
 **Acceptance criteria:**
-- [ ] Clear include/skip/partial decision with rationale
-- [ ] If include: GraphQL mutations documented and tested
-- [ ] Complexity assessment (how much code does this add?)
-- [ ] Impact on Stage 4 scope documented
+- [x] Clear include/skip/partial decision with rationale
+- [x] GraphQL mutations documented (in research file, for future reference)
+- [x] Complexity assessment (how much code does this add?)
+- [x] Impact on Stage 4 scope documented (Issue 4.11 skipped)
 
 **Testing expectations:** Research deliverable only
 
@@ -388,90 +398,146 @@
 
 ---
 
-### Issue 4.3: Research Copilot coding agent API surface
+### Issue 4.3: Research Copilot coding agent API surface ✅ COMPLETE (resolved by R3, deep-dive in R4)
 
 **Purpose:** Investigate whether there's a REST API endpoint for programmatically assigning the Copilot coding agent to issues, outside of MCP tools.
 
-**Research ID:** R4 (BLOCKING) — see [research-needed.md](./research-needed.md)
+**Research ID:** R4 (✅ COMPLETE) — see [R4-copilot-coding-agent-api.md](./research/R4-copilot-coding-agent-api.md) for detailed API schemas, code examples, and agent limitations. Core findings first established in [R3-web-app-orchestration-bridge.md](./research/R3-web-app-orchestration-bridge.md).
 
-**Expected outcome:**
-- Research document in `docs/next-version-plan/research/copilot-agent-api.md`
-- Documents: available APIs, authentication, limitations
-- Clear answer: Can we assign Copilot to an issue from a REST call?
+**Key Findings:**
+- GitHub has **public REST APIs** for Copilot coding agent assignment
+- Assign `copilot-swe-agent[bot]` via standard issue assignee endpoints with `agent_assignment` body
+- `agent_assignment` schema (R4): `target_repo` (string, optional), `base_branch` (string, optional), `custom_instructions` (string, optional), `custom_agent` (string, optional), `model` (string, optional)
+- PAT needs 5 fine-grained permissions: metadata (read), actions (r/w), contents (r/w), issues (r/w), pull_requests (r/w)
+- GraphQL alternative also exists (`addAssigneesToAssignable` with `agentAssignment`) — REST recommended for simplicity
+- Two-phase monitoring (R4): poll issue timeline for `cross-referenced` → PR number, then poll PR timeline for `copilot_work_finished`/`copilot_work_finished_failure`
+- No webhook alternative exists; polling is the only monitoring approach (R4)
+- Reviews always COMMENTED — never APPROVED/CHANGES_REQUESTED; dual reviewer bot identity: match both logins (R4)
+- Agent limitations: single repo, `copilot/` branch prefix, cannot merge/approve PRs (R4)
+- API is Public Preview — implementation should be defensive (R4)
 
-**Dependencies:** None
+**Decision:** REST API is fully available. No MCP bridge or Actions trigger needed.
 
 **Acceptance criteria:**
-- [ ] REST API endpoints documented (if they exist)
-- [ ] Alternative approaches documented (GitHub Actions, MCP bridge)
-- [ ] Authentication requirements for each approach
-- [ ] Recommended approach for Stage 5 with pros/cons
-
-**Testing expectations:** Research deliverable only
-
-**Security checklist:**
-- [ ] Document permission boundaries for agent assignment
-- [ ] Document what the agent can/cannot access
+- [x] REST API endpoints documented (in R3 research file)
+- [x] Alternative approaches documented (GraphQL, MCP bridge — not needed)
+- [x] Authentication requirements documented
+- [x] Recommended approach for Stage 5 with pros/cons
 
 ---
 
-### Issue 4.4: Research web app → orchestration bridge architecture
+### Issue 4.4: Research web app → orchestration bridge architecture ✅ COMPLETE
 
 **Purpose:** Determine how the web app (Express server) will connect to the existing agent orchestration process (.github/agents/) to trigger and monitor autonomous execution.
 
-**Research ID:** R3 (BLOCKING) — see [research-needed.md](./research-needed.md)
+**Research ID:** R3 (✅ COMPLETE) — see [R3-web-app-orchestration-bridge.md](./research/R3-web-app-orchestration-bridge.md)
 
-**Expected outcome:**
-- Research document in `docs/next-version-plan/research/execution-bridge.md`
-- Evaluates three approaches: Option A (REST API direct), Option B (Actions workflow trigger), Option C (Hybrid)
-- Recommended approach with architecture diagram
+**Key Findings:**
+- GitHub has **public REST APIs** for Copilot coding agent assignment and code review — the original assumption that these were MCP-only was wrong
+- **Option A (direct REST API) is the recommended approach** — simplest architecture, reuses existing patterns
+- Option B (Actions workflow) is overcomplicated now that REST API is available
+- Option C (Hybrid) adds no benefit over Option A
+- All monitoring patterns exist in the codebase (`wait-for-agent.ps1`, `wait-for-review.ps1`) and translate directly to TypeScript
+- New components: `execution.ts`, `POST /api/execute` (SSE endpoint), `POST /api/execute/abort`
 
-**Dependencies:** None (but informed by Issue 4.3)
+**Decision:** **Option A — Web App Uses REST API Directly.** The web app orchestrates the entire execution loop: create issues, assign Copilot agent, poll for completion, request Copilot review, post fix requests, trigger CI via labels, merge PRs. All via REST API using the user's PAT. Progress streamed to browser via SSE.
+
+**Impact on Stage 5:**
+- Issues 5.9-5.12 changed from "GitHub Actions Integration" to "REST API Execution Tools"
+- No `execute-milestone.yml` workflow needed
+- No `trigger_execution` tool needed (replaced by `assign_copilot_agent`)
+- Issue 5.3 (MCP server research) deprioritized
+- PAT scopes expanded: actions+contents+issues+pull_requests (read+write)
 
 **Acceptance criteria:**
-- [ ] All three options evaluated with pros/cons
-- [ ] Recommended approach documented with rationale
-- [ ] Architecture diagram for the recommended approach
-- [ ] Impact on Stage 5 issue structure documented
-
-**Testing expectations:** Research deliverable only
-
-**Security checklist:**
-- [ ] Document security boundaries between systems
-- [ ] Document authentication flow for cross-system calls
+- [x] All three options evaluated with pros/cons
+- [x] Recommended approach documented with rationale
+- [x] Architecture diagram for the recommended approach
+- [x] Impact on Stage 5 issue structure documented
 
 ---
 
-### Issue 4.5: Research persistent storage approach
+### Issue 4.5: Research persistent storage approach ✅ COMPLETE
 
 **Purpose:** Decide on the persistent storage backend for planning data (replacing InMemoryPlanningStore).
 
-**Research ID:** R5 (BLOCKING) — see [research-needed.md](./research-needed.md)
+**Research ID:** R5 (✅ COMPLETE) — see [R5-persistent-planning-storage.md](./research/R5-persistent-planning-storage.md)
 
-**Expected outcome:**
-- Research document in `docs/next-version-plan/research/persistent-storage.md`
-- Evaluates: Azure Table + Blob (production), node:sqlite (lightweight), Hybrid
-- Schema design for the chosen approach
-- Migration strategy from InMemoryPlanningStore
+**Key Findings:**
+- **Azure Table Storage** is the clear choice — zero additional infrastructure, proven pattern in `storage.ts`
+- **Separate tables per entity type:** `plangoals` (PK=sessionId, RK=goalId), `planresearch` (PK=goalId, RK=itemId), `planmilestones` (PK=goalId, RK=milestoneId), `planissues` (PK=milestoneId, RK=draftId)
+- **All fields fit in Table Storage** — no blob offload needed (worst-case entity ~80 KB, limit 1 MiB)
+- **Array properties** (successCriteria, assumptions, etc.) serialized as JSON strings
+- **node:sqlite eliminated** — data lost on scale-to-zero, SMB locking risks, architectural inconsistency
+- **Zero interface changes** — add `AzurePlanningStore` class + `createPlanningStore()` factory
+- **Per-user isolation** enforced at API layer via `getOwnedGoal()`; PartitionKey hierarchy (sessionId→goalId→milestoneId) naturally scopes data
+- **No Bicep changes** — existing storage account supports unlimited tables
+- **Cost:** <$0.01/month
+
+**Decision:** Azure Table Storage with separate tables and foreign key PartitionKeys.
 
 **Dependencies:** None
 
 **Acceptance criteria:**
-- [ ] Options evaluated with pros/cons (cost, complexity, scalability)
-- [ ] Schema design for chosen approach
-- [ ] Migration plan from InMemoryPlanningStore interface
-- [ ] Data scoping strategy (per-user isolation)
+- [x] Options evaluated with pros/cons (cost, complexity, scalability)
+- [x] Schema design for chosen approach
+- [x] Migration plan from InMemoryPlanningStore interface
+- [x] Data scoping strategy (per-user isolation)
 
 **Testing expectations:** Research deliverable only
 
 **Security checklist:**
-- [ ] Data isolation between users
-- [ ] Encryption at rest
-- [ ] Access control model
+- [x] Data isolation between users (API-layer ownership via `getOwnedGoal()`, PartitionKey hierarchy)
+- [x] Encryption at rest (Azure Storage default)
+- [x] Access control model (DefaultAzureCredential, user's PAT not stored in table)
 
 ---
 
 ### IssueDraft Generation (Issues 4.6–4.8)
+
+---
+
+### Issue 4.6a: Extend `IssueDraft` interface with R9 quality fields
+
+**Purpose:** Add the 5 new fields identified by R9 research to the `IssueDraft` interface, plus a new `FileRef` interface. These fields are prerequisites for generating high-quality coding agent issues in Issue 4.6.
+
+**Research ID:** R9 (✅ COMPLETE) — see [R9-issue-draft-quality.md](./research/R9-issue-draft-quality.md)
+
+**Expected outcome:**
+- New `FileRef` interface in `planning-types.ts`: `{ path: string, reason: string }`
+- 5 new fields on `IssueDraft` interface:
+  - `filesToModify: FileRef[]` — files to create or modify, with per-file reasons (R9: most impactful missing field)
+  - `filesToRead: FileRef[]` — context files to read before implementation (R9: agent orientation)
+  - `patternReference?: string` — existing file/pattern to follow (R9: strongest predictor of clean first-pass code)
+  - `securityChecklist: string[]` — per-issue security validation rules (R9: prevents review fix loops)
+  - `verificationCommands: string[]` — exact self-check commands (R9: enables agent self-verification)
+- `PlanningStore` validation updated: `filesToModify`/`filesToRead` elements require non-empty `path` and `reason`
+- `InMemoryPlanningStore` handles new fields
+- Existing unit tests updated; new tests for `FileRef` validation
+- `data-model.md` already updated (done during R9 integration)
+
+**Files to modify:**
+- `planning-types.ts` — add `FileRef` interface + 5 new `IssueDraft` fields
+- `planning-store.ts` — update validation for new fields
+- `planning-store.test.ts` — add tests for new fields and `FileRef` validation
+
+**Pattern to follow:** Follow the existing field addition pattern in `planning-types.ts` and validation pattern in `planning-store.ts`.
+
+**Dependencies:** Stage 0 (existing IssueDraft interface)
+
+**Acceptance criteria:**
+- [ ] `FileRef` interface exported from `planning-types.ts`
+- [ ] All 5 new fields present on `IssueDraft` interface with JSDoc comments
+- [ ] `PlanningStore.createIssueDraft` validates `FileRef` elements have non-empty `path` and `reason`
+- [ ] Existing unit tests still pass
+- [ ] New unit tests for `FileRef` validation
+- [ ] `npx tsc --noEmit` passes
+
+**Testing expectations:**
+- Unit tests in `planning-store.test.ts`
+
+**Security checklist:**
+- [ ] `FileRef.path` validated (no path traversal patterns)
 
 ---
 
@@ -483,19 +549,32 @@
 - `generate_issue_drafts` tool registered in Copilot SDK session
 - Tool accepts a milestone ID and generates `IssueDraft` entities
 - Each draft contains: clear problem statement, exact scope, technical context (files, patterns, APIs), dependencies, acceptance criteria, testing expectations, research links
+- **R9 quality requirements:** Each draft also contains `filesToModify`, `filesToRead`, `patternReference` (where applicable), `securityChecklist`, and `verificationCommands`
+- Tool validates generated drafts against the **Issue Quality Checklist** (R9) before saving:
+  - Has clear problem statement (`problem` non-empty, <1000 chars)
+  - Has acceptance criteria (≥1 criterion, each testable)
+  - Has file references (`filesToModify` ≥1 file with reason)
+  - Has scope boundaries (includes "Out of scope" items)
+  - Has test expectations (names specific test commands)
+  - Has verification commands (≥1 runnable command)
+  - Appropriate scope (≤5 files modified, ≤1 layer: backend OR frontend)
+  - Pattern reference (optional but strongly recommended)
+  - Research context (required if research was conducted)
+  - Security checklist (required if accepting user input)
 
-**Dependencies:** Issue 4.1, Stage 3 (milestones)
+**Dependencies:** Issue 4.1, Issue 4.6a (R9 interface extension), Stage 3 (milestones)
 
 **Acceptance criteria:**
-- [ ] Generates issue drafts with all required IssueDraft fields populated
-- [ ] Research item findings baked into relevant issues
+- [ ] Generates issue drafts with all required IssueDraft fields populated (including R9 fields: `filesToModify`, `filesToRead`, `patternReference`, `securityChecklist`, `verificationCommands`)
+- [ ] Generated drafts pass R9 Issue Quality Checklist validation
+- [ ] Research item findings baked into relevant issues (rendered in `technicalContext` and `researchLinks`)
 - [ ] Issue ordering respects dependency chains
 - [ ] Each issue is self-contained enough for a coding agent to implement without asking questions
 - [ ] Integration test verifies tool invocation and output structure
 
 **Testing expectations:**
 - Integration tests for tool invocation
-- Test that generated issues pass the quality gate (all fields populated, dependencies valid)
+- Test that generated issues pass the quality gate (all fields populated, dependencies valid, R9 checklist passes)
 
 **Security checklist:**
 - [ ] Content sanitized for GitHub API submission
@@ -510,11 +589,13 @@
 **Expected outcome:**
 - `update_issue_draft` tool — accepts issue draft ID and partial update
 - Updates stored in PlanningStore
+- Supports updating all IssueDraft fields including R9 fields (`filesToModify`, `filesToRead`, `patternReference`, `securityChecklist`, `verificationCommands`)
 
 **Dependencies:** Issue 4.6
 
 **Acceptance criteria:**
-- [ ] Can update any IssueDraft field
+- [ ] Can update any IssueDraft field (including R9 fields)
+- [ ] `FileRef` elements validated on update (non-empty `path` and `reason`)
 - [ ] Validates updated content
 - [ ] Integration test for update operation
 
@@ -559,20 +640,29 @@
 **Purpose:** Push an approved IssueDraft to GitHub as a real issue.
 
 **Expected outcome:**
-- `create_github_issue` tool — calls `POST /repos/{owner}/{repo}/issues`
+- `create_github_issue` tool — calls `POST /repos/{owner}/{repo}/issues` (201 Created)
 - Takes an IssueDraft id, formats it for GitHub, creates the issue
-- Returns the created GitHub issue number and URL
+- Returns the created GitHub issue `number` and `html_url`
 - Updates the IssueDraft status to `created` with the GitHub issue number
 
-**Dependencies:** Issue 4.1, Issue 4.6
+**R1 Technical Details:**
+- Request body: `{ title, body, labels?, assignees?, milestone? }` — milestone is the GitHub milestone **number** (not ID)
+- Labels/assignees on update **REPLACE** entirely — always include the full desired set
+- Response: `{ id, number, html_url, state, created_at }`
+- Without push access, changes to `milestone`, `labels`, `assignees` are **silently dropped** — verify response matches expectations
+- Uses new `githubWrite(token, "POST", path, body)` helper (created in Issue 4.10)
+
+**Dependencies:** Issue 4.1 ✅, Issue 4.6, Issue 4.10 (for `githubWrite()` helper)
 
 **Acceptance criteria:**
 - [ ] Creates a real GitHub issue from an IssueDraft
-- [ ] Issue body contains all relevant fields formatted as Markdown
-- [ ] Milestone association set if GitHub Milestone exists
+- [ ] Issue body contains all relevant fields formatted as Markdown (including R9 fields: file references, pattern reference, security checklist, verification commands)
+- [ ] **Research Context** section rendered in issue body from `researchLinks` (R9 finding: template currently drops this)
+- [ ] Milestone association set if GitHub Milestone exists (uses milestone `number`)
 - [ ] Labels applied if configured
 - [ ] IssueDraft status updated to `created`
 - [ ] Handles duplicate creation gracefully (idempotent)
+- [ ] Verifies response fields match expected values (silent failure detection)
 
 **Testing expectations:**
 - Integration tests against a real GitHub test repo
@@ -587,19 +677,27 @@
 
 ### Issue 4.10: Create `create_github_milestone` tool
 
-**Purpose:** Create a GitHub Milestone from a planning Milestone.
+**Purpose:** Create a GitHub Milestone from a planning Milestone. **Also introduces the `githubWrite()` helper** used by all subsequent write tools.
 
 **Expected outcome:**
-- `create_github_milestone` tool — calls `POST /repos/{owner}/{repo}/milestones`
+- New `githubWrite(token, method, path, body)` helper added to `tools.ts` (R1 confirmed pattern)
+- `create_github_milestone` tool — calls `POST /repos/{owner}/{repo}/milestones` (201 Created)
 - Takes a planning milestone ID, creates the GitHub Milestone
-- Returns the GitHub milestone number
+- Returns the GitHub milestone `number` (stored back on the planning Milestone for issue association)
 
-**Dependencies:** Issue 4.1
+**R1 Technical Details:**
+- Request body: `{ title, description?, due_on? }` — `due_on` is ISO 8601 format
+- Response: `{ number, id, html_url, state, open_issues, closed_issues }`
+- Update via `PATCH /repos/{owner}/{repo}/milestones/{number}` (200 OK) — all body params optional
+- The `number` field is critical: issues reference milestones by `number`, not `id`
+
+**Dependencies:** Issue 4.1 ✅
 
 **Acceptance criteria:**
+- [ ] `githubWrite()` helper created in `tools.ts` with method + body support
 - [ ] Creates a GitHub Milestone with title, description, due date
 - [ ] Handles existing milestones gracefully (idempotent)
-- [ ] Milestone number stored back on the planning Milestone entity
+- [ ] Milestone `number` and `html_url` stored back on the planning Milestone entity
 
 **Testing expectations:**
 - Integration tests against a real GitHub test repo
@@ -611,28 +709,19 @@
 
 ---
 
-### Issue 4.11: Create `create_github_project` tool
+### Issue 4.11: ~~Create `create_github_project` tool~~ — SKIPPED
 
-**Purpose:** Create a GitHub Project v2 and add issues to it (scope depends on R2 research decision).
+**Purpose:** ~~Create a GitHub Project v2 and add issues to it.~~
 
-**Expected outcome:**
-- If R2 = Full: `create_github_project` tool using GraphQL mutations
-- If R2 = Partial: basic project creation + issue linking
-- If R2 = Skip: this issue is skipped entirely
+**Status:** SKIPPED — R2 research determined that fine-grained PATs (`github_pat_`) cannot access user-owned Projects v2. Since this app requires fine-grained PATs and the primary audience uses personal repos, Projects v2 is not viable for MVP. Use Milestones + Labels for tracking instead.
 
-**Dependencies:** Issue 4.2
+**Future:** If GitHub resolves the fine-grained PAT limitation, all GraphQL patterns are documented in [R2-github-projects-v2-graphql.md](./research/R2-github-projects-v2-graphql.md) — including `createProjectV2`, `addProjectV2ItemById`, `updateProjectV2ItemFieldValue` mutations, a ready-to-use `githubGraphQL()` helper, and rate limit analysis.
+
+**Dependencies:** Issue 4.2 ✅
 
 **Acceptance criteria:**
-- [ ] Decision from R2 implemented
-- [ ] If implemented: project created with issues linked
-- [ ] If skipped: issue closed with rationale
-
-**Testing expectations:**
-- Integration tests if implemented; n/a if skipped
-
-**Security checklist:**
-- [ ] GraphQL mutations use user's own PAT
-- [ ] Requires explicit user approval
+- [x] Decision from R2 implemented (Skip)
+- [x] Issue closed with rationale
 
 ---
 
@@ -641,16 +730,24 @@
 **Purpose:** Set up GitHub repository infrastructure (milestone branches and tracking labels).
 
 **Expected outcome:**
-- `create_github_branch` tool — calls `POST /repos/{owner}/{repo}/git/refs` to create a milestone branch
-- `manage_github_labels` tool — creates labels for milestone/issue categorization
+- `create_github_branch` tool — two-step process (R1 confirmed):
+  1. `GET /repos/{owner}/{repo}/git/ref/heads/{base_branch}` to get base SHA
+  2. `POST /repos/{owner}/{repo}/git/refs` with `{ ref: "refs/heads/{name}", sha }` (201 Created)
+- `manage_github_labels` tool — `POST /repos/{owner}/{repo}/labels` with `{ name, color?, description? }` (201 Created)
+  - Color is hex **without** `#` prefix (e.g., `f29513`)
 - Both handle existing resources gracefully (idempotent)
 
-**Dependencies:** Issue 4.1
+**R1 Technical Details:**
+- Branch duplicate: creating an existing ref returns `422 Validation Failed` — catch and treat as success
+- Label duplicate: returns `422` with `errors[].code === "already_exists"` — catch and treat as success
+- Uses `githubWrite()` helper from Issue 4.10
+
+**Dependencies:** Issue 4.1 ✅, Issue 4.10 (for `githubWrite()` helper)
 
 **Acceptance criteria:**
 - [ ] Branch created from specified base SHA with naming convention (e.g., `milestone/{name}`)
 - [ ] Labels created with consistent color scheme
-- [ ] Both tools handle duplicates without error
+- [ ] Both tools handle duplicates without error (422 `already_exists` caught)
 - [ ] Branch names sanitized (no special characters)
 
 **Testing expectations:**
@@ -667,33 +764,46 @@
 
 ---
 
-### Issue 4.13: Implement persistent PlanningStore backend
+### Issue 4.13: Implement `AzurePlanningStore` backend
 
-**Purpose:** Replace InMemoryPlanningStore with a persistent storage backend so planning data survives server restarts.
+**Purpose:** Replace InMemoryPlanningStore with Azure Table Storage so planning data survives server restarts.
 
-**Expected outcome:**
-- New storage implementation (Azure Table+Blob, node:sqlite, or hybrid — based on R5 decision)
-- Implements the existing `PlanningStore` interface
-- Drop-in replacement for InMemoryPlanningStore
-- Migration path: environment variable selects backend
+**Expected outcome (R5 confirmed):**
+- New `AzurePlanningStore` class in `planning-store.ts` implementing `PlanningStore` interface
+- 4 separate Azure tables: `plangoals` (PK=sessionId, RK=goalId), `planresearch` (PK=goalId, RK=itemId), `planmilestones` (PK=goalId, RK=milestoneId), `planissues` (PK=milestoneId, RK=draftId)
+- Array properties (successCriteria, assumptions, constraints, risks, acceptanceCriteria, exitCriteria, dependencies, researchLinks, securityChecklist, verificationCommands) serialized as JSON strings
+- Object array properties (`filesToModify`, `filesToRead`) serialized as JSON strings (each element is a `FileRef` object)
+- `createPlanningStore(accountName?)` factory function — returns `AzurePlanningStore` if `accountName` is provided, else `InMemoryPlanningStore`
+- `initialize()` method creates all 4 tables (ignore 409 conflict)
+- `getGoal(goalId)` uses RowKey filter across all partitions as fallback (acceptable at low volume <50 goals)
+- Server.ts changes: `createPlanningStore(storageAccountName || undefined)` + call `initialize()` if Azure
+- No Bicep changes — existing storage account supports unlimited tables
 
-**Dependencies:** Issue 4.5
+**Implementation pattern:** Follow `AzureSessionStore` in `storage.ts` exactly:
+- Constructor takes `accountName`, creates 4 `TableClient` instances via `DefaultAzureCredential`
+- `initialize()` calls `createTable()` + catch 409 for all 4 tables
+- Upsert with `"Merge"` mode, delete with 404 catch
+- Entity-to-type mapping helpers (serialize arrays with `JSON.stringify`, deserialize with `JSON.parse`)
+
+**Dependencies:** Issue 4.5 ✅
 
 **Acceptance criteria:**
-- [ ] Implements full `PlanningStore` interface
+- [ ] Implements full `PlanningStore` interface (20+ methods)
 - [ ] Data survives server restart
-- [ ] Data scoped to authenticated user (no cross-user access)
-- [ ] Existing unit tests pass with new backend
-- [ ] Fallback to InMemoryPlanningStore when storage is unavailable
+- [ ] Per-user isolation via PartitionKey hierarchy + API-layer `getOwnedGoal()` checks
+- [ ] Existing unit tests pass with new backend (extract shared test suite)
+- [ ] Fallback to InMemoryPlanningStore when `accountName` not provided
+- [ ] Array properties correctly round-trip through JSON serialization
 
 **Testing expectations:**
-- Unit tests (same suite as InMemoryPlanningStore)
-- Integration tests for persistence across restart
+- Extract shared test suite from `planning-store.test.ts` into a function that accepts any `PlanningStore`
+- Run shared suite against both `InMemoryPlanningStore` and `AzurePlanningStore`
+- Integration tests for Azure backend gated by env var (like session store)
 
 **Security checklist:**
-- [ ] Data isolation between users
-- [ ] No plaintext tokens in storage
-- [ ] Connection strings via environment variables
+- [ ] Data isolation between users (API-layer ownership checks)
+- [ ] No plaintext tokens in storage (tokens never stored; PK hierarchy uses sessionId/goalId/milestoneId)
+- [ ] Connection via `DefaultAzureCredential` (no connection strings in code)
 
 ---
 
@@ -835,7 +945,7 @@
 **Purpose:** Let users review all planned GitHub mutations, confirm, and execute the batch push.
 
 **Expected outcome:**
-- Summary page showing all GitHub mutations that will be created (issues, milestone, labels, branch, project)
+- Summary page showing all GitHub mutations that will be created (issues, milestone, labels, branch)
 - Diff-like view: "These N issues will be created, this milestone will be created..."
 - Confirm button executes the batch
 - Progress indicator showing which mutations completed
@@ -901,7 +1011,6 @@
 
 **Expected outcome:**
 - Integration tests for: `create_github_issue`, `create_github_milestone`, `create_github_branch`, `manage_github_labels`
-- If R2 = include: tests for `create_github_project`
 - Tests create real GitHub resources and verify they exist
 - Cleanup: tests clean up created resources after verification
 
@@ -948,6 +1057,145 @@
 
 ---
 
+### SDK Feature Enhancements (Issues 4.23–4.26)
+
+> R6 research identified SDK features that improve planning UX with minimal effort. These follow the existing `session.on()` → SSE pattern in `server.ts` and require no architectural changes.
+
+---
+
+### Issue 4.23: Add planning/intent/subagent event forwarding to SSE
+
+**Purpose:** Forward SDK planning, intent, subagent, and compaction events to the browser via SSE, enabling real-time status indicators during agent operations.
+
+**Research ID:** R6 SQ7 — see [R6-sdk-unused-features.md](./research/R6-sdk-unused-features.md)
+
+**Expected outcome:**
+- New `session.on()` listeners in `POST /api/chat` for: `session.mode_changed`, `assistant.intent`, `subagent.started`, `subagent.completed`, `subagent.failed`, `session.compaction_start`, `session.compaction_complete`
+- SSE events emitted: `planning_start` (→"plan" mode), `plan_ready` (exit plan mode), `intent` (status text), `subagent_start`, `subagent_end`, `compaction`
+- Frontend renders: "Planning..." spinner, status text ("Exploring codebase..."), sub-agent progress counter, "Optimizing context..." badge
+
+**R6 Critical Correction:** `planning.started` and `planning.end` events listed in `sdk-reference.md` **do not exist in the SDK**. The real events are `session.mode_changed` (with `previousMode`/`newMode` fields), `session.plan_changed`, and `exit_plan_mode.requested` (with `summary`, `planContent`, `actions[]`, `recommendedAction`).
+
+**Implementation:** ~85 lines total. Each event is ~5 lines following the identical `session.on()` → `res.write(SSE)` pattern already established for `tool.execution_start`, `session.title_changed`, and `assistant.usage`.
+
+**Dependencies:** None
+
+**Acceptance criteria:**
+- [ ] All 7 event types forwarded to SSE
+- [ ] Frontend displays appropriate status indicators
+- [ ] Unsubscribe cleanup follows existing pattern (no memory leaks)
+- [ ] Integration test verifies SSE event emission
+
+**Testing expectations:**
+- Integration tests for event forwarding
+- E2E test for frontend indicator rendering
+
+**Security checklist:**
+- [ ] Event data sanitized before SSE emission
+- [ ] No internal state leaked in event payloads
+
+---
+
+### Issue 4.24: Add reasoning effort control
+
+**Purpose:** Allow users to select reasoning effort level for models that support it (e.g., `o4-mini`), improving research quality with an explicit cost/quality trade-off.
+
+**Research ID:** R6 SQ4 — see [R6-sdk-unused-features.md](./research/R6-sdk-unused-features.md)
+
+**Expected outcome:**
+- Backend: `buildSessionConfig()` accepts `reasoningEffort` parameter; passed to `createSession()` config
+- Frontend: Conditional `<select>` dropdown shown when selected model has `capabilities.supports.reasoningEffort === true`
+- Levels: `low`, `medium`, `high`, `xhigh` (from `supportedReasoningEfforts` array on model metadata)
+- Default: `defaultReasoningEffort` from model metadata
+- `/api/models` response already includes model capabilities — frontend reads `supportedReasoningEfforts` field
+
+**Implementation:** ~30 lines backend (accept parameter, pass to config) + ~20 lines frontend (conditional dropdown, pass with chat request).
+
+**Dependencies:** None
+
+**Acceptance criteria:**
+- [ ] Dropdown appears only for models with reasoning support
+- [ ] Selected effort level passed to session config
+- [ ] Default matches model's `defaultReasoningEffort`
+- [ ] Integration test verifies reasoning effort in session config
+
+**Testing expectations:**
+- Integration test with a reasoning-capable model
+- E2E test for conditional dropdown rendering
+
+**Security checklist:**
+- [ ] Effort level validated against allowed values from model metadata (not user-arbitrary strings)
+
+---
+
+### Issue 4.25: Implement user input requests
+
+**Purpose:** Enable the Copilot agent to ask structured questions mid-conversation (e.g., multiple-choice selections during goal definition), bridging the SDK's `ask_user` tool to the SSE-based frontend.
+
+**Research ID:** R6 SQ2 — see [R6-sdk-unused-features.md](./research/R6-sdk-unused-features.md)
+
+**Expected outcome:**
+- Backend: `onUserInputRequest` callback added to `buildSessionConfig()` return object
+- Backend: New `POST /api/chat/input` endpoint to receive user answers (resolves pending Promise)
+- Backend: `pendingInputs` Map scoped per SSE connection with timeout handling
+- SSE event: `{ type: "user_input_request", requestId, question, choices?, allowFreeform? }`
+- Frontend: Renders choice buttons or freeform text input; POSTs answer to `/api/chat/input`
+
+**Flow:**
+1. Agent invokes `ask_user` → SDK calls `onUserInputRequest` → server blocks (Promise)
+2. Server sends SSE event with question/choices to browser
+3. Browser renders UI, user selects/types answer
+4. Browser POSTs to `/api/chat/input` → server resolves Promise → agent continues
+
+**Implementation:** ~15 lines `onUserInputRequest` handler + ~20 lines POST endpoint + ~50 lines frontend UI + timeout handling.
+
+**Dependencies:** None
+
+**Acceptance criteria:**
+- [ ] Agent can request user input via `ask_user` tool
+- [ ] Choices and freeform questions both supported
+- [ ] Answer delivered back to agent, conversation continues
+- [ ] Timeout after configurable duration (prevents hanging sessions)
+- [ ] Pending requests cleaned up on SSE disconnect
+
+**Testing expectations:**
+- Integration test for the POST endpoint and Promise resolution
+- E2E test for the full flow (agent asks → user answers → agent continues)
+
+**Security checklist:**
+- [ ] `requestId` validated (UUID format, exists in pending map)
+- [ ] Answer content sanitized
+- [ ] Pending request map cleaned up on disconnect (no memory leaks)
+
+---
+
+### Issue 4.26: Update `sdk-reference.md` Sections 8-9
+
+**Purpose:** Correct outdated "unused feature" entries in `sdk-reference.md` that no longer reflect the codebase state, and fix incorrect event names.
+
+**Research ID:** R6 — see [R6-sdk-unused-features.md](./research/R6-sdk-unused-features.md) "Codebase Correction" section
+
+**Expected outcome:**
+- Section 8 updated: mark custom tools, session hooks, system message, tool events, title events, usage events, session resumption, and permission handler as **implemented**
+- Section 8 event table: remove non-existent `planning.started`/`planning.end`; replace with `session.mode_changed`, `session.plan_changed`, `exit_plan_mode.requested`
+- Section 9 recommendations: mark already-implemented items as complete
+- Add new "Remaining Unused Features" list: MCP, user input requests, reasoning effort, file attachments, BYOK, custom agents, fleet mode, planning/intent/subagent events, compaction events, reasoning delta events, `session.disconnect()`
+
+**Dependencies:** Issue 4.23 (so the newly implemented events are reflected)
+
+**Acceptance criteria:**
+- [ ] All 7 outdated entries corrected (R6 finding)
+- [ ] Non-existent event names removed
+- [ ] Remaining unused features listed accurately
+- [ ] Section reflects current codebase state
+
+**Testing expectations:** Documentation review only
+
+**Security checklist:**
+- [ ] No secrets or tokens in documentation
+
+---
+
 ## Stage 5: Execution Orchestration Bridge
 
 > **Goal:** Connect the web app to the existing agent orchestration process, enabling users to start, monitor, and control autonomous milestone execution from the browser.
@@ -956,28 +1204,35 @@
 >
 > **See [project-plan-v2.md](./project-plan-v2.md#stage-5-execution-orchestration-bridge) for stage overview, security table, and feedback checkpoint.**
 >
-> **Note:** The exact architecture depends on research decisions from Stage 4 (R3: bridge approach, R4: Copilot agent API). Issues below use the likely "hybrid" approach. This will be adjusted based on research findings.
+> **Architecture decided (R3, deepened by R4):** The web app uses **Option A: direct REST API** to orchestrate execution. No GitHub Actions workflow bridge needed. Copilot coding agent is assigned via `copilot-swe-agent[bot]` assignee + `agent_assignment` REST body (target_repo, base_branch, custom_instructions, custom_agent, model). Review via `copilot-pull-request-reviewer[bot]` (match both bot logins; reviews always COMMENTED). Progress via two-phase timeline polling: issue timeline → PR timeline (20s). No webhook alternative. API is Public Preview. Issues below reflect this decision.
 
 ### Research Finalization (Issues 5.1–5.3)
 
 ---
 
-### Issue 5.1: Finalize execution bridge architecture
+### Issue 5.1: Document execution bridge architecture
 
-**Purpose:** Based on R3/R4 research findings from Stage 4, finalize and document the architecture for connecting the web app to the agent orchestration process.
+**Purpose:** Document the finalized Option A (direct REST API) architecture for the execution bridge, as determined by R3/R4 research.
 
 **Expected outcome:**
 - `docs/next-version-plan/execution-architecture.md` with finalized architecture
-- Sequence diagrams for: start execution, monitor progress, pause/resume, escalation
-- API contract between web app and orchestration layer
+- Sequence diagrams for: assign Copilot → poll completion → request review → post fixes → merge
+- API contracts for `POST /api/execute` (SSE) and `POST /api/execute/abort`
+- `githubWrite()` usage patterns for all Copilot agent interactions
 
-**Dependencies:** R3, R4 from Stage 4
+**Dependencies:** R3 ✅, R4 ✅ (both complete)
 
 **Acceptance criteria:**
-- [ ] Architecture documented with diagrams
-- [ ] API contracts defined
+- [ ] Option A architecture documented with diagrams
+- [ ] API contracts defined for `/api/execute` SSE endpoint
+- [ ] Copilot agent assignment REST API documented with examples (from R4 code examples)
+- [ ] `agent_assignment` parameter schema documented: target_repo, base_branch, custom_instructions, custom_agent, model (R4)
+- [ ] Two-phase timeline polling pattern documented: Phase 1 on issue timeline (find PR via `cross-referenced`), Phase 2 on PR timeline (`copilot_work_finished`/`copilot_work_finished_failure`) (R4)
+- [ ] Timeline polling pattern documented (20s interval, events to watch)
+- [ ] No webhook alternative documented — polling is the only approach (R4)
+- [ ] Agent limitations documented: single repo, `copilot/` branch prefix, can't merge/approve, Public Preview API (R4)
+- [ ] PAT scope requirements documented: metadata (read), actions+contents+issues+pull_requests (read+write)
 - [ ] Security boundaries documented
-- [ ] Decision rationale captured
 
 **Testing expectations:** Research deliverable only
 
@@ -987,52 +1242,54 @@
 
 ---
 
-### Issue 5.2: Research real-time progress update mechanism
+### Issue 5.2: Research real-time progress update mechanism ✅ COMPLETE
 
 **Purpose:** Determine how execution progress reaches the browser — polling GitHub API, webhook relay, or Actions-based hybrid.
 
-**Research ID:** R8 — see [research-needed.md](./research-needed.md)
+**Research ID:** R8 (✅ COMPLETE) — see [R8-real-time-progress-updates.md](./research/R8-real-time-progress-updates.md)
 
-**Expected outcome:**
-- Research document with recommended approach
-- Latency analysis for each option
-- Implementation complexity comparison
+**Key Findings:**
+- **Polling + SSE is the primary approach** — server polls GitHub API at adaptive intervals (30s idle / 15s active / 60s no-PR), feeds results into SSE stream using existing `/api/chat` pattern
+- **Webhooks are optional enhancement** — reduce latency from ~20s to ~1s but add HMAC-SHA256 verification, public endpoint, and per-repo webhook registration
+- **Adaptive polling** is optimal: ~12 concurrent issues within rate limits
+- **14 SSE event types** defined (issue-start through done, plus heartbeat and checkpoint)
+- **Heartbeats essential** — 30s keep-alive prevents Azure Container Apps 240s idle timeout
+- **Crash recovery via checkpoints + cursor** — client saves checkpoint to localStorage, reconnects with cursor
+- **Execution state model** — `ExecutionStep` type, `ExecutionState` per-issue, `ExecutionRun` per-execution; persisted in Azure Table `executionruns` (PK=tokenHash, RK=runId); ~7 writes per issue
+- **Async generator + AbortSignal** pattern for server-side execution loop
+- **Frontend UI components** — view tabs, milestone accordion, issue cards with step pipeline, event log, control bar, escalation banner
 
-**Dependencies:** Issue 5.1
+**Decision:** **Polling + SSE (primary), Webhooks (optional enhancement).** Extends existing codebase patterns, requires no new infrastructure, supports crash recovery.
+
+**Impact on Stage 5:**
+- Issue 5.4: execution state model uses R8's `ExecutionStep`/`ExecutionState`/`ExecutionRun` types
+- Issue 5.5: `/api/execute` uses async generator + AbortSignal, emits 14 SSE event types, includes 30s heartbeats
+- Issue 5.11: uses adaptive polling (30s/15s/60s), not fixed 20s
+- Issue 5.22: UI components follow R8's view tabs + milestone accordion + step pipeline design
+- Issue 5.26: checkpoint/cursor reconnection, heartbeat miss detection (>45s)
 
 **Acceptance criteria:**
-- [ ] Options evaluated with latency and complexity
-- [ ] Recommended approach documented
-- [ ] Impact on frontend implementation documented
-
-**Testing expectations:** Research deliverable only
-
-**Security checklist:**
-- [ ] Webhook security (if using webhooks)
+- [x] Options evaluated with latency and complexity
+- [x] Recommended approach documented
+- [x] Impact on frontend implementation documented
+- [x] Execution state model defined
+- [x] SSE event types defined
+- [x] Crash recovery protocol defined
 
 ---
 
-### Issue 5.3: Research MCP server integration for SDK ↔ GitHub bridge
+### Issue 5.3: ~~Research MCP server integration for SDK ↔ GitHub bridge~~ — CLOSED (resolved by R6, confirmed by R10)
 
-**Purpose:** Investigate whether the Copilot SDK can use MCP servers directly, potentially simplifying the bridge between the web app and GitHub write operations.
+**Purpose:** ~~Investigate whether the Copilot SDK can use MCP servers directly, potentially simplifying the bridge between the web app and GitHub write operations.~~
 
-**Research ID:** R10 — see [research-needed.md](./research-needed.md)
+**Status:** CLOSED — R6 research (SQ1) confirmed that native `Tool` handlers are simpler, faster (no IPC overhead), and already proven for this project. Dedicated R10 research validated this conclusion with deeper analysis: the official GitHub MCP Server (`github/github-mcp-server`, 28k stars, v0.32) covers ~90% of needed write operations but requires Docker, is missing milestone creation, and cannot host planning tools. Custom `Tool[]` wins on simplicity, performance (~0ms vs ~1-5ms IPC per call), token isolation (closure binding vs env var injection), and resource efficiency (no extra process per session). See [R10-mcp-server-architecture.md](./research/R10-mcp-server-architecture.md) and [R6-sdk-unused-features.md](./research/R6-sdk-unused-features.md).
 
-**Expected outcome:**
-- Research document on MCP integration possibilities
-- Decision: does this change the bridge architecture?
-
-**Dependencies:** R10
+**Research ID:** R10 — closed by R6, confirmed by dedicated R10 research
 
 **Acceptance criteria:**
-- [ ] MCP server integration capability documented
-- [ ] Impact on bridge architecture assessed
-- [ ] Recommendation documented
-
-**Testing expectations:** Research deliverable only
-
-**Security checklist:**
-- [ ] MCP sandboxing requirements documented
+- [x] Decision from R3 implemented (MCP bridge not needed for execution)
+- [x] Decision confirmed by R6 SQ1 (native tools > MCP for this use case)
+- [x] Decision validated by R10 (detailed comparison, official GitHub MCP Server evaluation, future reconsider triggers documented)
 
 ---
 
@@ -1042,12 +1299,14 @@
 
 ### Issue 5.4: Create execution state model
 
-**Purpose:** Extend the data model to track milestone execution state, mirroring the orchestrator-state.json schema for web app consumption.
+**Purpose:** Define the data model for tracking milestone execution state, enabling crash recovery and real-time progress streaming.
 
 **Expected outcome:**
-- Execution state types: `ExecutionState`, `IssueExecution`, `ExecutionEvent`
-- Tracks each issue through: pending → agent-working → pr-ready → review-requested → review-fixes-needed → ci-ready → ci-passed → merged
-- Persisted in PlanningStore (or dedicated execution store)
+- `ExecutionStep` literal-union type: `assign_agent` | `wait_pr` | `request_review` | `wait_review` | `fix_review` | `wait_ci` | `merge` | `done` | `failed` (R8 design)
+- `ExecutionState` interface: per-issue tracking with `goalId`, `milestoneId`, `issueId`, `githubIssueNumber`, `step`, `retryCount`, `prNumber?`, `updatedAt`, `lastError?`
+- `ExecutionRun` interface: per-execution with `id`, `goalId`, `status` (running/paused/completed/failed), `issues` (Record<string, ExecutionState>), `createdAt`, `updatedAt`
+- Persisted in Azure Table Storage: `executionruns` table, PK=`tokenHash`, RK=`runId`
+- State persisted on every step transition (~7 writes per issue, not on polling ticks)
 
 **Dependencies:** Issue 5.1
 
@@ -1066,15 +1325,26 @@
 
 ---
 
-### Issue 5.5: Create `start_execution` API endpoint
+### Issue 5.5: Create `POST /api/execute` SSE endpoint
 
-**Purpose:** Initialize milestone execution — creates GitHub infrastructure and triggers the orchestration process.
+**Purpose:** Initialize milestone execution and run the execution loop, streaming progress to the browser via Server-Sent Events.
 
 **Expected outcome:**
-- `POST /api/executions/:milestoneId/start` endpoint
+- `POST /api/execute` SSE endpoint (same headers pattern as `/api/chat`)
 - Creates milestone branch and labels (using Stage 4 tools)
-- Triggers the orchestration process (via Actions workflow or direct API based on R3)
-- Returns execution ID
+- Runs execution loop using **async generator + AbortSignal** pattern (R8): for each issue → assign Copilot → poll for PR → request review → post fixes → CI → merge
+- Streams 14 SSE event types (R8): `issue-start`, `agent-assigned`, `agent-working`, `pr-created`, `agent-complete`, `review-requested`, `review-complete`, `ci-running`, `ci-result`, `merge-complete`, `issue-complete`, `issue-error`, `escalation`, `heartbeat`, `checkpoint`, `done`
+- **30s heartbeat** interval prevents Azure Container Apps 240s idle timeout (R8)
+- **Checkpoint events** emitted after each issue with `milestoneId`, `completedIssues[]`, `cursor` for crash recovery (R8)
+- `POST /api/execute/abort` endpoint to stop execution
+- `req.on("close")` triggers AbortController to clean up polling on disconnect
+
+**R3 Technical Details:**
+- Reuses SSE headers pattern from `/api/chat` endpoint
+- Uses `githubWrite()` for all GitHub API calls
+- Polling at 20s intervals for agent completion (proven pattern from R3)
+- Error handling: stream error event and pause for user decision
+- Server must stay running during execution chains (hours) — persistent state needed (R5 dependency)
 
 **Dependencies:** Issue 5.1, Stage 4
 
@@ -1169,78 +1439,118 @@
 
 ---
 
-### GitHub Actions Integration (Issues 5.9–5.12)
+### REST API Execution Tools (Issues 5.9–5.12)
+
+> R3 finding: GitHub has public REST APIs for Copilot coding agent assignment and code review. No GitHub Actions workflow bridge needed.
 
 ---
 
-### Issue 5.9: Create GitHub Actions workflow for milestone execution
+### Issue 5.9: Create `assign_copilot_agent` tool
 
-**Purpose:** Create a parameterized `workflow_dispatch` workflow that runs the orchestrator agent for a milestone.
+**Purpose:** Assign the Copilot coding agent to an issue via REST API, triggering autonomous implementation.
 
 **Expected outcome:**
-- `.github/workflows/execute-milestone.yml` workflow
-- Accepts inputs: milestone ID, branch name, issue list
-- Runs the orchestrator agent with the provided context
+- `assign_copilot_agent` tool — calls `POST /repos/{owner}/{repo}/issues/{issue_number}/assignees`
+- Body: `{ assignees: ["copilot-swe-agent[bot]"], agent_assignment: { target_repo, base_branch, custom_instructions, model } }`
+- Agent assignment tracked in execution state
+- Timeout detection (agent doesn't start within expected timeframe)
+
+**R3/R4 Technical Details:**
+- Three REST endpoints support assignment: POST (add assignee), PATCH (update issue), POST (create issue with assignee)
+- `agent_assignment` parameter schema (R4): `target_repo` (string, optional — defaults to issue's repo), `base_branch` (string, optional — defaults to default branch), `custom_instructions` (string, optional), `custom_agent` (string, optional — references `.github/agents/`), `model` (string, optional — depends on org policy)
+- Error codes: 401 (bad auth), 403 (missing perms/rate limited), 404 (not found/hidden), 422 (agent not available/not enabled)
+- GraphQL alternative: `addAssigneesToAssignable` with `agentAssignment` field (requires `GraphQL-Features` header) — REST recommended
+- PAT needs 5 fine-grained permissions: metadata (read), actions (r/w), contents (r/w), issues (r/w), pull_requests (r/w)
+- API is Public Preview — implementation should be defensive, validate response fields
+- Agent can only push to `copilot/` prefixed branches; cannot merge PRs or mark them ready for review
 
 **Dependencies:** Issue 5.1
 
 **Acceptance criteria:**
-- [ ] Workflow triggered via `workflow_dispatch` API
-- [ ] Inputs validated
-- [ ] Orchestrator agent runs with correct context
-- [ ] Workflow logs accessible for debugging
+- [ ] Can assign Copilot coding agent to a specific issue via REST API
+- [ ] `agent_assignment` body includes base branch (milestone branch)
+- [ ] Assignment confirmed (tracked in execution state)
+- [ ] Timeout detection for assignments that don't start
+- [ ] Error handling for assignment failures (permissions, rate limits)
 
 **Testing expectations:**
-- Manual test of workflow dispatch
+- Integration tests (requires Copilot access + PAT with required scopes)
+- <!-- TODO: Verify `copilot-swe-agent[bot]` identity works with fine-grained PATs before implementation -->
 
 **Security checklist:**
-- [ ] Workflow permissions scoped to minimum required
-- [ ] Input sanitization in workflow
+- [ ] Agent scoped to milestone branch via `base_branch`
+- [ ] Uses user's own PAT
+- [ ] Custom instructions sanitized
 
 ---
 
-### Issue 5.10: Create `trigger_execution` tool
+### Issue 5.10: Create `request_copilot_review` tool
 
-**Purpose:** Call the GitHub Actions `workflow_dispatch` API to start the orchestrator workflow.
+**Purpose:** Request Copilot code review on a PR via the standard GitHub review request API.
 
 **Expected outcome:**
-- `trigger_execution` tool — calls `POST /repos/{owner}/{repo}/actions/workflows/{id}/dispatches`
-- Passes milestone data as workflow inputs
-- Returns workflow run ID
+- `request_copilot_review` tool — calls `POST /repos/{owner}/{repo}/pulls/{pull_number}/requested_reviewers`
+- Copilot appears as a reviewer in the standard reviewer mechanism
+- Poll for review completion via `GET .../pulls/{n}/reviews`
+
+**R3/R4 Technical Details:**
+- Copilot reviewer bot identity: `copilot-pull-request-reviewer[bot]` (primary) or `copilot-pull-request-review[bot]` (alternative) — match both for robustness (R4)
+- Reviews always have state `"COMMENTED"` (never `"APPROVED"` or `"CHANGES_REQUESTED"`) — reviews don't block merging and don't count toward required approvals (R4)
+- `@copilot` comments on PRs trigger Copilot to make fixes (but NOT on issues)
+- Request review: `POST .../pulls/{n}/requested_reviewers` with `{ reviewers: ["copilot-pull-request-reviewer[bot]"] }` → 201 Created
+- Poll reviews: `GET .../pulls/{n}/reviews` — look for `user.login` matching either bot name
+- Invalid review detection: check body for "wasn't able to review", "couldn't review any files", "unable to review" patterns (R4)
 
 **Dependencies:** Issue 5.9
 
 **Acceptance criteria:**
-- [ ] Workflow triggered successfully
-- [ ] Correct inputs passed
-- [ ] Run ID returned for monitoring
-- [ ] Error handling for missing workflow or permissions
+- [ ] Can request Copilot code review on a PR
+- [ ] Review completion detected via polling
+- [ ] Review comments parsed and classified
+- [ ] Error handling for review request failures
+- <!-- TODO: Verify exact reviewer identity string with live API test -->
 
 **Testing expectations:**
-- Integration tests (requires token with Actions scope)
+- Integration tests with real PRs
 
 **Security checklist:**
-- [ ] Validates workflow exists before triggering
 - [ ] Uses user's own PAT
+- [ ] Conservative review classification
 
 ---
 
 ### Issue 5.11: Implement execution progress polling
 
-**Purpose:** Poll GitHub API to track what the orchestrator is doing — issue timeline events, PR status, CI status.
+**Purpose:** Poll GitHub API to track Copilot coding agent progress and detect state changes.
 
 **Expected outcome:**
-- Polling service that checks GitHub API at regular intervals
-- Updates execution state based on: issue timeline events, PR status changes, CI workflow completions
-- Feeds updates into the execution state machine
+- Polling service that checks GitHub API at configurable intervals (default: 20s, proven in R3)
+- Uses issue timeline events: `copilot_work_started`, `copilot_work_finished`, `copilot_work_finished_failure`, `cross-referenced` (PR creation)
+- Updates execution state based on timeline events, PR status, CI status
+- Feeds updates into execution state machine and SSE stream
+
+**R3/R4 Technical Details:**
+- `GET /repos/{owner}/{repo}/issues/{issue_number}/timeline` — watch for `cross-referenced` events (Phase 1)
+- **Adaptive polling (R8)** — start at 30s; decrease to 15s when `copilot_work_started` detected; increase to 60s for issues with no PR linked yet. Supports ~12 concurrent issues within rate limits.
+- **Two-phase polling (R4 critical detail):**
+  - Phase 1: Poll *issue* timeline for `cross-referenced` event where `source.issue.pull_request` exists → extract PR number
+  - Phase 2: Poll *PR* timeline for `copilot_work_finished` or `copilot_work_finished_failure` (last matching event determines status)
+  - **Important:** `copilot_work_*` events appear on the PR timeline, NOT the issue timeline
+- **Draft PR alternative signal:** Agent creates PRs as draft while working, marks non-draft when done; `copilot_work_finished` is the authoritative signal
+- **No webhook alternative** — no `copilot_work_*` webhook event type exists; polling is the only approach (R4 confirmed)
+- `copilot_work_*` event schemas are not officially documented — derived from working codebase scripts (risk if GitHub changes format)
+- Rate: 180 API calls/hour per monitored issue at 20s interval (well within 5,000/hr limit); adaptive polling (R8) reduces to ~120 req/hr/issue and supports ~12 concurrent issues
+- Can monitor ~27 issues simultaneously before hitting rate limits (fixed interval); ~12 with adaptive (R8 recommended)
+- Existing patterns: `wait-for-agent.ps1` (poll timeline → find PR → poll for completion)
 
 **Dependencies:** Issue 5.7
 
 **Acceptance criteria:**
-- [ ] Polls at configurable interval (default: 30 seconds)
-- [ ] Detects all major events (agent assigned, PR opened, review completed, CI pass/fail, merge)
+- [ ] Polls at configurable interval (default: adaptive — 30s idle / 15s active / 60s no-PR per R8)
+- [ ] Detects all major events (agent started, agent finished, PR created, review completed, CI pass/fail, merge)
 - [ ] Updates execution state correctly
 - [ ] Respects GitHub API rate limits
+- [ ] Timeout after configurable duration (default: 30 minutes)
 
 **Testing expectations:**
 - Integration tests with mock GitHub API responses
@@ -1252,28 +1562,36 @@
 
 ---
 
-### Issue 5.12: Implement coding agent assignment mechanism
+### Issue 5.12: Create `post_copilot_fix` tool
 
-**Purpose:** Enable the web app to assign the Copilot coding agent to an issue, using whatever mechanism R4 research determined.
+**Purpose:** Post `@copilot` comments on PRs to request code fixes for review comments or CI failures.
 
 **Expected outcome:**
-- Based on R4 decision: REST API call, Actions workflow trigger, or MCP bridge
-- Agent assignment tracked in execution state
-- Timeout detection (agent doesn't start within expected timeframe)
+- `post_copilot_fix` tool — calls `POST /repos/{owner}/{repo}/issues/{pull_number}/comments`
+- Body: `{ body: "@copilot Please fix the following:\n..." }`
+- Used for both review fix requests and CI failure fixes
+- Tracks fix attempts per issue
 
-**Dependencies:** Issue 5.1, R4
+**R3 Technical Details:**
+- `@copilot` comments work on PRs but **NOT on issues** — for issues, use the assignee API
+- After posting, poll for agent completion (same as initial assignment)
+- Fix instructions should include: specific items to fix, quoted code, expected behavior
+
+**Dependencies:** Issue 5.11
 
 **Acceptance criteria:**
-- [ ] Can assign Copilot coding agent to a specific issue
-- [ ] Assignment confirmed (tracked in execution state)
-- [ ] Timeout detection for hung assignments
-- [ ] Error handling for assignment failures
+- [ ] Posts `@copilot` fix comments on PRs (not issues)
+- [ ] Fix instructions are clear and specific
+- [ ] Fix attempt count tracked per issue
+- [ ] Max fix attempts respected (escalate when exceeded)
+- [ ] Agent re-completion detected after fix
 
 **Testing expectations:**
-- Integration tests (requires Copilot access)
+- Integration tests
 
 **Security checklist:**
-- [ ] Agent scoped to milestone branch
+- [ ] Fix instructions don't expose system internals
+- [ ] Only posts on PRs (never on issues)
 - [ ] Uses user's own PAT
 
 ---
@@ -1344,12 +1662,23 @@
 - Detects pass/fail completion
 - Extracts failure logs for diagnosis
 
+**R7 Technical Details (CI monitoring via GitHub Actions API):**
+- Poll run status: `GET /repos/{owner}/{repo}/actions/runs/{run_id}` — statuses: `queued`, `in_progress`, `completed`, `waiting`, `requested`, `pending`
+- Run conclusions: `success`, `failure`, `cancelled`, `skipped`, `timed_out`, `action_required`, `stale`, `neutral`, `startup_failure`
+- Job-level detail: `GET .../runs/{run_id}/jobs` returns `jobs[]` with per-step `status`/`conclusion`
+- Download logs: `GET .../runs/{run_id}/logs` → 302 redirect to zip (timestamped per-step text files)
+- List/download artifacts: `GET .../runs/{run_id}/artifacts` + `GET .../artifacts/{id}/zip`
+- PAT scope: `actions:read` sufficient for all monitoring operations
+- Recommended polling interval: 30s for budget-friendly monitoring; use `x-ratelimit-remaining` header for adaptive polling
+- Existing pattern: `scripts/orchestrator/get-ci-failure-summary.ps1` uses `gh api` for job-level failure extraction — translatable to TypeScript
+
 **Dependencies:** Issue 5.11
 
 **Acceptance criteria:**
-- [ ] Detects workflow completion (pass/fail)
-- [ ] Failure logs extracted and summarized
+- [ ] Detects workflow completion (pass/fail) via run status + conclusion polling
+- [ ] Failure logs extracted and summarized (download zip, parse per-step logs)
 - [ ] Handles multiple workflow runs per PR
+- [ ] Job-level failure detail extracted (not just run-level)
 
 **Testing expectations:**
 - Integration tests
@@ -1530,12 +1859,24 @@
 
 ### Issue 5.22: Execution monitor page
 
-**Purpose:** Display live execution status — current issue, agent status, PR status, CI status.
+**Purpose:** Display live execution status with real-time updates showing current issue, agent status, PR status, CI status.
 
-**Expected outcome:**
-- Real-time status display for the active execution
-- Shows: current issue being worked on, agent status, PR status, CI status
-- Event timeline showing recent actions
+**Expected outcome (R8 UI design):**
+- **View Tabs** — toggle between Chat and Execution views
+- **Summary Header** — status badge (running/paused/completed/failed) + progress text ("3/8 issues merged · Milestone 1 of 3")
+- **Milestone Accordion** — collapsible section per milestone with progress bar
+- **Issue Cards** — title, current step, status badge + **6-step pipeline** visualization: assigned → working → PR → review → CI → merged (each step highlighted based on `ExecutionStep`)
+- **Event Log** — scrollable timeline of events with timestamps
+- **Escalation Banner** — inline banner when user decision needed, with action buttons
+
+**SSE Event-to-UI Mapping (R8):**
+- `issue-start` → new issue card appears with "assigned" step active
+- `agent-working` → "working" step highlighted
+- `pr-created` → "PR" step highlighted, link to GitHub PR
+- `review-complete` → "review" step turns green
+- `ci-result` → "CI" step turns green/red
+- `merge-complete` → card turns green, summary counter increments
+- `issue-error` / `escalation` → card turns red, escalation banner appears
 
 **Dependencies:** Issues 5.7, 5.11
 
@@ -1635,10 +1976,14 @@
 
 **Purpose:** Stream execution status updates to the frontend via Server-Sent Events, reusing existing SSE infrastructure.
 
-**Expected outcome:**
-- Execution status changes streamed via SSE
-- Frontend auto-updates without polling
-- Reuses the existing SSE endpoint pattern
+**Expected outcome (R8 design):**
+- Uses same `fetch` + `ReadableStream.getReader()` pattern from existing chat SSE consumer in `app.js`
+- Client-side `streamExecution(milestoneId, issues, owner, repo, cursor)` function
+- Parses SSE `data:` lines, dispatches events to `handleExecutionEvent()` for UI updates
+- **Checkpoint persistence** — `checkpoint` events saved to `localStorage` for crash recovery
+- **Heartbeat miss detection** — if no heartbeat received within 45s, triggers auto-reconnect with last `cursor` from saved checkpoint
+- **Network drop recovery** — on reconnect, POST `/api/execute` with `cursor` parameter to resume from last completed issue
+- **AbortController** — exposed for user-initiated abort via control bar
 
 **Dependencies:** Issue 5.22
 

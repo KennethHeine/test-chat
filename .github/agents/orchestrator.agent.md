@@ -1,7 +1,7 @@
 ---
 name: orchestrator
 description: Stage orchestration agent that drives the full PR lifecycle — creates issues, assigns the coding agent, manages reviews, validates CI, and merges PRs. Does not write code directly.
-tools: [execute/getTerminalOutput, execute/awaitTerminal, execute/killTerminal, execute/runInTerminal, read/readFile, agent, edit/createFile, edit/editFiles, github/list_issues, github/list_pull_requests]
+tools: [execute/getTerminalOutput, execute/awaitTerminal, execute/killTerminal, execute/runInTerminal, read/readFile, agent, github/list_issues, github/list_pull_requests, edit/createFile, edit/editFiles, todo]
 agents: ['gather-context', 'stage-setup', 'issue-lifecycle', 'stage-finalize', 'retrospective']
 ---
 
