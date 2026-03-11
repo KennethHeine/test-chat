@@ -330,6 +330,9 @@ function switchView(view) {
     viewToggleBtn.textContent = "Chat";
     viewToggleBtn.title = "Switch to chat view";
     viewToggleBtn.setAttribute("aria-label", "Switch to chat view");
+    if (currentDashboardPage === "goals") {
+      loadGoalsDashboard();
+    }
   } else {
     chatAreaEl.style.display = "";
     dashboardViewEl.classList.remove("active");
@@ -350,6 +353,314 @@ function navigateDashboard(page) {
   document.querySelectorAll(".dashboard-page").forEach((el) => {
     el.classList.toggle("active", el.id === `dashboard-page-${page}`);
   });
+  if (page === "goals") {
+    loadGoalsDashboard();
+  }
+}
+
+// --- Goal Dashboard ---
+
+const goalsListView = document.getElementById("goals-list-view");
+const goalsDetailView = document.getElementById("goals-detail-view");
+const goalsListContent = document.getElementById("goals-list-content");
+
+/** In-flight guard: true while loadGoalsDashboard() is fetching, to prevent duplicate calls. */
+let goalsLoadInFlight = false;
+
+/**
+ * Loads goals from the API and renders the goal list in the dashboard.
+ * Resets to list view before loading. De-dupes concurrent calls via in-flight guard.
+ */
+async function loadGoalsDashboard() {
+  if (goalsLoadInFlight) return;
+  goalsLoadInFlight = true;
+  showGoalsList();
+  if (!getToken()) {
+    goalsListContent.innerHTML = "";
+    const empty = document.createElement("div");
+    empty.className = "dashboard-empty";
+    empty.innerHTML = '<span class="dashboard-empty-icon">🔑</span><p>Save a GitHub token to view your goals.</p>';
+    goalsListContent.appendChild(empty);
+    goalsLoadInFlight = false;
+    return;
+  }
+
+  goalsListContent.innerHTML = '<div class="dashboard-empty"><span class="dashboard-empty-icon" style="font-size:24px">⏳</span><p>Loading goals…</p></div>';
+
+  try {
+    const res = await fetch("/api/goals", { headers: authHeaders() });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      goalsListContent.innerHTML = "";
+      const empty = document.createElement("div");
+      empty.className = "dashboard-empty";
+      const p = document.createElement("p");
+      p.textContent = (err && err.error) ? err.error : "Failed to load goals.";
+      empty.appendChild(p);
+      goalsListContent.appendChild(empty);
+      return;
+    }
+    const data = await res.json();
+    const goals = Array.isArray(data.goals) ? data.goals : [];
+
+    goalsListContent.innerHTML = "";
+    if (goals.length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "dashboard-empty";
+      empty.innerHTML = '<span class="dashboard-empty-icon">🎯</span><p>No goals yet. Use the chat to define planning goals with Copilot.</p>';
+      goalsListContent.appendChild(empty);
+      return;
+    }
+
+    // Sort goals by createdAt descending (newest first)
+    goals.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
+    // Fetch counts for all goals in parallel
+    const countResults = await Promise.all(goals.map((g) => fetchGoalCounts(g.id)));
+
+    const list = document.createElement("div");
+    list.className = "goal-list";
+    goals.forEach((goal, i) => {
+      const counts = countResults[i];
+      const item = document.createElement("div");
+      item.className = "goal-list-item";
+      item.setAttribute("role", "button");
+      item.setAttribute("tabindex", "0");
+
+      const title = document.createElement("div");
+      title.className = "goal-list-item-title";
+      title.textContent = typeof goal.goal === "string" ? goal.goal : "(untitled goal)";
+      const titleId = `goal-list-item-title-${goal.id ?? i}`;
+      title.id = titleId;
+      item.setAttribute("aria-labelledby", titleId);
+
+      const intent = document.createElement("div");
+      intent.className = "goal-list-item-intent";
+      intent.textContent = typeof goal.intent === "string" ? goal.intent : "";
+
+      const countsEl = document.createElement("div");
+      countsEl.className = "goal-list-item-counts";
+      [
+        { icon: "🔬", label: "research", count: counts.research },
+        { icon: "🏁", label: "milestones", count: counts.milestones },
+        { icon: "📋", label: "issues", count: counts.issues },
+      ].forEach(({ icon, label, count }) => {
+        const span = document.createElement("span");
+        span.className = "goal-list-item-count";
+        span.textContent = `${icon} ${count} ${label}`;
+        countsEl.appendChild(span);
+      });
+
+      item.appendChild(title);
+      item.appendChild(intent);
+      item.appendChild(countsEl);
+
+      item.addEventListener("click", () => showGoalDetail(goal.id));
+      item.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); showGoalDetail(goal.id); }
+      });
+
+      list.appendChild(item);
+    });
+
+    goalsListContent.appendChild(list);
+  } catch (err) {
+    console.warn("Failed to load goals:", err);
+    goalsListContent.innerHTML = "";
+    const empty = document.createElement("div");
+    empty.className = "dashboard-empty";
+    const p = document.createElement("p");
+    p.textContent = "Failed to load goals. Please try again.";
+    empty.appendChild(p);
+    goalsListContent.appendChild(empty);
+  } finally {
+    goalsLoadInFlight = false;
+  }
+}
+
+/**
+ * Fetches research, milestone, and issue counts for a goal.
+ * Returns { research, milestones, issues } with safe numeric fallbacks.
+ * @param {string} goalId
+ */
+async function fetchGoalCounts(goalId) {
+  try {
+    const [researchRes, milestonesRes] = await Promise.all([
+      fetch(`/api/goals/${encodeURIComponent(goalId)}/research`, { headers: authHeaders() }),
+      fetch(`/api/goals/${encodeURIComponent(goalId)}/milestones`, { headers: authHeaders() }),
+    ]);
+    const researchData = researchRes.ok ? await researchRes.json() : {};
+    const milestonesData = milestonesRes.ok ? await milestonesRes.json() : {};
+    const milestones = Array.isArray(milestonesData.milestones) ? milestonesData.milestones : [];
+
+    // Fetch issue counts for each milestone with limited concurrency to avoid large request bursts
+    const ISSUE_FETCH_CONCURRENCY = 5;
+    const issueCounts = [];
+    for (let i = 0; i < milestones.length; i += ISSUE_FETCH_CONCURRENCY) {
+      const batch = milestones.slice(i, i + ISSUE_FETCH_CONCURRENCY);
+      const batchCounts = await Promise.all(
+        batch.map((m) =>
+          fetch(`/api/milestones/${encodeURIComponent(m.id)}/issues`, { headers: authHeaders() })
+            .then((r) => (r.ok ? r.json() : {}))
+            .then((d) => (Array.isArray(d.issues) ? d.issues.length : 0))
+            .catch(() => 0)
+        )
+      );
+      issueCounts.push(...batchCounts);
+    }
+    const totalIssues = issueCounts.reduce((sum, n) => sum + n, 0);
+
+    return {
+      research: Array.isArray(researchData.research) ? researchData.research.length : 0,
+      milestones: milestones.length,
+      issues: totalIssues,
+    };
+  } catch {
+    return { research: 0, milestones: 0, issues: 0 };
+  }
+}
+
+/** Shows the goal list panel and hides the detail panel. */
+function showGoalsList() {
+  goalsListView.classList.remove("hidden");
+  goalsDetailView.classList.add("hidden");
+}
+
+/**
+ * Fetches a goal by ID and renders the detail view.
+ * All user-supplied content is inserted via textContent to prevent XSS.
+ * @param {string} goalId
+ */
+async function showGoalDetail(goalId) {
+  goalsListView.classList.add("hidden");
+  goalsDetailView.classList.remove("hidden");
+  goalsDetailView.innerHTML = '<div class="dashboard-empty"><span class="dashboard-empty-icon" style="font-size:24px">⏳</span><p>Loading goal…</p></div>';
+
+  try {
+    const [goalRes, countsResult] = await Promise.all([
+      fetch(`/api/goals/${encodeURIComponent(goalId)}`, { headers: authHeaders() }),
+      fetchGoalCounts(goalId),
+    ]);
+
+    if (!goalRes.ok) {
+      goalsDetailView.innerHTML = "";
+      const err = await goalRes.json().catch(() => ({}));
+      const errDiv = document.createElement("div");
+      errDiv.className = "dashboard-empty";
+      const p = document.createElement("p");
+      p.textContent = (err && err.error) ? err.error : "Goal not found.";
+      errDiv.appendChild(p);
+      goalsDetailView.appendChild(errDiv);
+      return;
+    }
+
+    const goal = await goalRes.json();
+
+    goalsDetailView.innerHTML = "";
+
+    // Back button
+    const back = document.createElement("button");
+    back.className = "goal-detail-back";
+    back.textContent = "← All Goals";
+    back.addEventListener("click", loadGoalsDashboard);
+    goalsDetailView.appendChild(back);
+
+    // Title
+    const title = document.createElement("div");
+    title.className = "goal-detail-title";
+    title.textContent = typeof goal.goal === "string" ? goal.goal : "(untitled goal)";
+    goalsDetailView.appendChild(title);
+
+    // Intent
+    if (goal.intent) {
+      const intent = document.createElement("div");
+      intent.className = "goal-detail-intent";
+      intent.textContent = goal.intent;
+      goalsDetailView.appendChild(intent);
+    }
+
+    // Counts badges
+    const countsBadges = document.createElement("div");
+    countsBadges.className = "goal-detail-counts";
+    [
+      { icon: "🔬", label: "Research", count: countsResult.research },
+      { icon: "🏁", label: "Milestones", count: countsResult.milestones },
+      { icon: "📋", label: "Issues", count: countsResult.issues },
+    ].forEach(({ icon, label, count }) => {
+      const badge = document.createElement("div");
+      badge.className = "goal-detail-count-badge";
+      const num = document.createElement("span");
+      num.className = "count-number";
+      num.textContent = String(count);
+      const lbl = document.createElement("span");
+      lbl.textContent = `${icon} ${label}`;
+      badge.appendChild(num);
+      badge.appendChild(lbl);
+      countsBadges.appendChild(badge);
+    });
+    goalsDetailView.appendChild(countsBadges);
+
+    // Text field helper
+    function addDetailField(label, value) {
+      if (!value) return;
+      const section = document.createElement("div");
+      section.className = "goal-detail-section";
+      const lbl = document.createElement("div");
+      lbl.className = "goal-detail-section-label";
+      lbl.textContent = label;
+      const val = document.createElement("div");
+      val.className = "goal-detail-section-value";
+      val.textContent = value;
+      section.appendChild(lbl);
+      section.appendChild(val);
+      goalsDetailView.appendChild(section);
+    }
+
+    // List field helper
+    function addDetailList(label, items) {
+      if (!Array.isArray(items) || items.length === 0) return;
+      const section = document.createElement("div");
+      section.className = "goal-detail-section";
+      const lbl = document.createElement("div");
+      lbl.className = "goal-detail-section-label";
+      lbl.textContent = label;
+      const list = document.createElement("ul");
+      list.className = "goal-detail-list";
+      items.forEach((item) => {
+        const li = document.createElement("li");
+        li.textContent = typeof item === "string" ? item : "";
+        list.appendChild(li);
+      });
+      section.appendChild(lbl);
+      section.appendChild(list);
+      goalsDetailView.appendChild(section);
+    }
+
+    addDetailField("Problem Statement", goal.problemStatement);
+    addDetailField("Business Value", goal.businessValue);
+    addDetailField("Target Outcome", goal.targetOutcome);
+    addDetailList("Success Criteria", goal.successCriteria);
+    addDetailList("Assumptions", goal.assumptions);
+    addDetailList("Constraints", goal.constraints);
+    addDetailList("Risks", goal.risks);
+
+    // Metadata
+    const meta = document.createElement("div");
+    meta.className = "goal-detail-meta";
+    const created = goal.createdAt ? new Date(goal.createdAt).toLocaleString() : "";
+    const updated = goal.updatedAt ? new Date(goal.updatedAt).toLocaleString() : "";
+    meta.textContent = `Created: ${created}${updated ? " · Updated: " + updated : ""}`;
+    goalsDetailView.appendChild(meta);
+  } catch (err) {
+    console.warn("Failed to load goal detail:", err);
+    goalsDetailView.innerHTML = "";
+    const errDiv = document.createElement("div");
+    errDiv.className = "dashboard-empty";
+    const p = document.createElement("p");
+    p.textContent = "Failed to load goal. Please try again.";
+    errDiv.appendChild(p);
+    goalsDetailView.appendChild(errDiv);
+  }
 }
 
 function restoreLastSession() {

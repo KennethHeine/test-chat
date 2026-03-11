@@ -755,3 +755,197 @@ test("dashboard nav items show active state on selection", async ({ page }) => {
   await expect(researchNav).toHaveClass(/active/);
   await expect(goalsNav).not.toHaveClass(/active/);
 });
+
+// ─── Goal Overview Page ────────────────────────────────────────
+
+const STUB_GOAL_ID = "test-goal-id-001";
+const STUB_MILESTONE_ID = "test-milestone-id-001";
+
+/** Stubs all goal-related API routes with deterministic test data. */
+async function stubGoalRoutes(page: Page) {
+  await page.route("**/api/goals", (route) => {
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        goals: [
+          {
+            id: STUB_GOAL_ID,
+            sessionId: "session-1",
+            intent: "I want to build a feature-rich dashboard for planning.",
+            goal: "Deliver a planning dashboard with goal, research, and milestone views",
+            problemStatement: "Users lack visibility into planning state.",
+            businessValue: "Increases planning throughput and transparency.",
+            targetOutcome: "Dashboard shows all planning data at a glance.",
+            successCriteria: ["Goal list renders", "Detail view accessible"],
+            assumptions: ["Users have goals saved via chat"],
+            constraints: ["No server-side rendering"],
+            risks: ["API latency may slow load time"],
+            createdAt: "2024-01-01T10:00:00.000Z",
+            updatedAt: "2024-01-02T10:00:00.000Z",
+          },
+        ],
+      }),
+    });
+  });
+
+  await page.route(`**/api/goals/${STUB_GOAL_ID}`, (route) => {
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        id: STUB_GOAL_ID,
+        sessionId: "session-1",
+        intent: "I want to build a feature-rich dashboard for planning.",
+        goal: "Deliver a planning dashboard with goal, research, and milestone views",
+        problemStatement: "Users lack visibility into planning state.",
+        businessValue: "Increases planning throughput and transparency.",
+        targetOutcome: "Dashboard shows all planning data at a glance.",
+        successCriteria: ["Goal list renders", "Detail view accessible"],
+        assumptions: ["Users have goals saved via chat"],
+        constraints: ["No server-side rendering"],
+        risks: ["API latency may slow load time"],
+        createdAt: "2024-01-01T10:00:00.000Z",
+        updatedAt: "2024-01-02T10:00:00.000Z",
+      }),
+    });
+  });
+
+  await page.route(`**/api/goals/${STUB_GOAL_ID}/research`, (route) => {
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        research: [
+          { id: "r1", goalId: STUB_GOAL_ID, category: "architecture", question: "What layout to use?", status: "open", findings: "", decision: "" },
+          { id: "r2", goalId: STUB_GOAL_ID, category: "ux", question: "How should counts be shown?", status: "resolved", findings: "Badges", decision: "Use badge chips" },
+        ],
+      }),
+    });
+  });
+
+  await page.route(`**/api/goals/${STUB_GOAL_ID}/milestones`, (route) => {
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        milestones: [
+          { id: STUB_MILESTONE_ID, goalId: STUB_GOAL_ID, name: "Phase 1", description: "First phase", position: 1, status: "draft", dependencies: [], createdAt: "2024-01-01T10:00:00.000Z", updatedAt: "2024-01-01T10:00:00.000Z" },
+        ],
+      }),
+    });
+  });
+
+  await page.route(`**/api/milestones/${STUB_MILESTONE_ID}/issues`, (route) => {
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        issues: [
+          { id: "i1", milestoneId: STUB_MILESTONE_ID, goalId: STUB_GOAL_ID, title: "Issue 1", body: "Body", labels: [], sequence: 1, createdAt: "2024-01-01T10:00:00.000Z", updatedAt: "2024-01-01T10:00:00.000Z" },
+          { id: "i2", milestoneId: STUB_MILESTONE_ID, goalId: STUB_GOAL_ID, title: "Issue 2", body: "Body", labels: [], sequence: 2, createdAt: "2024-01-01T10:00:00.000Z", updatedAt: "2024-01-01T10:00:00.000Z" },
+        ],
+      }),
+    });
+  });
+
+  // Stub the /api/health and /api/models so the page loads cleanly without a token
+  await page.route("**/api/health", (route) => {
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ status: "ok", storage: "memory" }) });
+  });
+}
+
+test("goals dashboard: list renders with counts from stubbed API", async ({ page }) => {
+  await stubGoalRoutes(page);
+  await page.goto("/");
+  await page.evaluate(() => localStorage.setItem("copilot_github_token", "fake-test-token"));
+
+  // Switch to dashboard view (goals page is default)
+  await page.locator("#view-toggle-btn").click();
+  await expect(page.locator("#dashboard-page-goals")).toBeVisible();
+
+  // Goal list item should appear with the goal title
+  const listItem = page.locator(".goal-list-item").first();
+  await expect(listItem).toBeVisible({ timeout: 10_000 });
+  await expect(listItem.locator(".goal-list-item-title")).toContainText(
+    "Deliver a planning dashboard with goal, research, and milestone views"
+  );
+
+  // Counts should be visible (2 research, 1 milestone, 2 issues)
+  const countsEl = listItem.locator(".goal-list-item-counts");
+  await expect(countsEl).toContainText("2 research");
+  await expect(countsEl).toContainText("1 milestones");
+  await expect(countsEl).toContainText("2 issues");
+});
+
+test("goals dashboard: click on goal opens detail view", async ({ page }) => {
+  await stubGoalRoutes(page);
+  await page.goto("/");
+  await page.evaluate(() => localStorage.setItem("copilot_github_token", "fake-test-token"));
+
+  // Switch to dashboard and wait for goal list
+  await page.locator("#view-toggle-btn").click();
+  const listItem = page.locator(".goal-list-item").first();
+  await expect(listItem).toBeVisible({ timeout: 10_000 });
+
+  // Click the goal to open detail view
+  await listItem.click();
+
+  // List view should be hidden, detail view should show
+  await expect(page.locator("#goals-list-view")).not.toBeVisible();
+  await expect(page.locator("#goals-detail-view")).toBeVisible();
+
+  // Detail view should show the goal title and fields
+  await expect(page.locator(".goal-detail-title")).toContainText(
+    "Deliver a planning dashboard with goal, research, and milestone views"
+  );
+  await expect(page.locator(".goal-detail-intent")).toContainText(
+    "I want to build a feature-rich dashboard for planning."
+  );
+
+  // Count badges should reflect API data
+  const badges = page.locator(".goal-detail-count-badge");
+  await expect(badges).toHaveCount(3);
+  await expect(badges.nth(0).locator(".count-number")).toHaveText("2"); // research
+  await expect(badges.nth(1).locator(".count-number")).toHaveText("1"); // milestones
+  await expect(badges.nth(2).locator(".count-number")).toHaveText("2"); // issues
+});
+
+test("goals dashboard: keyboard Enter opens detail view", async ({ page }) => {
+  await stubGoalRoutes(page);
+  await page.goto("/");
+  await page.evaluate(() => localStorage.setItem("copilot_github_token", "fake-test-token"));
+
+  await page.locator("#view-toggle-btn").click();
+  const listItem = page.locator(".goal-list-item").first();
+  await expect(listItem).toBeVisible({ timeout: 10_000 });
+
+  // Focus and press Enter
+  await listItem.focus();
+  await page.keyboard.press("Enter");
+
+  await expect(page.locator("#goals-detail-view")).toBeVisible();
+  await expect(page.locator(".goal-detail-title")).toBeVisible();
+});
+
+test("goals dashboard: back button returns to goal list", async ({ page }) => {
+  await stubGoalRoutes(page);
+  await page.goto("/");
+  await page.evaluate(() => localStorage.setItem("copilot_github_token", "fake-test-token"));
+
+  await page.locator("#view-toggle-btn").click();
+  const listItem = page.locator(".goal-list-item").first();
+  await expect(listItem).toBeVisible({ timeout: 10_000 });
+
+  // Open detail view
+  await listItem.click();
+  await expect(page.locator("#goals-detail-view")).toBeVisible();
+
+  // Click back button
+  await page.locator(".goal-detail-back").click();
+
+  // Should return to list view
+  await expect(page.locator("#goals-list-view")).toBeVisible();
+  await expect(page.locator("#goals-detail-view")).not.toBeVisible();
+  await expect(page.locator(".goal-list-item")).toBeVisible();
+});
