@@ -467,3 +467,142 @@ test("research checklist XSS prevention: question text is escaped before renderi
   await expect(card).toBeVisible();
   await expect(card.locator(".research-item-question").first()).toContainText("Malicious question");
 });
+
+// ─── Fleet Dispatch UI ─────────────────────────────────────────
+
+test("fleet dispatch button is disabled when no session is active", async ({ page }) => {
+  await page.goto("/");
+
+  const fleetBtn = page.locator("#fleet-btn");
+  await expect(fleetBtn).toBeVisible();
+  await expect(fleetBtn).toBeDisabled();
+});
+
+test("fleet dispatch shows inline error when no session is active at dispatch time", async ({ page }) => {
+  await page.goto("/");
+
+  // Open dialog without setting sessionId (simulates session cleared while dialog was open)
+  await page.evaluate(() => {
+    // @ts-ignore
+    openFleetDialog();
+  });
+
+  await page.locator("#launch-fleet-btn").click();
+
+  // Should show an inline error instead of making a network request
+  const errorEl = page.locator("#fleet-dialog-error");
+  await expect(errorEl).toBeVisible();
+  await expect(errorEl).toContainText("No active session");
+
+  // Dialog should stay open
+  await expect(page.locator("#fleet-dialog-overlay")).toBeVisible();
+});
+
+test("fleet dispatch dialog opens and closes correctly", async ({ page }) => {
+  await page.goto("/");
+
+  // Open dialog directly via the global function (bypasses button disabled state)
+  await page.evaluate(() => {
+    // @ts-ignore — openFleetDialog is defined in app.js global scope
+    openFleetDialog();
+  });
+
+  const dialog = page.locator("#fleet-dialog-overlay");
+  await expect(dialog).toBeVisible();
+  await expect(page.locator("#fleet-prompt-input")).toBeVisible();
+  await expect(page.locator("#launch-fleet-btn")).toBeVisible();
+
+  // Close via Cancel button
+  await page.locator("#cancel-fleet-btn").click();
+  await expect(dialog).not.toBeVisible();
+});
+
+test("fleet dispatch dialog closes when clicking the backdrop", async ({ page }) => {
+  await page.goto("/");
+
+  // Open dialog directly
+  await page.evaluate(() => {
+    // @ts-ignore
+    openFleetDialog();
+  });
+
+  const dialog = page.locator("#fleet-dialog-overlay");
+  await expect(dialog).toBeVisible();
+
+  // Click the overlay backdrop (not the dialog itself)
+  await dialog.click({ position: { x: 10, y: 10 } });
+  await expect(dialog).not.toBeVisible();
+});
+
+test("fleet dispatch shows fleet status indicator after successful launch", async ({ page }) => {
+  await page.goto("/");
+
+  // Mock POST /api/fleet/start — returns only { fleetId, status } matching the real backend contract
+  await page.route("/api/fleet/start", async (route) => {
+    await route.fulfill({
+      status: 201,
+      contentType: "application/json",
+      body: JSON.stringify({ fleetId: "fleet-abc-123", status: "started" }),
+    });
+  });
+
+  // Mock GET /api/fleet/:id/status — follow-up fetch to get the actual subagent count
+  await page.route("/api/fleet/fleet-abc-123/status", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ id: "fleet-abc-123", status: "started", subagentCount: 3 }),
+    });
+  });
+
+  // Set sessionId and open dialog
+  await page.evaluate(() => {
+    // @ts-ignore — sessionId is a module-level let in app.js
+    sessionId = "test-session-id";
+    // @ts-ignore
+    openFleetDialog();
+  });
+
+  await page.locator("#fleet-prompt-input").fill("Test fleet task");
+  await page.locator("#launch-fleet-btn").click();
+
+  // Dialog should close on success
+  await expect(page.locator("#fleet-dialog-overlay")).not.toBeVisible();
+
+  // Fleet status indicator should appear in the status bar with agent count from status fetch
+  const fleetStatus = page.locator("#fleet-status");
+  await expect(fleetStatus).toBeVisible();
+  await expect(fleetStatus).toContainText("Fleet active:");
+  await expect(fleetStatus).toContainText("3 agents");
+});
+
+test("fleet dispatch shows error message when API returns an error", async ({ page }) => {
+  await page.goto("/");
+
+  // Mock the fleet start endpoint to return an error
+  await page.route("/api/fleet/start", async (route) => {
+    await route.fulfill({
+      status: 404,
+      contentType: "application/json",
+      body: JSON.stringify({ error: "Session not found" }),
+    });
+  });
+
+  // Set sessionId and open dialog
+  await page.evaluate(() => {
+    // @ts-ignore — sessionId is a module-level let in app.js
+    sessionId = "test-session-id";
+    // @ts-ignore
+    openFleetDialog();
+  });
+
+  await page.locator("#launch-fleet-btn").click();
+
+  // Error message should appear in the dialog
+  const errorEl = page.locator("#fleet-dialog-error");
+  await expect(errorEl).toBeVisible();
+  await expect(errorEl).toContainText("Session not found");
+
+  // Dialog should stay open
+  await expect(page.locator("#fleet-dialog-overlay")).toBeVisible();
+});

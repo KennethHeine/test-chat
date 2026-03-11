@@ -27,11 +27,13 @@ The frontend is vanilla HTML, CSS, and JavaScript — no frameworks, no build st
 │           │  └─────────────────────────────────┘        │
 │           │                                             │
 │           ├─────────────────────────────────────────────┤
-│           │  [Message input textarea        ] [Send]    │
+│           │  [Message input   ] [⚡ Dispatch Fleet][Send]│
 ├───────────┴─────────────────────────────────────────────┤
-│  ● Connected                                            │
+│  ● Connected          (Fleet active: N agents — hidden) │
 └─────────────────────────────────────────────────────────┘
 ```
+
+> **Note:** The `#fleet-status` indicator in the status bar is hidden by default (`display: none`). It only becomes visible after a fleet is successfully launched in the current session, and is cleared when the session changes or is reset.
 
 **Theme:** GitHub dark mode (`#0d1117` background, `#e6edf3` text).
 
@@ -47,10 +49,12 @@ The frontend is vanilla HTML, CSS, and JavaScript — no frameworks, no build st
 | Message input | `#message-input` | Textarea for user messages |
 | Send button | `#send-btn` | Sends the message (also triggered by Enter key) |
 | Stop button | `#stop-btn` | Cancels streaming via `POST /api/chat/abort` |
+| Dispatch Fleet button | `#fleet-btn` | Opens the fleet launch dialog; disabled when no session is active or streaming |
 | Status indicator | `#status` | Shows connection status (green dot = connected) |
 | Tool activity | In-chat indicator | Shows when the agent is executing a tool |
 | Token usage | Status bar | Displays per-message token count |
 | Quota display | Status bar | Shows remaining premium requests |
+| Fleet status | Status bar (`#fleet-status`) | Shows "Fleet active: N agents" after a successful fleet launch |
 
 ## Application State
 
@@ -125,6 +129,37 @@ The model dropdown (`#model-select`) is populated on page load by fetching `GET 
 ## Quota Display
 
 Premium request quota is fetched via `GET /api/quota` and displayed in the status bar. This helps users monitor their remaining Copilot usage.
+
+## Fleet Dispatch
+
+The "⚡ Dispatch Fleet" button appears in the input area next to the Send button. It is disabled when no session is active or when a response is streaming.
+
+### Flow
+
+1. User clicks "⚡ Dispatch Fleet" — a modal dialog appears (prompt textarea focused)
+2. User optionally enters a task prompt in the textarea
+3. User clicks "Launch Fleet" — `dispatchFleet()` sends `POST /api/fleet/start` with `{ sessionId, prompt? }`
+4. On success: a follow-up `GET /api/fleet/:fleetId/status` is made to retrieve the actual `subagentCount`; the dialog closes and a "Fleet active: N agents" indicator appears in the status bar (agent count derived from the status response, not the start response)
+5. On error: an inline error message is shown inside the dialog
+
+The fleet status indicator is cleared whenever the session changes (session switch, New Chat, or session deletion).
+
+### Keyboard Handling
+
+- **Escape** closes the dialog and returns focus to the fleet button
+- **Cancel** button also returns focus to the fleet button
+
+### Button State
+
+`updateFleetBtnState()` is called whenever `sessionId` or `isStreaming` changes to keep the button state consistent:
+
+- `sessionId === null` → disabled (no active session)
+- `isStreaming === true` → disabled (response is streaming)
+- `sessionId !== null && !isStreaming` → enabled
+
+### XSS Prevention
+
+All dynamic content in the dialog (error messages from API responses) is rendered via `textContent`, not `innerHTML`. The status indicator text is also set via `textContent`.
 
 ## Related Documentation
 

@@ -725,6 +725,108 @@
         font-size: 13px;
       }
     }
+
+    /* Fleet dispatch button */
+    .btn-fleet {
+      background: var(--color-bg-tertiary);
+      border: 1px solid var(--color-accent);
+      color: var(--color-accent);
+      padding: 5px 12px;
+      font-weight: 500;
+      transition: background 0.15s;
+      white-space: nowrap;
+    }
+
+    .btn-fleet:hover { background: rgba(88, 166, 255, 0.15); }
+    .btn-fleet:disabled { opacity: 0.5; cursor: default; }
+
+    /* Fleet launch dialog */
+    #fleet-dialog-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.6);
+      z-index: 200;
+      align-items: center;
+      justify-content: center;
+    }
+
+    #fleet-dialog-overlay.open {
+      display: flex;
+    }
+
+    .fleet-dialog {
+      background: var(--color-bg-secondary);
+      border: 1px solid var(--color-border);
+      border-radius: 10px;
+      width: 480px;
+      max-width: calc(100vw - 32px);
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .fleet-dialog h2 {
+      font-size: 16px;
+      font-weight: 600;
+      color: var(--color-text);
+      margin: 0;
+    }
+
+    .fleet-dialog label {
+      display: block;
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--color-text-muted);
+      margin-bottom: 4px;
+    }
+
+    .fleet-dialog textarea {
+      width: 100%;
+      background: var(--color-bg-tertiary);
+      color: var(--color-text);
+      border: 1px solid var(--color-border);
+      border-radius: var(--radius);
+      padding: 8px 12px;
+      font-family: var(--font-sans);
+      font-size: 14px;
+      resize: vertical;
+      outline: none;
+      min-height: 80px;
+      max-height: 240px;
+      line-height: 1.4;
+    }
+
+    .fleet-dialog textarea::placeholder { color: var(--color-text-muted); }
+    .fleet-dialog textarea:focus { border-color: var(--color-accent); box-shadow: 0 0 0 2px rgba(31, 111, 235, 0.3); }
+
+    .fleet-dialog-error {
+      display: none;
+      color: var(--color-danger);
+      font-size: 13px;
+    }
+
+    .fleet-dialog-actions {
+      display: flex;
+      gap: 8px;
+      justify-content: flex-end;
+    }
+
+    /* Fleet status indicator in status bar */
+    #fleet-status {
+      display: none;
+      margin-left: 12px;
+      color: var(--color-success);
+      font-size: 11px;
+    }
+
+    @media (max-width: 480px) {
+      .btn-fleet {
+        font-size: 12px;
+        padding: 4px 8px;
+      }
+    }
   </style>
 </head>
 <body>
@@ -770,6 +872,7 @@
 
       <div id="input-area">
         <textarea id="message-input" placeholder="Ask Copilot to research a repo, plan tasks, or explore code..." rows="1"></textarea>
+        <button class="btn btn-fleet" id="fleet-btn" title="Dispatch a fleet of agents" disabled>⚡ Dispatch Fleet</button>
         <button class="btn btn-primary" id="send-btn">Send</button>
         <button class="btn btn-danger" id="stop-btn" style="display: none;" title="Stop the current response">Stop</button>
       </div>
@@ -788,6 +891,22 @@
     <span id="quota-display" style="display: none; margin-left: 12px; color: var(--color-text-muted); font-size: 11px;">
       <span id="quota-text"></span>
     </span>
+    <span id="fleet-status"></span>
+  </div>
+
+  <div id="fleet-dialog-overlay" role="dialog" aria-modal="true" aria-labelledby="fleet-dialog-title">
+    <div class="fleet-dialog">
+      <h2 id="fleet-dialog-title">⚡ Dispatch Fleet</h2>
+      <div>
+        <label for="fleet-prompt-input">Task prompt (optional)</label>
+        <textarea id="fleet-prompt-input" placeholder="Describe the task for the fleet agents..." rows="3"></textarea>
+      </div>
+      <div class="fleet-dialog-error" id="fleet-dialog-error"></div>
+      <div class="fleet-dialog-actions">
+        <button class="btn" id="cancel-fleet-btn">Cancel</button>
+        <button class="btn btn-primary" id="launch-fleet-btn">Launch Fleet</button>
+      </div>
+    </div>
   </div>
 
   <script src="app.js"></script>
