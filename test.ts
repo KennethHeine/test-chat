@@ -1117,16 +1117,18 @@ async function testResearchSeedAndRetrieve(): Promise<void> {
 async function testFleetStartNoAuth(): Promise<void> {
   const res = await fetch(`${BASE}/api/fleet/start`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      // Force deterministic 401 by sending an empty Bearer token so extractToken()
+      // does not fall back to process.env.COPILOT_GITHUB_TOKEN.
+      Authorization: "Bearer ",
+    },
     body: JSON.stringify({ sessionId: "some-session" }),
   });
-  // extractToken() falls back to process.env.COPILOT_GITHUB_TOKEN when no Authorization
-  // header is present, so in CI/local runs with the env var set the server may attempt
-  // the fleet start and return 404 (session not found) instead of 401.
-  if (res.status !== 401 && res.status !== 404 && res.status !== 500) {
-    throw new Error(`Expected 401, 404, or 500 (env-token fallback), got ${res.status}`);
+  if (res.status !== 401) {
+    throw new Error(`Expected 401 for unauthenticated fleet start, got ${res.status}`);
   }
-  if (res.status === 401) log("  ", "Confirmed 401 without auth header");
+  log("  ", "Confirmed 401 with empty auth token");
 }
 
 async function testFleetStartMissingSessionId(): Promise<void> {
@@ -1152,11 +1154,15 @@ async function testFleetStartUnknownSession(): Promise<void> {
 }
 
 async function testFleetStatusNoAuth(): Promise<void> {
-  const res = await fetch(`${BASE}/api/fleet/nonexistent-fleet-id/status`);
-  // Same env-token fallback caveat as testFleetStartNoAuth.
-  if (res.status !== 401 && res.status !== 404 && res.status !== 200) {
-    throw new Error(`Expected 401, 404, or 200 (env-token fallback), got ${res.status}`);
+  const res = await fetch(`${BASE}/api/fleet/nonexistent-fleet-id/status`, {
+    // Force deterministic 401 by sending an empty Authorization header, which
+    // prevents extractToken() from falling back to COPILOT_GITHUB_TOKEN.
+    headers: { Authorization: "Bearer " },
+  });
+  if (res.status !== 401) {
+    throw new Error(`Expected 401 without valid auth, got ${res.status}`);
   }
+  log("  ", "Confirmed 401 with empty auth token");
 }
 
 async function testFleetStatusNotFound(): Promise<void> {

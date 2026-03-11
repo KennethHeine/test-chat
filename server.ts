@@ -644,10 +644,21 @@ app.post("/api/fleet/start", async (req: Request, res: Response) => {
     return;
   }
 
-  const { sessionId, prompt } = req.body;
+  const { sessionId: rawSessionId, prompt } = req.body;
 
-  if (!sessionId || typeof sessionId !== "string") {
+  if (typeof rawSessionId !== "string") {
     res.status(400).json({ error: "Missing or invalid 'sessionId' field" });
+    return;
+  }
+
+  const sessionId = rawSessionId.trim();
+  if (sessionId.length === 0) {
+    res.status(400).json({ error: "Missing or invalid 'sessionId' field" });
+    return;
+  }
+
+  if (prompt !== undefined && typeof prompt !== "string") {
+    res.status(400).json({ error: "Invalid 'prompt' field: must be a string if provided" });
     return;
   }
 
@@ -661,10 +672,16 @@ app.post("/api/fleet/start", async (req: Request, res: Response) => {
   try {
     const fleetParams: { prompt?: string } = {};
     if (typeof prompt === "string" && prompt.trim().length > 0) {
-      fleetParams.prompt = prompt;
+      // Sanitize prompt before storage to prevent stored-XSS if ever rendered
+      fleetParams.prompt = prompt
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#x27;");
     }
 
-    await session.rpc.fleet.start(fleetParams);
+    const rpcResult = await session.rpc.fleet.start(fleetParams);
 
     const fleetId = crypto.randomUUID();
     const now = new Date().toISOString();
@@ -673,7 +690,7 @@ app.post("/api/fleet/start", async (req: Request, res: Response) => {
       id: fleetId,
       sessionId,
       tokenHash: tHash,
-      status: "started",
+      status: rpcResult.started ? "started" : "failed",
       ...(fleetParams.prompt !== undefined ? { prompt: fleetParams.prompt } : {}),
       subagentCount: 0,
       startedAt: now,
@@ -709,7 +726,8 @@ app.get("/api/fleet/:id/status", async (req: Request, res: Response) => {
       return;
     }
 
-    res.json(fleet);
+    const { tokenHash: _tokenHash, ...publicFleet } = fleet;
+    res.json(publicFleet);
   } catch (err: any) {
     res.status(500).json({ error: err.message || "Failed to get fleet status" });
   }
