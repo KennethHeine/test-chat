@@ -150,6 +150,11 @@ function extractSubagentName(data: { agentDisplayName?: unknown; agentName?: unk
 const ALLOWED_REASONING_EFFORTS = ["low", "medium", "high", "xhigh"] as const;
 type ReasoningEffort = typeof ALLOWED_REASONING_EFFORTS[number];
 
+// Valid values and max lengths for research item updates
+const VALID_RESEARCH_STATUSES = ["open", "researching", "resolved"] as const;
+const MAX_RESEARCH_FINDINGS_LENGTH = 2000;
+const MAX_RESEARCH_DECISION_LENGTH = 1000;
+
 // Build the shared session config used for both new and resumed sessions
 function buildSessionConfig(token: string, model: string, reasoningEffort?: ReasoningEffort): SessionConfig {
   const cfg: SessionConfig = {
@@ -882,10 +887,6 @@ app.patch("/api/goals/:goalId/research/:itemId", async (req: Request, res: Respo
   const itemId = req.params.itemId as string;
   const body = req.body as Record<string, unknown>;
 
-  const VALID_RESEARCH_STATUSES = ["open", "researching", "resolved"] as const;
-  const MAX_FINDINGS = 2000;
-  const MAX_DECISION = 1000;
-
   const updates: Partial<Omit<import("./planning-types.js").ResearchItem, "id" | "goalId">> = {};
 
   if ("findings" in body) {
@@ -893,8 +894,8 @@ app.patch("/api/goals/:goalId/research/:itemId", async (req: Request, res: Respo
       res.status(400).json({ error: "findings must be a string" });
       return;
     }
-    if (body.findings.length > MAX_FINDINGS) {
-      res.status(400).json({ error: `findings must be at most ${MAX_FINDINGS} characters` });
+    if (body.findings.length > MAX_RESEARCH_FINDINGS_LENGTH) {
+      res.status(400).json({ error: `findings must be at most ${MAX_RESEARCH_FINDINGS_LENGTH} characters` });
       return;
     }
     updates.findings = body.findings.trim();
@@ -905,8 +906,8 @@ app.patch("/api/goals/:goalId/research/:itemId", async (req: Request, res: Respo
       res.status(400).json({ error: "decision must be a string" });
       return;
     }
-    if (body.decision.length > MAX_DECISION) {
-      res.status(400).json({ error: `decision must be at most ${MAX_DECISION} characters` });
+    if (body.decision.length > MAX_RESEARCH_DECISION_LENGTH) {
+      res.status(400).json({ error: `decision must be at most ${MAX_RESEARCH_DECISION_LENGTH} characters` });
       return;
     }
     updates.decision = body.decision.trim();

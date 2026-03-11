@@ -809,7 +809,6 @@ function renderResearchItems(items, goalId) {
   }
 
   // Group items by category using the defined order
-  const categoryOrder = Object.keys(CATEGORY_LABELS);
   /** @type {Map<string, Array>} */
   const grouped = new Map();
   for (const item of items) {
@@ -818,8 +817,8 @@ function renderResearchItems(items, goalId) {
     grouped.get(cat).push(item);
   }
   const orderedKeys = [
-    ...categoryOrder.filter((c) => grouped.has(c)),
-    ...Array.from(grouped.keys()).filter((c) => !categoryOrder.includes(c)),
+    ...RESEARCH_CATEGORY_ORDER.filter((c) => grouped.has(c)),
+    ...Array.from(grouped.keys()).filter((c) => !RESEARCH_CATEGORY_ORDER.includes(c)),
   ];
 
   for (const category of orderedKeys) {
@@ -1811,6 +1810,9 @@ const CATEGORY_LABELS = {
 };
 const VALID_STATUSES = ["open", "researching", "resolved"];
 
+/** Ordered list of research category keys, derived from CATEGORY_LABELS. */
+const RESEARCH_CATEGORY_ORDER = Object.keys(CATEGORY_LABELS);
+
 /** Valid milestone status values. */
 const VALID_MILESTONE_STATUSES = ["draft", "ready", "in-progress", "complete"];
 
@@ -1841,7 +1843,6 @@ function renderResearchChecklist(items) {
   body.className = "research-card-body";
 
   // Group items by category (preserving defined order from CATEGORY_LABELS)
-  const categoryOrder = Object.keys(CATEGORY_LABELS);
   /** @type {Map<string, Array>} */
   const grouped = new Map();
   for (const item of items) {
@@ -1851,7 +1852,7 @@ function renderResearchChecklist(items) {
   }
 
   // Render categories in defined order, then any unexpected categories
-  const orderedKeys = [...categoryOrder.filter(c => grouped.has(c)), ...Array.from(grouped.keys()).filter(c => !categoryOrder.includes(c))];
+  const orderedKeys = [...RESEARCH_CATEGORY_ORDER.filter(c => grouped.has(c)), ...Array.from(grouped.keys()).filter(c => !RESEARCH_CATEGORY_ORDER.includes(c))];
 
   for (const category of orderedKeys) {
     const categoryItems = grouped.get(category);
