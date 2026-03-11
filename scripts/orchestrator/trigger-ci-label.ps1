@@ -49,8 +49,10 @@ if (-not $prBranch) {
 
 Write-Host "🏷️  Adding CI labels to ${Owner}/${Repo}#${PR} (branch: ${prBranch})"
 
-# Record the start time BEFORE adding labels
-$startTime = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+# Record the start time BEFORE adding labels (must be [DateTime] UTC, not a string,
+# because ConvertFrom-Json parses dates as DateTime Kind=Utc and PowerShell
+# casts ISO-8601 strings to Kind=Local — mixing Kinds breaks -ge comparison).
+$startTime = (Get-Date).ToUniversalTime()
 
 $workflows = @()
 

@@ -34,8 +34,10 @@ $Timeout  = if ($env:POLL_TIMEOUT)  { [int]$env:POLL_TIMEOUT }  else { 1200 }
 
 Write-Host "🚀 Triggering $($Workflows.Count) workflow(s) on ${Owner}/${Repo} branch: ${Branch}"
 
-# Record start time BEFORE triggering
-$startTime = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+# Record start time BEFORE triggering (must be [DateTime] UTC, not a string,
+# because ConvertFrom-Json parses dates as DateTime Kind=Utc and PowerShell
+# casts ISO-8601 strings to Kind=Local — mixing Kinds breaks -ge comparison).
+$startTime = (Get-Date).ToUniversalTime()
 
 # Trigger each workflow
 foreach ($wf in $Workflows) {
