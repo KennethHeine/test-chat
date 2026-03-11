@@ -678,6 +678,67 @@ async function testIssueDraftFileRefNonStringReason(): Promise<void> {
   assert(threw, "Should throw for filesToRead element with undefined reason");
 }
 
+async function testIssueDraftFileRefNullElement(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  let threw = false;
+  try {
+    await store.createIssueDraft(makeIssueDraft({ filesToModify: [null as unknown as FileRef] }));
+  } catch {
+    threw = true;
+  }
+  assert(threw, "Should throw for filesToModify containing a null element");
+}
+
+async function testIssueDraftFilesToModifyNotArray(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  let threw = false;
+  try {
+    await store.createIssueDraft(makeIssueDraft({ filesToModify: null as unknown as FileRef[] }));
+  } catch {
+    threw = true;
+  }
+  assert(threw, "Should throw when filesToModify is not an array");
+}
+
+async function testIssueDraftFilesToReadNotArray(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  let threw = false;
+  try {
+    await store.createIssueDraft(makeIssueDraft({ filesToRead: "bad" as unknown as FileRef[] }));
+  } catch {
+    threw = true;
+  }
+  assert(threw, "Should throw when filesToRead is not an array");
+}
+
+async function testIssueDraftUpdateFileRefValidation(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  await store.createIssueDraft(makeIssueDraft());
+  let threw = false;
+  try {
+    await store.updateIssueDraft("draft-1", {
+      filesToModify: [{ path: "", reason: "reason" }],
+    });
+  } catch {
+    threw = true;
+  }
+  assert(threw, "Should throw when updateIssueDraft receives filesToModify with empty path");
+}
+
+async function testIssueDraftUpdateFilesToReadNotArray(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  await store.createIssueDraft(makeIssueDraft());
+  let threw = false;
+  try {
+    await store.updateIssueDraft("draft-1", {
+      filesToRead: null as unknown as FileRef[],
+    });
+  } catch {
+    threw = true;
+  }
+  assert(threw, "Should throw when updateIssueDraft receives non-array filesToRead");
+}
+
 // ============================================================
 // Deep Copy / Isolation Tests
 // ============================================================
@@ -793,6 +854,11 @@ async function main() {
   await run("createIssueDraft accepts valid FileRef arrays and stores all new fields", testIssueDraftValidFileRefs);
   await run("createIssueDraft throws for filesToModify element with null path", testIssueDraftFileRefNonStringPath);
   await run("createIssueDraft throws for filesToRead element with undefined reason", testIssueDraftFileRefNonStringReason);
+  await run("createIssueDraft throws for filesToModify containing a null element", testIssueDraftFileRefNullElement);
+  await run("createIssueDraft throws when filesToModify is not an array", testIssueDraftFilesToModifyNotArray);
+  await run("createIssueDraft throws when filesToRead is not an array", testIssueDraftFilesToReadNotArray);
+  await run("updateIssueDraft throws for filesToModify with invalid FileRef", testIssueDraftUpdateFileRefValidation);
+  await run("updateIssueDraft throws when filesToRead is not an array", testIssueDraftUpdateFilesToReadNotArray);
 
   console.log("\n── Deep Copy / Isolation ──\n");
   await run("Goal array fields are deep-copied (structuredClone)", testGoalArrayIsolation);

@@ -162,6 +162,11 @@ function requirePositiveNumber(value: number, fieldName: string): void {
 }
 
 function requireFileRef(ref: FileRef, fieldName: string): void {
+  if (ref == null || typeof ref !== "object") {
+    throw new Error(
+      `Invalid ${fieldName}: each element must be a non-null object with path and reason`
+    );
+  }
   if (typeof ref.path !== "string" || ref.path.trim().length === 0) {
     throw new Error(`Invalid ${fieldName}: each element must have a non-empty path`);
   }
@@ -209,8 +214,14 @@ function validateIssueDraft(draft: IssueDraft): void {
   requireNonEmpty(draft.expectedOutcome, "expectedOutcome");
   requirePositiveNumber(draft.order, "order");
   requireValidEnum(draft.status, VALID_ISSUE_DRAFT_STATUSES, "status");
+  if (!Array.isArray(draft.filesToModify)) {
+    throw new Error("Invalid filesToModify: must be an array of file refs");
+  }
   for (const ref of draft.filesToModify) {
     requireFileRef(ref, "filesToModify");
+  }
+  if (!Array.isArray(draft.filesToRead)) {
+    throw new Error("Invalid filesToRead: must be an array of file refs");
   }
   for (const ref of draft.filesToRead) {
     requireFileRef(ref, "filesToRead");
@@ -388,6 +399,22 @@ export class InMemoryPlanningStore implements PlanningStore {
     if (updates.expectedOutcome !== undefined) requireNonEmpty(updates.expectedOutcome, "expectedOutcome");
     if (updates.order !== undefined) requirePositiveNumber(updates.order, "order");
     if (updates.status !== undefined) requireValidEnum(updates.status, VALID_ISSUE_DRAFT_STATUSES, "status");
+    if (updates.filesToModify !== undefined) {
+      if (!Array.isArray(updates.filesToModify)) {
+        throw new Error("Invalid filesToModify: must be an array of file refs");
+      }
+      for (const ref of updates.filesToModify) {
+        requireFileRef(ref, "filesToModify");
+      }
+    }
+    if (updates.filesToRead !== undefined) {
+      if (!Array.isArray(updates.filesToRead)) {
+        throw new Error("Invalid filesToRead: must be an array of file refs");
+      }
+      for (const ref of updates.filesToRead) {
+        requireFileRef(ref, "filesToRead");
+      }
+    }
 
     const updated: IssueDraft = { ...existing, ...updates, id: existing.id, milestoneId: existing.milestoneId };
     this.issueDrafts.set(draftId, updated);    return structuredClone(updated);
