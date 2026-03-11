@@ -1434,21 +1434,26 @@ export function createPlanningTools(token: string, planningStore: PlanningStore)
           if (typeof ref.path !== "string" || ref.path.trim().length === 0) {
             return { error: `${refPrefix}.path must be a non-empty string` };
           }
-          if (ref.path.length > MAX_ISSUE_FILE_PATH_LENGTH) {
+          // Sanitize path first, then validate on the sanitized value to prevent
+          // control-character bypass (e.g., ".\x00." → ".." after stripping).
+          const sanitizedPath = sanitizeFilePath(ref.path as string);
+          if (sanitizedPath.length === 0) {
+            return { error: `${refPrefix}.path must be a non-empty string` };
+          }
+          if (sanitizedPath.length > MAX_ISSUE_FILE_PATH_LENGTH) {
             return { error: `${refPrefix}.path must be at most ${MAX_ISSUE_FILE_PATH_LENGTH} characters` };
           }
-          const pathTraversalErr = validateFileRefPath(ref.path as string, `${refPrefix}.path`);
+          const pathTraversalErr = validateFileRefPath(sanitizedPath, `${refPrefix}.path`);
           if (pathTraversalErr) return { error: pathTraversalErr };
           if (typeof ref.reason !== "string" || ref.reason.trim().length === 0) {
             return { error: `${refPrefix}.reason must be a non-empty string` };
           }
-          if (ref.reason.length > MAX_ISSUE_FILE_REASON_LENGTH) {
+          // Sanitize reason first, then re-check length on the expanded value.
+          const sanitizedReason = sanitizeText(ref.reason as string);
+          if (sanitizedReason.length > MAX_ISSUE_FILE_REASON_LENGTH) {
             return { error: `${refPrefix}.reason must be at most ${MAX_ISSUE_FILE_REASON_LENGTH} characters` };
           }
-          sanitized.push({
-            path: sanitizeFilePath(ref.path as string),
-            reason: sanitizeText(ref.reason as string),
-          });
+          sanitized.push({ path: sanitizedPath, reason: sanitizedReason });
         }
         return { result: sanitized };
       }
@@ -1537,14 +1542,13 @@ export function createPlanningTools(token: string, planningStore: PlanningStore)
         }
 
         // Validate and sanitize acceptanceCriteria (R9: ≥1 criterion)
-        const sanitizedAcceptanceCriteria = Array.isArray(spec.acceptanceCriteria)
-          ? (spec.acceptanceCriteria as string[]).map(sanitizeText)
-          : [];
-        const acErr = validateCriteriaArray(sanitizedAcceptanceCriteria, `${prefix}.acceptanceCriteria`);
+        // Validate raw array types first so non-strings produce structured errors.
+        const acErr = validateCriteriaArray(spec.acceptanceCriteria, `${prefix}.acceptanceCriteria`);
         if (acErr) return { error: acErr };
-        if (sanitizedAcceptanceCriteria.length < R9_MIN_ACCEPTANCE_CRITERIA) {
+        if (!Array.isArray(spec.acceptanceCriteria) || spec.acceptanceCriteria.length < R9_MIN_ACCEPTANCE_CRITERIA) {
           return { error: `${prefix}.acceptanceCriteria must have at least ${R9_MIN_ACCEPTANCE_CRITERIA} criterion` };
         }
+        const sanitizedAcceptanceCriteria = (spec.acceptanceCriteria as string[]).map(sanitizeText);
 
         // Validate and sanitize verificationCommands (R9: ≥1 command)
         if (!Array.isArray(spec.verificationCommands)) {
@@ -1553,23 +1557,23 @@ export function createPlanningTools(token: string, planningStore: PlanningStore)
         if (spec.verificationCommands.length < R9_MIN_VERIFICATION_COMMANDS) {
           return { error: `${prefix}.verificationCommands must have at least ${R9_MIN_VERIFICATION_COMMANDS} command` };
         }
-        const sanitizedVerificationCommands = (spec.verificationCommands as string[]).map(sanitizeText);
-        for (let j = 0; j < sanitizedVerificationCommands.length; j++) {
-          if (sanitizedVerificationCommands[j].trim().length === 0) {
+        for (let j = 0; j < spec.verificationCommands.length; j++) {
+          if (typeof spec.verificationCommands[j] !== "string" || (spec.verificationCommands[j] as string).trim().length === 0) {
             return { error: `${prefix}.verificationCommands[${j}] must be a non-empty string` };
           }
         }
+        const sanitizedVerificationCommands = (spec.verificationCommands as string[]).map(sanitizeText);
 
         // Validate and sanitize securityChecklist
         if (!Array.isArray(spec.securityChecklist)) {
           return { error: `${prefix}.securityChecklist must be an array` };
         }
-        const sanitizedSecurityChecklist = (spec.securityChecklist as string[]).map(sanitizeText);
-        for (let j = 0; j < sanitizedSecurityChecklist.length; j++) {
-          if (sanitizedSecurityChecklist[j].trim().length === 0) {
+        for (let j = 0; j < spec.securityChecklist.length; j++) {
+          if (typeof spec.securityChecklist[j] !== "string" || (spec.securityChecklist[j] as string).trim().length === 0) {
             return { error: `${prefix}.securityChecklist[${j}] must be a non-empty string` };
           }
         }
+        const sanitizedSecurityChecklist = (spec.securityChecklist as string[]).map(sanitizeText);
 
         // Validate and sanitize filesToModify (R9: ≥1 and ≤5)
         const modifyResult = validateAndSanitizeFileRefs(spec.filesToModify, `${prefix}.filesToModify`);
@@ -1591,6 +1595,9 @@ export function createPlanningTools(token: string, planningStore: PlanningStore)
           const prErr = validateStringField(spec.patternReference, `${prefix}.patternReference`, MAX_ISSUE_TECHNICAL_CONTEXT_LENGTH);
           if (prErr) return { error: prErr };
           sanitizedPatternReference = sanitizeText(spec.patternReference as string);
+          if (sanitizedPatternReference.length > MAX_ISSUE_TECHNICAL_CONTEXT_LENGTH) {
+            return { error: `${prefix}.patternReference exceeds ${MAX_ISSUE_TECHNICAL_CONTEXT_LENGTH} characters after sanitization` };
+          }
         }
 
         sanitizedSpecs.push({
