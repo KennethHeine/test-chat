@@ -146,6 +146,17 @@ export interface Milestone {
 }
 
 /**
+ * A reference to a file with a reason for its inclusion.
+ * Used by `IssueDraft` to specify which files will be modified or read for context.
+ */
+export interface FileRef {
+  /** Relative file path (e.g., "server.ts", "public/app.js"). Max 256 chars. */
+  path: string;
+  /** Why this file is relevant (e.g., "Add new endpoint", "Follow CRUD pattern"). Max 500 chars. */
+  reason: string;
+}
+
+/**
  * Represents an implementation-ready GitHub issue definition tied to a milestone.
  * Issue drafts are generated from the planning data and eventually pushed to GitHub.
  */
@@ -199,4 +210,19 @@ export interface IssueDraft {
 
   /** The GitHub issue number assigned after the issue is pushed to GitHub. Undefined when status is not `created`. */
   githubIssueNumber?: number;
+
+  /** Files that should be created or modified during implementation, with per-file reasons. */
+  filesToModify: FileRef[];
+
+  /** Files to read for context before implementation (not modified). */
+  filesToRead: FileRef[];
+
+  /** Existing file or pattern to use as an implementation reference. Optional. */
+  patternReference?: string;
+
+  /** Security-specific validation rules for this issue. */
+  securityChecklist: string[];
+
+  /** Exact commands to run for self-verification after implementation. */
+  verificationCommands: string[];
 }
