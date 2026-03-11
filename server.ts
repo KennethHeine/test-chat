@@ -66,11 +66,17 @@ const sessions = new Map<string, CopilotSession>();
 // --- User Input Requests ---
 
 // Timeout for pending user input requests (ms). Configurable via env var; default 2 minutes.
-const USER_INPUT_TIMEOUT_MS = parseInt(process.env.USER_INPUT_TIMEOUT_MS || "120000", 10);
+const DEFAULT_USER_INPUT_TIMEOUT_MS = 120000;
+const parsedUserInputTimeout = Number.parseInt(process.env.USER_INPUT_TIMEOUT_MS ?? "", 10);
+const USER_INPUT_TIMEOUT_MS =
+  Number.isNaN(parsedUserInputTimeout) || parsedUserInputTimeout <= 0
+    ? DEFAULT_USER_INPUT_TIMEOUT_MS
+    : parsedUserInputTimeout;
 
 interface PendingInput {
   resolve: (response: UserInputResponse) => void;
   reject: (err: Error) => void;
+  ownerTokenHash: string;
 }
 
 // Global map of requestId → pending Promise resolver. RequestIds are UUIDs so no collisions.
@@ -197,6 +203,7 @@ async function resolveSession(
   // Attach onUserInputRequest — looks up the current active SSE connection dynamically so that
   // reused sessions (across multiple SSE requests) always write to the correct response object.
   sessionConfig.onUserInputRequest = async (request: UserInputRequest): Promise<UserInputResponse> => {
+    const tHash = await hashToken(token);
     const conn = activeConnections.get(skey);
     if (!conn) {
       throw new Error("onUserInputRequest: no active SSE connection for this session");
@@ -210,15 +217,28 @@ async function resolveSession(
       allowFreeform: request.allowFreeform ?? true,
     })}\n\n`);
     return new Promise<UserInputResponse>((resolve, reject) => {
-      conn.inputIds.add(requestId);
-      pendingInputs.set(requestId, { resolve, reject });
-      setTimeout(() => {
+      const pendingCleanup = () => {
+        pendingInputs.delete(requestId);
+        conn.inputIds.delete(requestId);
+      };
+      const timeoutHandle = setTimeout(() => {
         if (pendingInputs.has(requestId)) {
-          pendingInputs.delete(requestId);
-          conn.inputIds.delete(requestId);
+          pendingCleanup();
           reject(new Error("User input request timed out"));
         }
       }, USER_INPUT_TIMEOUT_MS);
+      const wrappedResolve = (value: UserInputResponse) => {
+        pendingCleanup();
+        clearTimeout(timeoutHandle);
+        resolve(value);
+      };
+      const wrappedReject = (error: Error) => {
+        pendingCleanup();
+        clearTimeout(timeoutHandle);
+        reject(error);
+      };
+      conn.inputIds.add(requestId);
+      pendingInputs.set(requestId, { resolve: wrappedResolve, reject: wrappedReject, ownerTokenHash: tHash });
     });
   };
 
@@ -451,16 +471,20 @@ app.post("/api/chat", async (req: Request, res: Response) => {
       for (const unsub of unsubscribers) unsub();
       unsubscribers.length = 0;
       activeTools.clear();
-      // Reject any pending user input requests from this connection
+      // Reject any pending user input requests from this connection (wrappedReject handles cleanup)
       for (const rid of connectionInputIds) {
         const pending = pendingInputs.get(rid);
         if (pending) {
-          pendingInputs.delete(rid);
           pending.reject(new Error("SSE connection closed"));
         }
       }
       connectionInputIds.clear();
-      activeConnections.delete(skey);
+      // Only delete the active connection if this response is still registered.
+      // A newer SSE request on the same session may have already replaced it.
+      const current = activeConnections.get(skey);
+      if (current && current.res === res) {
+        activeConnections.delete(skey);
+      }
     };
 
     // Listen for streaming deltas
@@ -660,7 +684,7 @@ app.post("/api/chat/abort", async (req: Request, res: Response) => {
 });
 
 // Submit a user input response to a pending onUserInputRequest from the agent
-app.post("/api/chat/input", (req: Request, res: Response) => {
+app.post("/api/chat/input", async (req: Request, res: Response) => {
   const token = extractToken(req);
   if (!token) {
     res.status(401).json({ error: "Missing token. Provide Authorization: Bearer <token> header." });
@@ -688,7 +712,14 @@ app.post("/api/chat/input", (req: Request, res: Response) => {
     return;
   }
 
-  pendingInputs.delete(requestId);
+  // Verify ownership — only the user who initiated the session can answer their own question
+  const tHash = await hashToken(token);
+  if (pending.ownerTokenHash !== tHash) {
+    res.status(403).json({ error: "Forbidden: this input request does not belong to your session" });
+    return;
+  }
+
+  // wrappedResolve handles cleanup (delete from pendingInputs, inputIds, clearTimeout)
   pending.resolve({ answer, wasFreeform });
   res.json({ ok: true });
 });
@@ -1043,6 +1074,30 @@ if (process.env.ENABLE_GOAL_SEED === "true") {
       // Unexpected errors → 500 Internal Server Error
       res.status(500).json({ error: err.message || "Failed to seed issue draft" });
     }
+  });
+
+  // Seed a pending user input request (for integration tests of POST /api/chat/input roundtrip)
+  app.post("/api/test/seed-pending-input", async (req: Request, res: Response) => {
+    const token = extractToken(req);
+    if (!token) {
+      res.status(401).json({ error: "Missing token. Provide Authorization: Bearer <token> header." });
+      return;
+    }
+    const { requestId } = req.body;
+    if (!requestId || typeof requestId !== "string") {
+      res.status(400).json({ error: "Missing or invalid 'requestId' field" });
+      return;
+    }
+    if (pendingInputs.has(requestId)) {
+      res.status(409).json({ error: "A pending input with this requestId already exists" });
+      return;
+    }
+    const tHash = await hashToken(token);
+    // Create a no-op pending entry scoped to this token so the roundtrip test can resolve it
+    const wrappedResolve = (_value: UserInputResponse) => { pendingInputs.delete(requestId); };
+    const wrappedReject = (_err: Error) => { pendingInputs.delete(requestId); };
+    pendingInputs.set(requestId, { resolve: wrappedResolve, reject: wrappedReject, ownerTokenHash: tHash });
+    res.status(201).json({ ok: true, requestId });
   });
 }
 

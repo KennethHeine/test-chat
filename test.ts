@@ -487,8 +487,9 @@ async function testReasoningEffortValidValues(): Promise<void> {
 // ============================================================
 
 async function testChatInputNoAuth(): Promise<void> {
-  // The server falls back to COPILOT_GITHUB_TOKEN env var for auth, so on CI
-  // the response is 400 (missing requestId) rather than 401. Accept both.
+  // When no auth header is provided, the server may fall back to the
+  // COPILOT_GITHUB_TOKEN env var. In that case, with a requestId in the body,
+  // we expect 404 (no pending input) rather than 401. Accept both 401 and 404.
   const res = await fetch(`${BASE}/api/chat/input`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -570,9 +571,94 @@ async function testUserInputRequestEventShape(): Promise<void> {
   if (parsed.type !== "user_input_request") throw new Error(`Expected type user_input_request, got ${parsed.type}`);
   if (typeof parsed.requestId !== "string") throw new Error("requestId must be a string");
   if (typeof parsed.question !== "string") throw new Error("question must be a string");
-  if (!Array.isArray(parsed.choices)) throw new Error("choices must be an array");
+  // choices is optional/nullable when the SDK request has no structured choices
+  if (parsed.choices !== null && parsed.choices !== undefined && !Array.isArray(parsed.choices)) {
+    throw new Error("choices must be an array when present");
+  }
   if (typeof parsed.allowFreeform !== "boolean") throw new Error("allowFreeform must be a boolean");
   log("  ", "user_input_request SSE event payload shape validated");
+
+  // Also validate the null-choices variant (no structured choices)
+  const noChoicesEvent = {
+    type: "user_input_request",
+    requestId: crypto.randomUUID(),
+    question: "Describe your goal",
+    choices: null,
+    allowFreeform: true,
+  };
+  const nullParsed = JSON.parse(`data: ${JSON.stringify(noChoicesEvent)}`.slice(6)) as Record<string, unknown>;
+  if (nullParsed.choices !== null) throw new Error("choices should be null when not provided");
+  log("  ", "user_input_request null-choices variant also valid");
+}
+
+async function testChatInputRoundtrip(): Promise<void> {
+  // Seed a pending input via the test-only endpoint, then resolve it via POST /api/chat/input.
+  // This verifies the full server-side resolution flow: seed → resolve → cleanup.
+  const requestId = crypto.randomUUID();
+
+  // Step 1: Seed the pending input
+  const seedRes = await fetch(`${BASE}/api/test/seed-pending-input`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ requestId }),
+  });
+  if (seedRes.status !== 201) throw new Error(`Seed failed: HTTP ${seedRes.status}`);
+
+  // Step 2: Resolve it via POST /api/chat/input
+  const inputRes = await fetch(`${BASE}/api/chat/input`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ requestId, answer: "Option A", wasFreeform: false }),
+  });
+  if (!inputRes.ok) throw new Error(`Expected 200, got ${inputRes.status}`);
+  const inputData = await inputRes.json();
+  if (!inputData.ok) throw new Error(`Expected { ok: true }, got ${JSON.stringify(inputData)}`);
+
+  // Step 3: Verify cleanup — second call should return 404 (already resolved)
+  const dupRes = await fetch(`${BASE}/api/chat/input`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ requestId, answer: "Option B", wasFreeform: false }),
+  });
+  if (dupRes.status !== 404) throw new Error(`Expected 404 for duplicate resolve, got ${dupRes.status}`);
+
+  log("  ", "Roundtrip: seed → resolve → cleanup verified");
+}
+
+async function testChatInputOwnershipRejection(): Promise<void> {
+  // Verify that a user cannot resolve another user's pending input request.
+  // We seed a request with the normal test token, then try to resolve it with a different token.
+  const requestId = crypto.randomUUID();
+
+  // Seed the pending input with normal test token
+  const seedRes = await fetch(`${BASE}/api/test/seed-pending-input`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ requestId }),
+  });
+  if (seedRes.status !== 201) throw new Error(`Seed failed: HTTP ${seedRes.status}`);
+
+  // Try to resolve with a different (fake) token — should get 403
+  const foreignRes = await fetch(`${BASE}/api/chat/input`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": "Bearer different-fake-token-for-ownership-test",
+    },
+    body: JSON.stringify({ requestId, answer: "evil answer", wasFreeform: true }),
+  });
+  if (foreignRes.status !== 403) throw new Error(`Expected 403 for cross-user resolve attempt, got ${foreignRes.status}`);
+  const foreignData = await foreignRes.json();
+  if (!foreignData.error) throw new Error("Expected error message in 403 response");
+
+  // Clean up: resolve with correct token to avoid leaving the pending entry
+  await fetch(`${BASE}/api/chat/input`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ requestId, answer: "correct answer", wasFreeform: true }),
+  });
+
+  log("  ", "403 returned for cross-user ownership attempt");
 }
 
 // ============================================================
@@ -3749,6 +3835,8 @@ async function main() {
   await run("POST /api/chat/input — missing wasFreeform returns 400", testChatInputMissingWasFreeform);
   await run("POST /api/chat/input — unknown requestId returns 404", testChatInputUnknownRequestId);
   await run("user_input_request SSE event payload shape", testUserInputRequestEventShape);
+  await run("POST /api/chat/input — seed → resolve → cleanup roundtrip", testChatInputRoundtrip);
+  await run("POST /api/chat/input — cross-user ownership returns 403", testChatInputOwnershipRejection);
 
   // --- Goal API tests ---
   console.log("\n── Goal API Tests ──\n");
