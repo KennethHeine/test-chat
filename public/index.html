@@ -968,6 +968,177 @@
         max-width: 92%;
       }
     }
+
+    /* --- Dashboard View --- */
+    #dashboard-view {
+      flex: 1;
+      display: none;
+      flex-direction: row;
+      min-width: 0;
+      overflow: hidden;
+    }
+
+    #dashboard-view.active {
+      display: flex;
+    }
+
+    #dashboard-nav {
+      width: 200px;
+      min-width: 200px;
+      background: var(--color-bg-secondary);
+      border-right: 1px solid var(--color-border);
+      display: flex;
+      flex-direction: column;
+      flex-shrink: 0;
+    }
+
+    #dashboard-nav-header {
+      padding: 12px;
+      border-bottom: 1px solid var(--color-border);
+      margin-bottom: 8px;
+    }
+
+    #dashboard-nav-header h3 {
+      font-size: 13px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--color-text-muted);
+      margin: 0;
+    }
+
+    .dashboard-nav-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      margin: 2px 8px;
+      border-radius: var(--radius);
+      cursor: pointer;
+      font-size: 13px;
+      color: var(--color-text);
+      transition: background 0.15s;
+      border: none;
+      background: none;
+      text-align: left;
+      width: calc(100% - 16px);
+      font-family: var(--font-sans);
+    }
+
+    .dashboard-nav-item:hover {
+      background: var(--color-bg-tertiary);
+    }
+
+    .dashboard-nav-item.active {
+      background: var(--color-bg-tertiary);
+      border: 1px solid var(--color-border);
+      color: var(--color-accent);
+    }
+
+    .dashboard-nav-icon {
+      font-size: 14px;
+      flex-shrink: 0;
+    }
+
+    #dashboard-content {
+      flex: 1;
+      overflow-y: auto;
+      padding: 24px;
+      min-width: 0;
+    }
+
+    #dashboard-content::-webkit-scrollbar { width: 8px; }
+    #dashboard-content::-webkit-scrollbar-track { background: transparent; }
+    #dashboard-content::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: 4px; }
+
+    .dashboard-page {
+      display: none;
+    }
+
+    .dashboard-page.active {
+      display: block;
+    }
+
+    .dashboard-page-header {
+      margin-bottom: 20px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--color-border);
+    }
+
+    .dashboard-page-header h2 {
+      font-size: 18px;
+      font-weight: 600;
+      color: var(--color-text);
+      margin: 0 0 4px 0;
+    }
+
+    .dashboard-page-header p {
+      font-size: 13px;
+      color: var(--color-text-muted);
+      margin: 0;
+    }
+
+    .dashboard-empty {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 40px 20px;
+      color: var(--color-text-muted);
+      text-align: center;
+      gap: 12px;
+    }
+
+    .dashboard-empty-icon {
+      font-size: 40px;
+    }
+
+    .dashboard-empty p {
+      font-size: 14px;
+      max-width: 300px;
+    }
+
+    @media (max-width: 768px) {
+      #dashboard-nav {
+        width: 160px;
+        min-width: 160px;
+      }
+
+      #dashboard-content {
+        padding: 16px;
+      }
+
+      .dashboard-nav-item {
+        font-size: 12px;
+        padding: 8px 10px;
+      }
+    }
+
+    @media (max-width: 480px) {
+      #dashboard-nav {
+        width: 48px;
+        min-width: 48px;
+      }
+
+      #dashboard-nav-header {
+        display: none;
+        padding: 0;
+        margin: 0;
+      }
+
+      .dashboard-nav-item {
+        padding: 8px;
+        justify-content: center;
+      }
+
+      .dashboard-nav-label {
+        display: none;
+      }
+
+      #dashboard-content {
+        padding: 12px;
+      }
+    }
   </style>
 </head>
 <body>
@@ -991,6 +1162,7 @@
         <option value="high">High</option>
         <option value="xhigh">Extended</option>
       </select>
+      <button class="btn" id="view-toggle-btn" title="Switch to dashboard view" aria-label="Switch to dashboard view">Dashboard</button>
       <button class="btn" id="new-chat-btn" title="Start a new conversation">New Chat</button>
     </div>
   </header>
@@ -1021,6 +1193,76 @@
         <textarea id="message-input" placeholder="Ask Copilot to research a repo, plan tasks, or explore code..." rows="1"></textarea>
         <button class="btn btn-primary" id="send-btn">Send</button>
         <button class="btn btn-danger" id="stop-btn" style="display: none;" title="Stop the current response">Stop</button>
+      </div>
+    </div>
+
+    <div id="dashboard-view">
+      <nav id="dashboard-nav">
+        <div id="dashboard-nav-header">
+          <h3>Dashboard</h3>
+        </div>
+        <button class="dashboard-nav-item active" data-page="goals">
+          <span class="dashboard-nav-icon">🎯</span>
+          <span class="dashboard-nav-label">Goals</span>
+        </button>
+        <button class="dashboard-nav-item" data-page="research">
+          <span class="dashboard-nav-icon">🔬</span>
+          <span class="dashboard-nav-label">Research</span>
+        </button>
+        <button class="dashboard-nav-item" data-page="milestones">
+          <span class="dashboard-nav-icon">🏁</span>
+          <span class="dashboard-nav-label">Milestones</span>
+        </button>
+        <button class="dashboard-nav-item" data-page="issues">
+          <span class="dashboard-nav-icon">📋</span>
+          <span class="dashboard-nav-label">Issues</span>
+        </button>
+      </nav>
+
+      <div id="dashboard-content">
+        <div class="dashboard-page active" id="dashboard-page-goals">
+          <div class="dashboard-page-header">
+            <h2>Goals</h2>
+            <p>Planning goals defined in your conversations</p>
+          </div>
+          <div class="dashboard-empty">
+            <span class="dashboard-empty-icon">🎯</span>
+            <p>No goals yet. Use the chat to define planning goals with Copilot.</p>
+          </div>
+        </div>
+
+        <div class="dashboard-page" id="dashboard-page-research">
+          <div class="dashboard-page-header">
+            <h2>Research</h2>
+            <p>Research items and questions for your planning goals</p>
+          </div>
+          <div class="dashboard-empty">
+            <span class="dashboard-empty-icon">🔬</span>
+            <p>No research items yet. Research will appear here once you define a goal.</p>
+          </div>
+        </div>
+
+        <div class="dashboard-page" id="dashboard-page-milestones">
+          <div class="dashboard-page-header">
+            <h2>Milestones</h2>
+            <p>Development milestones for your planning goals</p>
+          </div>
+          <div class="dashboard-empty">
+            <span class="dashboard-empty-icon">🏁</span>
+            <p>No milestones yet. Milestones will appear here after planning is complete.</p>
+          </div>
+        </div>
+
+        <div class="dashboard-page" id="dashboard-page-issues">
+          <div class="dashboard-page-header">
+            <h2>Issues</h2>
+            <p>GitHub issue drafts ready for review and push</p>
+          </div>
+          <div class="dashboard-empty">
+            <span class="dashboard-empty-icon">📋</span>
+            <p>No issue drafts yet. Issue drafts will appear here after milestones are planned.</p>
+          </div>
+        </div>
       </div>
     </div>
   </div>

@@ -679,3 +679,79 @@ test("milestone timeline XSS prevention: milestone name and goal are escaped bef
   await expect(card.locator(".milestone-name").first()).toContainText("Malicious name");
   await expect(card.locator(".milestone-goal").first()).toContainText("Malicious goal");
 });
+
+// ─── Dashboard Layout ──────────────────────────────────────────
+
+test("dashboard toggle button switches between chat and dashboard views", async ({ page }) => {
+  await page.goto("/");
+
+  // Chat view is default: chat area visible, dashboard hidden
+  await expect(page.locator("#chat-area")).toBeVisible();
+  await expect(page.locator("#dashboard-view")).not.toBeVisible();
+
+  // The toggle button should say "Dashboard"
+  const toggleBtn = page.locator("#view-toggle-btn");
+  await expect(toggleBtn).toHaveText("Dashboard");
+
+  // Click to switch to dashboard
+  await toggleBtn.click();
+  await expect(page.locator("#chat-area")).not.toBeVisible();
+  await expect(page.locator("#dashboard-view")).toBeVisible();
+  await expect(toggleBtn).toHaveText("Chat");
+
+  // Click again to switch back to chat
+  await toggleBtn.click();
+  await expect(page.locator("#chat-area")).toBeVisible();
+  await expect(page.locator("#dashboard-view")).not.toBeVisible();
+  await expect(toggleBtn).toHaveText("Dashboard");
+});
+
+test("dashboard sidebar navigation switches between pages", async ({ page }) => {
+  await page.goto("/");
+
+  // Switch to dashboard view
+  await page.locator("#view-toggle-btn").click();
+
+  // Goals page is active by default
+  await expect(page.locator("#dashboard-page-goals")).toBeVisible();
+  await expect(page.locator("#dashboard-page-research")).not.toBeVisible();
+  await expect(page.locator("#dashboard-page-milestones")).not.toBeVisible();
+  await expect(page.locator("#dashboard-page-issues")).not.toBeVisible();
+
+  // Navigate to Research
+  await page.locator(".dashboard-nav-item[data-page='research']").click();
+  await expect(page.locator("#dashboard-page-research")).toBeVisible();
+  await expect(page.locator("#dashboard-page-goals")).not.toBeVisible();
+
+  // Navigate to Milestones
+  await page.locator(".dashboard-nav-item[data-page='milestones']").click();
+  await expect(page.locator("#dashboard-page-milestones")).toBeVisible();
+  await expect(page.locator("#dashboard-page-research")).not.toBeVisible();
+
+  // Navigate to Issues
+  await page.locator(".dashboard-nav-item[data-page='issues']").click();
+  await expect(page.locator("#dashboard-page-issues")).toBeVisible();
+  await expect(page.locator("#dashboard-page-milestones")).not.toBeVisible();
+
+  // Navigate back to Goals
+  await page.locator(".dashboard-nav-item[data-page='goals']").click();
+  await expect(page.locator("#dashboard-page-goals")).toBeVisible();
+  await expect(page.locator("#dashboard-page-issues")).not.toBeVisible();
+});
+
+test("dashboard nav items show active state on selection", async ({ page }) => {
+  await page.goto("/");
+
+  // Switch to dashboard
+  await page.locator("#view-toggle-btn").click();
+
+  // Goals nav item is active by default
+  const goalsNav = page.locator(".dashboard-nav-item[data-page='goals']");
+  await expect(goalsNav).toHaveClass(/active/);
+
+  // Click Research — it becomes active, Goals becomes inactive
+  const researchNav = page.locator(".dashboard-nav-item[data-page='research']");
+  await researchNav.click();
+  await expect(researchNav).toHaveClass(/active/);
+  await expect(goalsNav).not.toHaveClass(/active/);
+});
