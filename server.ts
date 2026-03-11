@@ -504,7 +504,7 @@ app.post("/api/chat", async (req: Request, res: Response) => {
 
     unsubscribers.push(
       session.on("session.compaction_complete", (event) => {
-        const tokensRemoved = typeof event.data?.tokensRemoved === "number" ? event.data.tokensRemoved : undefined;
+        const tokensRemoved = typeof event.data?.tokensRemoved === "number" ? event.data.tokensRemoved : 0;
         res.write(`data: ${JSON.stringify({ type: "compaction", started: false, tokensRemoved })}\n\n`);
       })
     );

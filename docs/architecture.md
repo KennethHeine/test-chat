@@ -147,7 +147,7 @@ Client                          Server                          Copilot SDK
 | `subagent.completed` | `{"type":"subagent_end","name":"...","success":true}` | Sub-agent finished successfully |
 | `subagent.failed` | `{"type":"subagent_end","name":"...","success":false,"error":"..."}` | Sub-agent failed |
 | `session.compaction_start` | `{"type":"compaction","started":true}` | Context compaction began |
-| `session.compaction_complete` | `{"type":"compaction","started":false,"tokensRemoved":N}` | Context compaction finished |
+| `session.compaction_complete` | `{"type":"compaction","started":false,"tokensRemoved":N}` | Context compaction finished (`tokensRemoved` is always a number; 0 when unavailable) |
 | `session.idle` | `{"type":"done","sessionId":"..."}` | Streaming complete — includes session ID for follow-ups |
 | `session.error` | `{"type":"error","message":"..."}` | Error during generation |
 

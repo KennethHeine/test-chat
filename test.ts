@@ -236,7 +236,7 @@ async function testServerChat(): Promise<void> {
 async function testSseEventTypes(): Promise<void> {
   // Verify that the new SSE event payload shapes are well-formed and parse correctly.
   // This validates the JSON serialisation contracts between server.ts and the frontend.
-  const knownPayloads: Array<Record<string, unknown>> = [
+  const knownPayloads: Array<{ type: string } & Record<string, unknown>> = [
     { type: "planning_start" },
     { type: "plan_ready" },
     { type: "intent", intent: "Exploring codebase" },
@@ -245,6 +245,7 @@ async function testSseEventTypes(): Promise<void> {
     { type: "subagent_end", name: "Research Agent", success: false, error: "Timed out" },
     { type: "compaction", started: true },
     { type: "compaction", started: false, tokensRemoved: 1000 },
+    { type: "compaction", started: false, tokensRemoved: 0 },
   ];
 
   for (const payload of knownPayloads) {
@@ -266,6 +267,10 @@ async function testSseEventTypes(): Promise<void> {
     }
     if (payload.type === "compaction" && typeof parsed.started !== "boolean") {
       throw new Error(`"compaction" payload must include boolean "started" field`);
+    }
+    // tokensRemoved is always a number on compaction complete (defaults to 0)
+    if (payload.type === "compaction" && payload.started === false && typeof parsed.tokensRemoved !== "number") {
+      throw new Error(`"compaction" complete payload must include numeric "tokensRemoved" field`);
     }
   }
 

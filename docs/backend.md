@@ -183,7 +183,7 @@ The `/api/chat` endpoint translates SDK events into Server-Sent Events:
 7. SDK fires `session.mode_changed` → backend writes SSE `planning_start` (entering plan mode) or `plan_ready` (exiting plan mode)
 8. SDK fires `assistant.intent` → backend writes SSE `intent` with current agent activity description
 9. SDK fires `subagent.started/completed/failed` → backend writes SSE `subagent_start`/`subagent_end`
-10. SDK fires `session.compaction_start/complete` → backend writes SSE `compaction`
+10. SDK fires `session.compaction_start/complete` → backend writes SSE `compaction` (on `session.compaction_complete` the payload includes `tokensRemoved` as a number, defaulting to 0 when unavailable)
 11. SDK fires `session.idle` → backend writes SSE `done` and closes stream
 
 Event listener cleanup (unsubscribe functions) runs when the response ends or the client disconnects.

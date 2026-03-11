@@ -451,7 +451,6 @@ function showAgentStatus(text) {
 function hideAgentStatus() {
   agentStatusEl.style.display = "none";
   agentStatusText.textContent = "";
-  activeSubagentCount = 0;
 }
 
 /**
@@ -789,6 +788,7 @@ async function sendMessage() {
     stopBtn.style.display = "none";
     hideToolActivity();
     hideAgentStatus();
+    activeSubagentCount = 0;
     inputEl.focus();
   }
 }
