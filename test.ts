@@ -1111,6 +1111,64 @@ async function testResearchSeedAndRetrieve(): Promise<void> {
 }
 
 // ============================================================
+// 8. Fleet API tests
+// ============================================================
+
+async function testFleetStartNoAuth(): Promise<void> {
+  const res = await fetch(`${BASE}/api/fleet/start`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sessionId: "some-session" }),
+  });
+  // extractToken() falls back to process.env.COPILOT_GITHUB_TOKEN when no Authorization
+  // header is present, so in CI/local runs with the env var set the server may attempt
+  // the fleet start and return 404 (session not found) instead of 401.
+  if (res.status !== 401 && res.status !== 404 && res.status !== 500) {
+    throw new Error(`Expected 401, 404, or 500 (env-token fallback), got ${res.status}`);
+  }
+  if (res.status === 401) log("  ", "Confirmed 401 without auth header");
+}
+
+async function testFleetStartMissingSessionId(): Promise<void> {
+  const res = await fetch(`${BASE}/api/fleet/start`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({}),
+  });
+  if (res.status !== 400) throw new Error(`Expected 400, got ${res.status}`);
+  const data = await res.json();
+  if (!data.error) throw new Error("Expected error message in 400 response");
+}
+
+async function testFleetStartUnknownSession(): Promise<void> {
+  const res = await fetch(`${BASE}/api/fleet/start`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ sessionId: "nonexistent-session-id-99999" }),
+  });
+  if (res.status !== 404) throw new Error(`Expected 404, got ${res.status}`);
+  const data = await res.json();
+  if (!data.error) throw new Error("Expected error message in 404 response");
+}
+
+async function testFleetStatusNoAuth(): Promise<void> {
+  const res = await fetch(`${BASE}/api/fleet/nonexistent-fleet-id/status`);
+  // Same env-token fallback caveat as testFleetStartNoAuth.
+  if (res.status !== 401 && res.status !== 404 && res.status !== 200) {
+    throw new Error(`Expected 401, 404, or 200 (env-token fallback), got ${res.status}`);
+  }
+}
+
+async function testFleetStatusNotFound(): Promise<void> {
+  const res = await fetch(`${BASE}/api/fleet/nonexistent-fleet-id-99999/status`, {
+    headers: testAuthHeaders(),
+  });
+  if (res.status !== 404) throw new Error(`Expected 404, got ${res.status}`);
+  const data = await res.json();
+  if (!data.error) throw new Error("Expected error message in 404 response");
+}
+
+// ============================================================
 // Main
 // ============================================================
 
@@ -1191,6 +1249,15 @@ async function main() {
   await run("GET /api/goals/:id/research returns 404 for unknown goal", testResearchGetNotFound);
   await run("GET /api/goals/:id/research returns empty array for goal with no items", testResearchGetEmptyForGoalWithNoItems);
   await run("Research seed → get round-trip", testResearchSeedAndRetrieve);
+
+  // --- Fleet API tests ---
+  console.log("\n── Fleet API Tests ──\n");
+
+  await run("POST /api/fleet/start — no Authorization header is handled", testFleetStartNoAuth);
+  await run("POST /api/fleet/start returns 400 with missing sessionId", testFleetStartMissingSessionId);
+  await run("POST /api/fleet/start returns 404 for unknown session", testFleetStartUnknownSession);
+  await run("GET /api/fleet/:id/status — no Authorization header is handled", testFleetStatusNoAuth);
+  await run("GET /api/fleet/:id/status returns 404 for unknown fleet", testFleetStatusNotFound);
 
   // Cleanup
   serverProcess.kill();

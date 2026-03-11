@@ -27,6 +27,8 @@ The backend is a single Express.js server written in TypeScript (`server.ts`), e
 | `GET` | `/api/goals` | Bearer token | Lists all goals for the authenticated user across all their sessions |
 | `GET` | `/api/goals/:id` | Bearer token | Gets a specific goal by ID, scoped to the authenticated user |
 | `GET` | `/api/goals/:id/research` | Bearer token | Lists all research items for a goal, scoped to the authenticated user |
+| `POST` | `/api/fleet/start` | Bearer token | Starts a multi-agent fleet for an active session via `session.rpc.fleet.start()` |
+| `GET` | `/api/fleet/:id/status` | Bearer token | Returns fleet metadata including status, subagent count, and timestamps |
 
 ### `POST /api/chat` — Chat with Streaming
 
