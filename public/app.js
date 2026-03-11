@@ -200,6 +200,9 @@ function switchToSession(sid) {
 
   renderSessionList();
   updateFleetBtnState();
+  // Clear any fleet status from the previous session
+  fleetStatusEl.style.display = "none";
+  fleetStatusEl.textContent = "";
   closeSidebarOnMobile();
   inputEl.focus();
 }
@@ -425,6 +428,10 @@ stopBtn.addEventListener("click", async () => {
 // --- Fleet Button State ---
 function updateFleetBtnState() {
   fleetBtn.disabled = !sessionId || isStreaming;
+  if (!sessionId) {
+    fleetStatusEl.style.display = "none";
+    fleetStatusEl.textContent = "";
+  }
 }
 
 // --- Fleet Dispatch ---
@@ -440,6 +447,7 @@ function openFleetDialog() {
 
 function closeFleetDialog() {
   fleetDialogOverlay.classList.remove("open");
+  fleetBtn.focus();
 }
 
 function showFleetStatus(agentCount) {
@@ -448,6 +456,12 @@ function showFleetStatus(agentCount) {
 }
 
 async function dispatchFleet() {
+  if (!sessionId) {
+    fleetDialogError.textContent = "No active session";
+    fleetDialogError.style.display = "block";
+    return;
+  }
+
   const prompt = fleetPromptInput.value.trim();
 
   fleetDialogError.style.display = "none";
@@ -473,8 +487,27 @@ async function dispatchFleet() {
       return;
     }
 
+    // Fetch the actual subagent count from the status endpoint
+    let subagentCount = 0;
+    const fleetId = data.fleetId;
+    if (fleetId) {
+      try {
+        const statusRes = await fetch(`/api/fleet/${encodeURIComponent(fleetId)}/status`, {
+          headers: authHeaders(),
+        });
+        if (statusRes.ok) {
+          const statusData = await statusRes.json().catch(() => ({}));
+          if (typeof statusData.subagentCount === "number") {
+            subagentCount = statusData.subagentCount;
+          }
+        }
+      } catch {
+        // Fall back to 0 if status fetch fails
+      }
+    }
+
     closeFleetDialog();
-    showFleetStatus(data.subagentCount ?? 0);
+    showFleetStatus(subagentCount);
   } catch (err) {
     fleetDialogError.textContent = err.message || "Failed to dispatch fleet";
     fleetDialogError.style.display = "block";
@@ -489,6 +522,11 @@ fleetDialogOverlay.addEventListener("click", (e) => {
   if (e.target === fleetDialogOverlay) closeFleetDialog();
 });
 launchFleetBtn.addEventListener("click", dispatchFleet);
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && fleetDialogOverlay.classList.contains("open")) {
+    closeFleetDialog();
+  }
+});
 const TOOL_DISPLAY_NAMES = {
   "read_file": "📄 Reading file",
   "edit_file": "✏️ Editing file",

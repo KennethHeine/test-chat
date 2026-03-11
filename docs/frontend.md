@@ -29,9 +29,11 @@ The frontend is vanilla HTML, CSS, and JavaScript — no frameworks, no build st
 │           ├─────────────────────────────────────────────┤
 │           │  [Message input   ] [⚡ Dispatch Fleet][Send]│
 ├───────────┴─────────────────────────────────────────────┤
-│  ● Connected                          Fleet active: 0 a │
+│  ● Connected          (Fleet active: N agents — hidden) │
 └─────────────────────────────────────────────────────────┘
 ```
+
+> **Note:** The `#fleet-status` indicator in the status bar is hidden by default (`display: none`). It only becomes visible after a fleet is successfully launched in the current session, and is cleared when the session changes or is reset.
 
 **Theme:** GitHub dark mode (`#0d1117` background, `#e6edf3` text).
 
@@ -134,11 +136,18 @@ The "⚡ Dispatch Fleet" button appears in the input area next to the Send butto
 
 ### Flow
 
-1. User clicks "⚡ Dispatch Fleet" — a modal dialog appears
+1. User clicks "⚡ Dispatch Fleet" — a modal dialog appears (prompt textarea focused)
 2. User optionally enters a task prompt in the textarea
 3. User clicks "Launch Fleet" — `dispatchFleet()` sends `POST /api/fleet/start` with `{ sessionId, prompt? }`
-4. On success: dialog closes and a "Fleet active: N agents" indicator appears in the status bar
+4. On success: a follow-up `GET /api/fleet/:fleetId/status` is made to retrieve the actual `subagentCount`; the dialog closes and a "Fleet active: N agents" indicator appears in the status bar (agent count derived from the status response, not the start response)
 5. On error: an inline error message is shown inside the dialog
+
+The fleet status indicator is cleared whenever the session changes (session switch, New Chat, or session deletion).
+
+### Keyboard Handling
+
+- **Escape** closes the dialog and returns focus to the fleet button
+- **Cancel** button also returns focus to the fleet button
 
 ### Button State
 
