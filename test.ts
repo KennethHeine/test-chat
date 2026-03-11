@@ -552,14 +552,11 @@ async function testChatInputUnknownRequestId(): Promise<void> {
   log("  ", `404 response: ${data.error}`);
 }
 
-async function testChatInputResolvesPromise(): Promise<void> {
-  // Inject a pending input directly into the module-level pendingInputs Map by
-  // calling the internal API — we do this via a test-only seed endpoint if available,
-  // or by verifying the round-trip with a synthetic resolution.
-  //
-  // Since we can't easily inject into the server's private Map from outside the process,
-  // this test verifies the endpoint's validation pipeline and 404 behaviour end-to-end,
-  // then confirms the SSE event payload shape is valid JSON.
+async function testUserInputRequestEventShape(): Promise<void> {
+  // This test validates the SSE event payload shape for user_input_request events.
+  // It confirms the JSON structure that server.ts emits is well-formed and includes
+  // all required fields. Full Promise resolution is not tested here because it requires
+  // an active agent session invoking ask_user — covered by E2E tests instead.
   const sampleEvent = {
     type: "user_input_request",
     requestId: crypto.randomUUID(),
@@ -3751,7 +3748,7 @@ async function main() {
   await run("POST /api/chat/input — missing answer returns 400", testChatInputMissingAnswer);
   await run("POST /api/chat/input — missing wasFreeform returns 400", testChatInputMissingWasFreeform);
   await run("POST /api/chat/input — unknown requestId returns 404", testChatInputUnknownRequestId);
-  await run("user_input_request SSE event payload shape", testChatInputResolvesPromise);
+  await run("user_input_request SSE event payload shape", testUserInputRequestEventShape);
 
   // --- Goal API tests ---
   console.log("\n── Goal API Tests ──\n");

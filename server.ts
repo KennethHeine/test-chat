@@ -673,7 +673,7 @@ app.post("/api/chat/input", (req: Request, res: Response) => {
     res.status(400).json({ error: "Missing or invalid 'requestId' field" });
     return;
   }
-  if (!answer || typeof answer !== "string") {
+  if (answer === undefined || answer === null || typeof answer !== "string" || answer.trim() === "") {
     res.status(400).json({ error: "Missing or invalid 'answer' field (must be a non-empty string)" });
     return;
   }
