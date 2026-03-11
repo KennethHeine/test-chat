@@ -364,11 +364,16 @@ const goalsListView = document.getElementById("goals-list-view");
 const goalsDetailView = document.getElementById("goals-detail-view");
 const goalsListContent = document.getElementById("goals-list-content");
 
+/** In-flight guard: true while loadGoalsDashboard() is fetching, to prevent duplicate calls. */
+let goalsLoadInFlight = false;
+
 /**
  * Loads goals from the API and renders the goal list in the dashboard.
- * Resets to list view before loading.
+ * Resets to list view before loading. De-dupes concurrent calls via in-flight guard.
  */
 async function loadGoalsDashboard() {
+  if (goalsLoadInFlight) return;
+  goalsLoadInFlight = true;
   showGoalsList();
   if (!getToken()) {
     goalsListContent.innerHTML = "";
@@ -376,6 +381,7 @@ async function loadGoalsDashboard() {
     empty.className = "dashboard-empty";
     empty.innerHTML = '<span class="dashboard-empty-icon">🔑</span><p>Save a GitHub token to view your goals.</p>';
     goalsListContent.appendChild(empty);
+    goalsLoadInFlight = false;
     return;
   }
 
@@ -420,11 +426,13 @@ async function loadGoalsDashboard() {
       item.className = "goal-list-item";
       item.setAttribute("role", "button");
       item.setAttribute("tabindex", "0");
-      item.setAttribute("aria-label", "View goal details");
 
       const title = document.createElement("div");
       title.className = "goal-list-item-title";
       title.textContent = typeof goal.goal === "string" ? goal.goal : "(untitled goal)";
+      const titleId = `goal-list-item-title-${goal.id ?? i}`;
+      title.id = titleId;
+      item.setAttribute("aria-labelledby", titleId);
 
       const intent = document.createElement("div");
       intent.className = "goal-list-item-intent";
@@ -465,6 +473,8 @@ async function loadGoalsDashboard() {
     p.textContent = "Failed to load goals. Please try again.";
     empty.appendChild(p);
     goalsListContent.appendChild(empty);
+  } finally {
+    goalsLoadInFlight = false;
   }
 }
 
@@ -483,15 +493,21 @@ async function fetchGoalCounts(goalId) {
     const milestonesData = milestonesRes.ok ? await milestonesRes.json() : {};
     const milestones = Array.isArray(milestonesData.milestones) ? milestonesData.milestones : [];
 
-    // Fetch issue counts for each milestone in parallel
-    const issueCounts = await Promise.all(
-      milestones.map((m) =>
-        fetch(`/api/milestones/${encodeURIComponent(m.id)}/issues`, { headers: authHeaders() })
-          .then((r) => (r.ok ? r.json() : {}))
-          .then((d) => (Array.isArray(d.issues) ? d.issues.length : 0))
-          .catch(() => 0)
-      )
-    );
+    // Fetch issue counts for each milestone with limited concurrency to avoid large request bursts
+    const ISSUE_FETCH_CONCURRENCY = 5;
+    const issueCounts = [];
+    for (let i = 0; i < milestones.length; i += ISSUE_FETCH_CONCURRENCY) {
+      const batch = milestones.slice(i, i + ISSUE_FETCH_CONCURRENCY);
+      const batchCounts = await Promise.all(
+        batch.map((m) =>
+          fetch(`/api/milestones/${encodeURIComponent(m.id)}/issues`, { headers: authHeaders() })
+            .then((r) => (r.ok ? r.json() : {}))
+            .then((d) => (Array.isArray(d.issues) ? d.issues.length : 0))
+            .catch(() => 0)
+        )
+      );
+      issueCounts.push(...batchCounts);
+    }
     const totalIssues = issueCounts.reduce((sum, n) => sum + n, 0);
 
     return {
@@ -506,8 +522,8 @@ async function fetchGoalCounts(goalId) {
 
 /** Shows the goal list panel and hides the detail panel. */
 function showGoalsList() {
-  goalsListView.style.display = "";
-  goalsDetailView.style.display = "none";
+  goalsListView.classList.remove("hidden");
+  goalsDetailView.classList.add("hidden");
 }
 
 /**
@@ -516,8 +532,8 @@ function showGoalsList() {
  * @param {string} goalId
  */
 async function showGoalDetail(goalId) {
-  goalsListView.style.display = "none";
-  goalsDetailView.style.display = "";
+  goalsListView.classList.add("hidden");
+  goalsDetailView.classList.remove("hidden");
   goalsDetailView.innerHTML = '<div class="dashboard-empty"><span class="dashboard-empty-icon" style="font-size:24px">⏳</span><p>Loading goal…</p></div>';
 
   try {

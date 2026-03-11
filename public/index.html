@@ -1098,6 +1098,10 @@
       max-width: 300px;
     }
 
+    .hidden {
+      display: none !important;
+    }
+
     /* Goal list view */
     .goal-list {
       display: flex;
@@ -1117,6 +1121,13 @@
     .goal-list-item:hover {
       border-color: var(--color-accent);
       background: var(--color-bg-tertiary);
+    }
+
+    .goal-list-item:focus-visible {
+      border-color: var(--color-accent);
+      background: var(--color-bg-tertiary);
+      outline: 2px solid var(--color-accent);
+      outline-offset: 2px;
     }
 
     .goal-list-item-title {
@@ -1395,7 +1406,7 @@
               </div>
             </div>
           </div>
-          <div id="goals-detail-view" style="display:none;"></div>
+          <div id="goals-detail-view" class="hidden"></div>
         </div>
 
         <div class="dashboard-page" id="dashboard-page-research">
