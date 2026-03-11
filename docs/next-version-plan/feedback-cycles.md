@@ -1,15 +1,17 @@
 # Feedback Cycles: How to Integrate Feedback at Every Stage
 
-> **Parent issue:** Research and Planning for Next Version Vision: Stepwise Build, Feedback, and Maintenance
+> **Parent docs:** [goal.md](./goal.md) — Product vision | [project-plan-v2.md](./project-plan-v2.md) — Stage definitions | [research-needed.md](./research-needed.md) — Research items
 >
 > This document defines how feedback should be collected, evaluated, and incorporated at each stage of the next-version delivery plan.
+>
+> **Updated 2026-03-11:** Stage references updated for the restructured plan (5 stages, not 7). See [project-plan-v2.md](./project-plan-v2.md).
 
 ---
 
 ## Principles
 
 1. **Every stage produces a reviewable artifact** — code, tests, docs, or a combination.
-2. **No stage advances without passing its feedback checkpoint** — defined per stage in [project-plan.md](./project-plan.md).
+2. **No stage advances without passing its feedback checkpoint** — defined per stage in [project-plan-v2.md](./project-plan-v2.md).
 3. **Fast feedback over perfect feedback** — prefer automated checks that run in seconds over manual reviews that take days.
 4. **Feedback is actionable** — every feedback item results in a specific change or an explicit decision to defer.
 5. **GitHub-first tracking** — work is tracked via GitHub Issues and Projects, not custom dashboards. Use GitHub's native features for progress visibility.
@@ -44,14 +46,14 @@ Every stage produces a pull request that is reviewed before merge.
 - [ ] Tests added for all new behavior
 - [ ] Tests pass locally (`npx tsc --noEmit` + relevant test suites)
 - [ ] Documentation updated if behavior changed
-- [ ] Security considerations addressed (see [project-plan.md](./project-plan.md) security table)
+- [ ] Security considerations addressed (see [project-plan-v2.md](./project-plan-v2.md) security table)
 - [ ] No hardcoded secrets or tokens
 - [ ] Input validation present for all user-provided data
 - [ ] Error handling covers failure cases
 
 ### Layer 3: Stage Checkpoint (Hours)
 
-At the end of each stage, before advancing to the next one, validate the stage's deliverables against its feedback checkpoint (defined in [project-plan.md](./project-plan.md)).
+At the end of each stage, before advancing to the next one, validate the stage's deliverables against its feedback checkpoint (defined in [project-plan-v2.md](./project-plan-v2.md)).
 
 **Checkpoint process:**
 1. Run all automated checks
@@ -65,10 +67,9 @@ At the end of each stage, before advancing to the next one, validate the stage's
 After completing a group of related stages, conduct a broader review.
 
 **Milestone review triggers:**
-- After Stage 0+1 (data model + goal definition) — "Can users define goals?"
-- After Stage 2+3 (research + milestones) — "Can the system plan work?"
-- After Stage 4+5 (issues + execution structure) — "Can we prepare GitHub?"
-- After Stage 6 (orchestration) — "Can we execute?"
+- After Stages 0–3 (data model + goal + research + milestones) ✅ — "Can the system plan?" (PASSED)
+- After Stage 4 (research sprint + GitHub integration + dashboard) — "Can we push to GitHub?"
+- After Stage 5 (execution orchestration bridge) — "Can we execute autonomously?"
 
 **Milestone review includes:**
 - End-to-end walkthrough of the full workflow up to that point
@@ -104,8 +105,8 @@ After completing a group of related stages, conduct a broader review.
 
 | Source | How to Integrate |
 |--------|-----------------|
-| Open question resolution | Update the Research & Uncertainty Areas section of [project-plan.md](./project-plan.md) with decision and rationale |
-| Scope change | Update [project-plan.md](./project-plan.md) and affected stage deliverables |
+| Open question resolution | Update the Research & Uncertainty Areas section of [project-plan-v2.md](./project-plan-v2.md) with decision and rationale |
+| Scope change | Update [project-plan-v2.md](./project-plan-v2.md) and affected stage deliverables |
 | Priority change | Reorder stages if dependencies allow, update plan |
 | New risk identified | Add to relevant stage security section and cross-cutting concerns |
 
@@ -115,13 +116,12 @@ After completing a group of related stages, conduct a broader review.
 
 | Stage | Primary Feedback Method | Cadence |
 |-------|------------------------|---------|
-| Stage 0: Data Model | Unit tests + typecheck + data model review | Per-commit + end of stage |
-| Stage 1: Goal Definition | Integration tests + manual chat testing | Per-commit + demo walkthrough |
-| Stage 2: Research | Integration tests + research quality review | Per-commit + research output review |
-| Stage 3: Milestones | Integration tests + milestone structure review | Per-commit + plan quality review |
-| Stage 4: Issue Generation | Integration tests + issue quality review + GitHub API testing | Per-commit + generated issue review |
-| Stage 5: Execution Structure | Integration tests + GitHub structure validation | Per-commit + branch/label verification |
-| Stage 6: Orchestration | Full integration tests + end-to-end execution testing + autonomous loop validation | Per-commit + supervised execution run + stop gate verification |
+| Stage 0: Data Model ✅ | Unit tests + typecheck + data model review | Per-commit + end of stage |
+| Stage 1: Goal Definition ✅ | Integration tests + manual chat testing | Per-commit + demo walkthrough |
+| Stage 2: Research ✅ | Integration tests + research quality review | Per-commit + research output review |
+| Stage 3: Milestones ✅ | Integration tests + milestone structure review | Per-commit + plan quality review |
+| Stage 4: Research + GitHub Integration + Dashboard | Research doc reviews + integration tests + GitHub API testing + E2E dashboard tests | Research decision gate after 4.1–4.5, then per-commit + generated issue review |
+| Stage 5: Execution Orchestration Bridge | Full integration tests + end-to-end execution testing + autonomous loop validation + stop gate verification | Per-commit + supervised execution run + milestone completion test |
 
 ---
 

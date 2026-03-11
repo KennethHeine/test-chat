@@ -4,6 +4,10 @@
 
 > **Custom agents available:** This process is encoded as a set of custom Copilot agents in [`.github/agents/`](../../.github/agents/). The **orchestrator** is a thin coordination agent that dispatches **5 sub-agents** — it never writes code or interacts with GitHub directly (except to read state). Helper scripts for automated polling and CI are in [`scripts/orchestrator/`](../../scripts/orchestrator/).
 
+> **Related docs:** [project-plan-v2.md](./project-plan-v2.md) — Stage definitions | [research-needed.md](./research-needed.md) — Research items (R3, R4 affect this process) | [goal.md](./goal.md) — Product vision
+>
+> **Stage 5 bridge (planned):** The web app will connect to this orchestration process via an execution bridge — see [project-plan-v2.md Stage 5](./project-plan-v2.md#stage-5-execution-orchestration-bridge). The bridge architecture depends on research R3 (web app → orchestration connection) and R4 (Copilot agent API). Currently, orchestration runs only in the GitHub agent runtime; Stage 5 will enable triggering it from the web UI.
+
 ---
 
 ## Overview

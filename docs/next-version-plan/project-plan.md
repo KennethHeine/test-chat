@@ -1,5 +1,9 @@
 # Project Plan: Next Version — AI Project Management & Delivery Orchestration
 
+> ⚠️ **SUPERSEDED** — This plan has been replaced by [project-plan-v2.md](./project-plan-v2.md). Stages 0–3 are complete. See the updated plan for the restructured Stages 4–5.
+>
+> See also: [goal.md](./goal.md) — Product vision | [research-needed.md](./research-needed.md) — Research items | [issue-breakdown.md](./issue-breakdown.md) — Updated issue specs
+
 > **Parent issue:** Research and Planning for Next Version Vision: Stepwise Build, Feedback, and Maintenance
 >
 > This plan breaks the next-version vision into staged, incremental deliverables. Each stage produces code, tests, and documentation. Every step addresses security and includes a feedback checkpoint before advancing.

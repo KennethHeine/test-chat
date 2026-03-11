@@ -1,8 +1,12 @@
 # Data Model: Planning Workflow
 
+> **Status:** ✅ Implemented (Stage 0). See [project-plan-v2.md](./project-plan-v2.md) for current roadmap.
+>
 > **Quick Reference** — jump directly to an entity: [Goal](#goal) · [ResearchItem](#researchitem) · [Milestone](#milestone) · [IssueDraft](#issuedraft)
 >
 > **Source files:** [`planning-types.ts`](../../planning-types.ts) · [`planning-store.ts`](../../planning-store.ts)
+>
+> **Next:** Stage 4 research item [R5](./research-needed.md#r5-persistent-planning-storage) covers migrating from `InMemoryPlanningStore` to persistent Azure Storage.
 
 ---
 
@@ -432,7 +436,9 @@ Status fields (`ResearchItem.status`, `Milestone.status`, `IssueDraft.status`) u
 
 ## Related Documentation
 
-- [Project Plan](project-plan.md) — Stage 0 data model spec and overall roadmap
-- [Issue Breakdown](issue-breakdown.md) — All 26 implementation issues including the Stage 0 issues that produced this code
+- [Product Goal](goal.md) — Product vision and success criteria
+- [Project Plan](project-plan-v2.md) — Updated roadmap (Stages 0–3 complete, Stages 4–5 planned)
+- [Research Needed](research-needed.md) — Required research before continuing (includes R5: persistent storage)
+- [Issue Breakdown](issue-breakdown.md) — Implementation issues by stage
 - [Architecture](../architecture.md) — System architecture and storage patterns
 - [Backend](../backend.md) — Express server and storage integration
