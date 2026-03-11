@@ -98,6 +98,9 @@ export interface ResearchItem {
 
   /** ISO 8601 timestamp of when this item was resolved. Only set when status is `resolved`. Undefined otherwise. */
   resolvedAt?: string;
+
+  /** Optional URL referencing the primary source for the findings (http or https only). */
+  sourceUrl?: string;
 }
 
 /**
