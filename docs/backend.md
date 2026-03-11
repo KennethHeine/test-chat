@@ -22,6 +22,7 @@ The backend is a single Express.js server written in TypeScript (`server.ts`), e
 | `PUT` | `/api/sessions/:id/messages` | Bearer token | Saves chat messages for a session |
 | `POST` | `/api/chat` | Bearer token | Sends a chat message and streams the response via SSE |
 | `POST` | `/api/chat/abort` | Bearer token | Aborts a streaming response mid-stream |
+| `POST` | `/api/chat/input` | Bearer token | Submits a user answer to a pending agent input request |
 | `POST` | `/api/chat/model` | Bearer token | Switches the model for an active session via `session.setModel()` |
 | `GET` | `/api/quota` | Bearer token | Returns the user's premium request quota via `client.rpc.account.getQuota()` |
 | `GET` | `/api/goals` | Bearer token | Lists all goals for the authenticated user across all their sessions |
@@ -63,6 +64,34 @@ data: {"type":"done","sessionId":"abc123"}
 ### `POST /api/chat/abort`
 
 **Request:** `{ "sessionId": "abc-123" }`
+
+### `POST /api/chat/input`
+
+Submits the user's answer to a pending `onUserInputRequest` from the agent.
+
+**Request:**
+```json
+{
+  "requestId": "uuid-of-the-pending-input-request",
+  "answer": "Option A",
+  "wasFreeform": false
+}
+```
+
+- `requestId` — Required string. The UUID sent in the `user_input_request` SSE event.
+- `answer` — Required non-empty string. The user's answer.
+- `wasFreeform` — Required boolean. `true` if the answer was typed; `false` if a choice was selected.
+
+**Response:** `{ "ok": true }` on success, or `404` if the request has already been resolved/timed out.
+
+**SSE event sent before the user answers:**
+```json
+{ "type": "user_input_request", "requestId": "...", "question": "Which approach do you prefer?", "choices": ["Option A", "Option B"], "allowFreeform": true }
+```
+
+**Timeout:** Requests automatically reject after `USER_INPUT_TIMEOUT_MS` ms (default 120000 / 2 minutes). Configurable via env var.
+
+**Cleanup:** When the SSE connection closes, all pending inputs from that connection are rejected so the agent receives an error instead of hanging indefinitely.
 
 ### `POST /api/chat/model`
 
@@ -187,9 +216,10 @@ The `/api/chat` endpoint translates SDK events into Server-Sent Events:
 8. SDK fires `assistant.intent` → backend writes SSE `intent` with current agent activity description
 9. SDK fires `subagent.started/completed/failed` → backend writes SSE `subagent_start`/`subagent_end`
 10. SDK fires `session.compaction_start/complete` → backend writes SSE `compaction` (on `session.compaction_complete` the payload includes `tokensRemoved` as a number, defaulting to 0 when unavailable)
-11. SDK fires `session.idle` → backend writes SSE `done` and closes stream
+11. SDK calls `onUserInputRequest` → backend writes SSE `user_input_request` and blocks until `POST /api/chat/input` resolves it (or timeout)
+12. SDK fires `session.idle` → backend writes SSE `done` and closes stream
 
-Event listener cleanup (unsubscribe functions) runs when the response ends or the client disconnects.
+Event listener cleanup (unsubscribe functions) runs when the response ends or the client disconnects. Pending user input requests from the disconnected connection are also rejected at cleanup time.
 
 ## Graceful Shutdown
 
