@@ -1716,7 +1716,7 @@ export function createPlanningTools(token: string, planningStore: PlanningStore)
     description:
       "Update one or more fields on an existing issue draft. " +
       "Requires draftId, goalId, and sessionId for ownership verification. " +
-      "Supports updating all IssueDraft fields including R9 fields " +
+      "Supports updating core IssueDraft fields and R9 fields " +
       "(filesToModify, filesToRead, patternReference, securityChecklist, verificationCommands). " +
       "FileRef elements are validated (non-empty path and reason). " +
       "All free-text fields are sanitized.",
@@ -1930,9 +1930,11 @@ export function createPlanningTools(token: string, planningStore: PlanningStore)
       }
 
       if (args.acceptanceCriteria !== undefined && args.acceptanceCriteria !== null) {
+        const acErrRaw = validateCriteriaArray(args.acceptanceCriteria, "acceptanceCriteria");
+        if (acErrRaw) return { error: acErrRaw };
         const sanitizedAC = (args.acceptanceCriteria as string[]).map(sanitizeText);
-        const acErr = validateCriteriaArray(sanitizedAC, "acceptanceCriteria");
-        if (acErr) return { error: acErr };
+        const acErrSanitized = validateCriteriaArray(sanitizedAC, "acceptanceCriteria");
+        if (acErrSanitized) return { error: acErrSanitized };
         updates.acceptanceCriteria = sanitizedAC;
       }
 
