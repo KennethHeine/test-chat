@@ -75,7 +75,18 @@ export const GITHUB_TOOL_NAMES = [
   "search_code",
   "create_github_milestone",
   "create_github_issue",
+  "create_github_branch",
+  "manage_github_labels",
 ] as const;
+
+// Valid hex color pattern (6 hex digits, no # prefix)
+const HEX_COLOR_RE = /^[0-9a-fA-F]{6}$/;
+
+// Branch name sanitization: keep only alphanumerics, dots, hyphens, underscores, and slashes
+const BRANCH_UNSAFE_RE = /[^a-zA-Z0-9._/-]/g;
+
+// Default label color used when none is provided (GitHub blue)
+const DEFAULT_LABEL_COLOR = "0075ca";
 
 // Max file size returned by read_repo_file (100KB) to prevent blowing up LLM context
 const MAX_FILE_SIZE = 100 * 1024;
@@ -715,5 +726,236 @@ export function createGitHubTools(token: string, planningStore?: PlanningStore):
     },
   };
 
-  return [listRepos, getRepoStructure, readRepoFile, listIssues, searchCode, createGithubMilestone, createGithubIssue];
+  /**
+   * create_github_branch: Creates a new Git branch in a GitHub repository from a specified base SHA.
+   * The branch name is sanitized to remove characters that are unsafe in Git ref names.
+   * Idempotent: if the branch already exists (422 already_exists), returns success without error.
+   */
+  const createGithubBranch: Tool = {
+    name: "create_github_branch",
+    description:
+      "Create a new Git branch in a GitHub repository from a specified base commit SHA. " +
+      "Branch names are sanitized (only alphanumerics, dots, hyphens, underscores, and slashes allowed). " +
+      "Idempotent: if the branch already exists, returns success without error.",
+    parameters: {
+      type: "object",
+      properties: {
+        owner: {
+          type: "string",
+          description: "GitHub repository owner (user or organization).",
+        },
+        repo: {
+          type: "string",
+          description: "GitHub repository name.",
+        },
+        branchName: {
+          type: "string",
+          description:
+            "Name for the new branch (e.g., 'stage-4/my-feature'). " +
+            "Will be sanitized: characters outside [a-zA-Z0-9._/-] are replaced with hyphens.",
+        },
+        baseSha: {
+          type: "string",
+          description: "The full commit SHA to create the branch from.",
+        },
+      },
+      required: ["owner", "repo", "branchName", "baseSha"],
+    },
+    handler: async (args: any) => {
+      // Validate required string fields
+      if (typeof args.owner !== "string" || args.owner.trim().length === 0) {
+        throw new Error("owner must be a non-empty string");
+      }
+      if (typeof args.repo !== "string" || args.repo.trim().length === 0) {
+        throw new Error("repo must be a non-empty string");
+      }
+      if (typeof args.branchName !== "string" || args.branchName.trim().length === 0) {
+        throw new Error("branchName must be a non-empty string");
+      }
+      if (typeof args.baseSha !== "string" || args.baseSha.trim().length === 0) {
+        throw new Error("baseSha must be a non-empty string");
+      }
+
+      // Sanitize branch name: replace unsafe characters with hyphens
+      const sanitizedName = args.branchName.trim().replace(BRANCH_UNSAFE_RE, "-");
+      if (sanitizedName.length === 0) {
+        throw new Error("branchName is invalid after sanitization");
+      }
+
+      const { owner, repo, baseSha } = args;
+      const ref = `refs/heads/${sanitizedName}`;
+
+      try {
+        const created = (await githubWrite(
+          token,
+          "POST",
+          `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/refs`,
+          { ref, sha: baseSha.trim() }
+        )) as any;
+        return {
+          branchName: sanitizedName,
+          ref: created.ref,
+          sha: created.object?.sha ?? baseSha.trim(),
+          alreadyExists: false,
+        };
+      } catch (err: any) {
+        // Handle duplicate: 422 with already_exists code
+        const msg: string = err?.message ?? "";
+        if (msg.includes("422")) {
+          let alreadyExists = false;
+          try {
+            const jsonStart = msg.indexOf("{");
+            if (jsonStart !== -1) {
+              const parsed = JSON.parse(msg.slice(jsonStart));
+              alreadyExists =
+                Array.isArray(parsed.errors) &&
+                parsed.errors.some((e: any) => e.code === "already_exists");
+            }
+          } catch {
+            // JSON parse failed; re-throw the original error rather than masking it
+          }
+          if (alreadyExists) {
+            return {
+              branchName: sanitizedName,
+              ref,
+              sha: baseSha.trim(),
+              alreadyExists: true,
+            };
+          }
+        }
+        throw err;
+      }
+    },
+  };
+
+  /**
+   * manage_github_labels: Creates one or more GitHub labels in a repository.
+   * Uses a consistent color scheme. Idempotent: 422 already_exists is treated as success.
+   */
+  const manageGithubLabels: Tool = {
+    name: "manage_github_labels",
+    description:
+      "Create one or more labels in a GitHub repository with a consistent color scheme. " +
+      "Idempotent: if a label already exists, it is skipped without error. " +
+      "Each label requires a name; color (6-digit hex without #) and description are optional.",
+    parameters: {
+      type: "object",
+      properties: {
+        owner: {
+          type: "string",
+          description: "GitHub repository owner (user or organization).",
+        },
+        repo: {
+          type: "string",
+          description: "GitHub repository name.",
+        },
+        labels: {
+          type: "array",
+          description: "List of labels to create.",
+          items: {
+            type: "object",
+            properties: {
+              name: {
+                type: "string",
+                description: "Label name (required, non-empty).",
+              },
+              color: {
+                type: "string",
+                description:
+                  "6-digit hex color without # prefix (e.g., '0075ca'). " +
+                  `Defaults to '${DEFAULT_LABEL_COLOR}' if omitted.`,
+              },
+              description: {
+                type: "string",
+                description: "Optional label description (max 100 characters).",
+              },
+            },
+            required: ["name"],
+          },
+        },
+      },
+      required: ["owner", "repo", "labels"],
+    },
+    handler: async (args: any) => {
+      // Validate required string fields
+      if (typeof args.owner !== "string" || args.owner.trim().length === 0) {
+        throw new Error("owner must be a non-empty string");
+      }
+      if (typeof args.repo !== "string" || args.repo.trim().length === 0) {
+        throw new Error("repo must be a non-empty string");
+      }
+      if (!Array.isArray(args.labels) || args.labels.length === 0) {
+        throw new Error("labels must be a non-empty array");
+      }
+
+      const { owner, repo } = args;
+      const results: Array<{ name: string; color: string; alreadyExists: boolean; url?: string }> = [];
+
+      for (const labelSpec of args.labels) {
+        if (typeof labelSpec.name !== "string" || labelSpec.name.trim().length === 0) {
+          throw new Error("Each label must have a non-empty name");
+        }
+        const name = labelSpec.name.trim();
+
+        // Validate or default color
+        let color = DEFAULT_LABEL_COLOR;
+        if (labelSpec.color !== undefined && labelSpec.color !== null && labelSpec.color !== "") {
+          if (typeof labelSpec.color !== "string" || !HEX_COLOR_RE.test(labelSpec.color)) {
+            throw new Error(`Label '${name}': color must be a 6-digit hex string without # prefix (e.g., '0075ca')`);
+          }
+          color = labelSpec.color;
+        }
+
+        // Validate optional description length
+        const description = labelSpec.description ?? "";
+        if (typeof description !== "string") {
+          throw new Error(`Label '${name}': description must be a string`);
+        }
+        if (description.length > 100) {
+          throw new Error(`Label '${name}': description exceeds 100 characters`);
+        }
+
+        const body: Record<string, unknown> = { name, color };
+        if (description.length > 0) {
+          body.description = description;
+        }
+
+        try {
+          const created = (await githubWrite(
+            token,
+            "POST",
+            `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/labels`,
+            body
+          )) as any;
+          results.push({ name, color, alreadyExists: false, url: created.url });
+        } catch (err: any) {
+          // Handle duplicate: 422 with already_exists code
+          const msg: string = err?.message ?? "";
+          if (msg.includes("422")) {
+            let alreadyExists = false;
+            try {
+              const jsonStart = msg.indexOf("{");
+              if (jsonStart !== -1) {
+                const parsed = JSON.parse(msg.slice(jsonStart));
+                alreadyExists =
+                  Array.isArray(parsed.errors) &&
+                  parsed.errors.some((e: any) => e.code === "already_exists");
+              }
+            } catch {
+              // JSON parse failed; re-throw the original error rather than masking it
+            }
+            if (alreadyExists) {
+              results.push({ name, color, alreadyExists: true });
+              continue;
+            }
+          }
+          throw err;
+        }
+      }
+
+      return { labels: results };
+    },
+  };
+
+  return [listRepos, getRepoStructure, readRepoFile, listIssues, searchCode, createGithubMilestone, createGithubIssue, createGithubBranch, manageGithubLabels];
 }
