@@ -7,7 +7,7 @@ The backend is a single Express.js server written in TypeScript (`server.ts`), e
 | File | Purpose |
 |------|---------|
 | `server.ts` | Express backend — API routes, SDK integration, SSE streaming |
-| `tools.ts` | GitHub API tools factory — 5 tools bound to user's token |
+| `tools.ts` | GitHub API tools factory — 6 tools bound to user's token (including `create_github_milestone`) |
 | `storage.ts` | Storage abstraction — Azure Table/Blob + in-memory fallback |
 
 ## API Endpoints

@@ -143,6 +143,12 @@ export interface Milestone {
    * - `complete`: All exit criteria have been met
    */
   status: 'draft' | 'ready' | 'in-progress' | 'complete';
+
+  /** The GitHub milestone number assigned after the milestone is pushed to GitHub. Undefined until created. */
+  githubNumber?: number;
+
+  /** The GitHub milestone HTML URL assigned after the milestone is pushed to GitHub. Undefined until created. */
+  githubUrl?: string;
 }
 
 /**
