@@ -96,6 +96,17 @@ const safePermissionHandler: PermissionHandler = async (request) => {
   return { kind: "denied-by-rules", rules: [{ description: `Denied ${request.kind}: only custom tools and read operations are auto-approved` }] };
 };
 
+// Extract a display name from a sub-agent event, preferring agentDisplayName over agentName
+function extractSubagentName(data: { agentDisplayName?: unknown; agentName?: unknown } | undefined): string {
+  if (typeof data?.agentDisplayName === "string" && data.agentDisplayName) {
+    return data.agentDisplayName.slice(0, 100);
+  }
+  if (typeof data?.agentName === "string" && data.agentName) {
+    return data.agentName.slice(0, 100);
+  }
+  return "Sub-agent";
+}
+
 // Build the shared session config used for both new and resumed sessions
 function buildSessionConfig(token: string, model: string): SessionConfig {
   return {
@@ -435,6 +446,66 @@ app.post("/api/chat", async (req: Request, res: Response) => {
     unsubscribers.push(
       session.on("assistant.usage", (event) => {
         res.write(`data: ${JSON.stringify({ type: "usage", usage: event.data })}\n\n`);
+      })
+    );
+
+    // Planning mode changes — emit planning_start when entering plan mode, plan_ready when exiting
+    unsubscribers.push(
+      session.on("session.mode_changed", (event) => {
+        const newMode = event.data?.newMode || "";
+        const previousMode = event.data?.previousMode || "";
+        if (newMode === "plan") {
+          res.write(`data: ${JSON.stringify({ type: "planning_start" })}\n\n`);
+        } else if (previousMode === "plan") {
+          res.write(`data: ${JSON.stringify({ type: "plan_ready" })}\n\n`);
+        }
+      })
+    );
+
+    // Agent intent — what the agent is currently doing
+    unsubscribers.push(
+      session.on("assistant.intent", (event) => {
+        const intent = typeof event.data?.intent === "string" ? event.data.intent.slice(0, 200) : "";
+        if (intent) {
+          res.write(`data: ${JSON.stringify({ type: "intent", intent })}\n\n`);
+        }
+      })
+    );
+
+    // Sub-agent lifecycle events
+    unsubscribers.push(
+      session.on("subagent.started", (event) => {
+        const name = extractSubagentName(event.data);
+        res.write(`data: ${JSON.stringify({ type: "subagent_start", name })}\n\n`);
+      })
+    );
+
+    unsubscribers.push(
+      session.on("subagent.completed", (event) => {
+        const name = extractSubagentName(event.data);
+        res.write(`data: ${JSON.stringify({ type: "subagent_end", name, success: true })}\n\n`);
+      })
+    );
+
+    unsubscribers.push(
+      session.on("subagent.failed", (event) => {
+        const name = extractSubagentName(event.data);
+        const error = typeof event.data?.error === "string" ? event.data.error.slice(0, 200) : "Sub-agent failed";
+        res.write(`data: ${JSON.stringify({ type: "subagent_end", name, success: false, error })}\n\n`);
+      })
+    );
+
+    // Context compaction events
+    unsubscribers.push(
+      session.on("session.compaction_start", () => {
+        res.write(`data: ${JSON.stringify({ type: "compaction", started: true })}\n\n`);
+      })
+    );
+
+    unsubscribers.push(
+      session.on("session.compaction_complete", (event) => {
+        const tokensRemoved = typeof event.data?.tokensRemoved === "number" ? event.data.tokensRemoved : 0;
+        res.write(`data: ${JSON.stringify({ type: "compaction", started: false, tokensRemoved })}\n\n`);
       })
     );
 

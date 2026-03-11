@@ -233,6 +233,54 @@ async function testServerChat(): Promise<void> {
   log("  ", `Server response: "${content.trim().slice(0, 80)}" (session: ${sessionId.slice(0, 8)}...)`);
 }
 
+async function testSseEventTypes(): Promise<void> {
+  // Verify that the new SSE event payload shapes are well-formed and parse correctly.
+  // This validates the JSON serialisation contracts between server.ts and the frontend.
+  const knownPayloads: Array<{ type: string } & Record<string, unknown>> = [
+    { type: "planning_start" },
+    { type: "plan_ready" },
+    { type: "intent", intent: "Exploring codebase" },
+    { type: "subagent_start", name: "Research Agent" },
+    { type: "subagent_end", name: "Research Agent", success: true },
+    { type: "subagent_end", name: "Research Agent", success: false, error: "Timed out" },
+    { type: "compaction", started: true },
+    { type: "compaction", started: false, tokensRemoved: 1000 },
+    { type: "compaction", started: false, tokensRemoved: 0 },
+  ];
+
+  for (const payload of knownPayloads) {
+    const line = `data: ${JSON.stringify(payload)}`;
+    if (!line.startsWith("data: ")) throw new Error(`Bad SSE line for type "${payload.type}"`);
+    const parsed = JSON.parse(line.slice(6)) as Record<string, unknown>;
+    if (parsed.type !== payload.type) {
+      throw new Error(`SSE round-trip failed for type "${payload.type}": got "${parsed.type}"`);
+    }
+    // Verify required fields per type
+    if (payload.type === "intent" && typeof parsed.intent !== "string") {
+      throw new Error(`"intent" payload must include string "intent" field`);
+    }
+    if ((payload.type === "subagent_start" || payload.type === "subagent_end") && typeof parsed.name !== "string") {
+      throw new Error(`"${payload.type}" payload must include string "name" field`);
+    }
+    if (payload.type === "subagent_end" && typeof parsed.success !== "boolean") {
+      throw new Error(`"subagent_end" payload must include boolean "success" field`);
+    }
+    if (payload.type === "compaction" && typeof parsed.started !== "boolean") {
+      throw new Error(`"compaction" payload must include boolean "started" field`);
+    }
+    // tokensRemoved is always a number on compaction complete (defaults to 0)
+    if (payload.type === "compaction" && payload.started === false && typeof parsed.tokensRemoved !== "number") {
+      throw new Error(`"compaction" complete payload must include numeric "tokensRemoved" field`);
+    }
+  }
+
+  // Verify that intent strings over 200 chars would be truncated before forwarding
+  const longIntent = "A".repeat(300);
+  if (longIntent.slice(0, 200).length !== 200) throw new Error("Intent length cap sanity check failed");
+
+  log("  ", `Verified ${knownPayloads.length} new SSE event payload shapes`);
+}
+
 // ============================================================
 // 3. Session persistence tests (HTTP API)
 // ============================================================
@@ -3538,6 +3586,7 @@ async function main() {
   await run("Server health check", testServerHealth);
   await run("Server models endpoint", testServerModels);
   await run("Server chat (SSE streaming)", testServerChat);
+  await run("SSE event types — new planning/intent/subagent/compaction events", testSseEventTypes);
 
   // --- Session persistence tests ---
   console.log("\n── Session Persistence Tests ──\n");

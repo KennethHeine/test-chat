@@ -115,7 +115,13 @@ Buffering handles partial lines that may arrive split across network chunks.
 | `tool_complete` | Removes tool activity indicator; for `save_goal` events renders a goal summary card in chat (or fetches the latest goal as fallback); for `generate_research_checklist` events renders a categorized research checklist card with status badges |
 | `title` | Updates session title in sidebar |
 | `usage` | Displays token count (inputTokens + outputTokens) in status bar |
-| `done` | Stores `sessionId`, removes typing indicator, enables send button |
+| `planning_start` | Shows "🗺️ Planning..." in agent status indicator |
+| `plan_ready` | Shows "✅ Plan ready" in agent status indicator |
+| `intent` | Shows current agent activity (e.g., "💡 Exploring codebase") in agent status indicator |
+| `subagent_start` | Shows sub-agent name and active count in agent status indicator |
+| `subagent_end` | Decrements active sub-agent counter; hides indicator when all complete |
+| `compaction` | Shows "🔄 Optimizing context..." when started; hides when complete |
+| `done` | Stores `sessionId`, removes typing indicator, enables send button, clears agent status |
 | `error` | Displays error message to user |
 
 ## Model Switching
