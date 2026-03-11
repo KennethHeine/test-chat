@@ -1781,6 +1781,191 @@ async function testGenerateIssueDraftsResearchLinksArePersistedOnDraft(): Promis
 }
 
 // ============================================================
+// 6b2. update_issue_draft tool tests
+// ============================================================
+
+/**
+ * Seeds a goal, milestone, and one issue draft into the store.
+ * Returns { goalId, milestoneId, sessionId, draftId }.
+ */
+async function seedIssueDraft(
+  store: InMemoryPlanningStore
+): Promise<{ goalId: string; milestoneId: string; sessionId: string; draftId: string }> {
+  const { goalId, milestoneId, sessionId } = await seedGoalAndMilestone(store);
+  const tools = createPlanningTools("test-token", store);
+  const gen = tools.find((t) => t.name === "generate_issue_drafts")!;
+  const result: any = await gen.handler(
+    { sessionId, goalId, milestoneId, issues: [makeValidIssueSpec()] },
+    STUB_INVOCATION
+  );
+  if (result.error) throw new Error(`seedIssueDraft failed: ${result.error}`);
+  return { goalId, milestoneId, sessionId, draftId: result.issues[0].id };
+}
+
+async function testUpdateIssueDraftFieldsAreUpdated(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const { goalId, sessionId, draftId } = await seedIssueDraft(store);
+  const tools = createPlanningTools("test-token", store);
+  const update = tools.find((t) => t.name === "update_issue_draft")!;
+
+  const result: any = await update.handler(
+    {
+      draftId,
+      goalId,
+      sessionId,
+      title: "Updated Title",
+      status: "ready",
+    },
+    STUB_INVOCATION
+  );
+  if (result.error) throw new Error(`Unexpected error: ${result.error}`);
+  if (!result.draft) throw new Error("Expected draft in result");
+  if (result.draft.title !== "Updated Title") {
+    throw new Error(`Expected title 'Updated Title', got '${result.draft.title}'`);
+  }
+  if (result.draft.status !== "ready") {
+    throw new Error(`Expected status 'ready', got '${result.draft.status}'`);
+  }
+  if (result.draft.id !== draftId) throw new Error("ID should be unchanged");
+}
+
+async function testUpdateIssueDraftWrongSessionReturnsError(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const { goalId, draftId } = await seedIssueDraft(store);
+  const tools = createPlanningTools("test-token", store);
+  const update = tools.find((t) => t.name === "update_issue_draft")!;
+
+  const result: any = await update.handler(
+    { draftId, goalId, sessionId: "wrong-session", title: "New Title" },
+    STUB_INVOCATION
+  );
+  if (!result.error) throw new Error("Expected error for wrong sessionId");
+  if (!result.error.includes("Goal not found")) {
+    throw new Error(`Expected 'Goal not found' error, got '${result.error}'`);
+  }
+}
+
+async function testUpdateIssueDraftNotFoundReturnsError(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const { goalId, sessionId } = await seedIssueDraft(store);
+  const tools = createPlanningTools("test-token", store);
+  const update = tools.find((t) => t.name === "update_issue_draft")!;
+
+  const result: any = await update.handler(
+    { draftId: "nonexistent-id", goalId, sessionId, title: "New Title" },
+    STUB_INVOCATION
+  );
+  if (!result.error) throw new Error("Expected error for unknown draftId");
+  if (!result.error.includes("Issue draft not found")) {
+    throw new Error(`Expected 'Issue draft not found' error, got '${result.error}'`);
+  }
+}
+
+async function testUpdateIssueDraftFileRefValidationOnUpdate(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const { goalId, sessionId, draftId } = await seedIssueDraft(store);
+  const tools = createPlanningTools("test-token", store);
+  const update = tools.find((t) => t.name === "update_issue_draft")!;
+
+  // Missing reason field
+  const result: any = await update.handler(
+    {
+      draftId,
+      goalId,
+      sessionId,
+      filesToModify: [{ path: "server.ts" }],
+    },
+    STUB_INVOCATION
+  );
+  if (!result.error) throw new Error("Expected error for FileRef missing reason");
+
+  // Path traversal in filesToRead
+  const result2: any = await update.handler(
+    {
+      draftId,
+      goalId,
+      sessionId,
+      filesToRead: [{ path: "../secret.ts", reason: "some reason" }],
+    },
+    STUB_INVOCATION
+  );
+  if (!result2.error) throw new Error("Expected error for path traversal in filesToRead");
+}
+
+async function testUpdateIssueDraftTextFieldsAreSanitized(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const { goalId, sessionId, draftId } = await seedIssueDraft(store);
+  const tools = createPlanningTools("test-token", store);
+  const update = tools.find((t) => t.name === "update_issue_draft")!;
+
+  const result: any = await update.handler(
+    { draftId, goalId, sessionId, title: "Title <b>with HTML</b>" },
+    STUB_INVOCATION
+  );
+  if (result.error) throw new Error(`Unexpected error: ${result.error}`);
+  if (!result.draft.title.includes("&lt;")) {
+    throw new Error(`Expected HTML-escaped title, got '${result.draft.title}'`);
+  }
+}
+
+async function testUpdateIssueDraftInvalidStatusReturnsError(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const { goalId, sessionId, draftId } = await seedIssueDraft(store);
+  const tools = createPlanningTools("test-token", store);
+  const update = tools.find((t) => t.name === "update_issue_draft")!;
+
+  const result: any = await update.handler(
+    { draftId, goalId, sessionId, status: "invalid-status" },
+    STUB_INVOCATION
+  );
+  if (!result.error) throw new Error("Expected error for invalid status");
+  if (!result.error.includes("draft") || !result.error.includes("ready") || !result.error.includes("created")) {
+    throw new Error(`Expected error listing valid statuses, got '${result.error}'`);
+  }
+}
+
+async function testUpdateIssueDraftR9FieldsCanBeUpdated(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const { goalId, sessionId, draftId } = await seedIssueDraft(store);
+  const tools = createPlanningTools("test-token", store);
+  const update = tools.find((t) => t.name === "update_issue_draft")!;
+
+  const result: any = await update.handler(
+    {
+      draftId,
+      goalId,
+      sessionId,
+      filesToModify: [{ path: "planning-tools.ts", reason: "Add update tool" }],
+      filesToRead: [{ path: "planning-types.ts", reason: "Understand IssueDraft interface" }],
+      patternReference: "update_milestone tool",
+      securityChecklist: ["Validate input", "Check ownership"],
+      verificationCommands: ["npx tsc --noEmit"],
+    },
+    STUB_INVOCATION
+  );
+  if (result.error) throw new Error(`Unexpected error: ${result.error}`);
+  const draft = result.draft;
+  if (!Array.isArray(draft.filesToModify) || draft.filesToModify.length !== 1) {
+    throw new Error("Expected 1 filesToModify entry");
+  }
+  if (draft.filesToModify[0].path !== "planning-tools.ts") {
+    throw new Error(`Unexpected filesToModify path: ${draft.filesToModify[0].path}`);
+  }
+  if (!Array.isArray(draft.filesToRead) || draft.filesToRead.length !== 1) {
+    throw new Error("Expected 1 filesToRead entry");
+  }
+  if (draft.patternReference !== "update_milestone tool") {
+    throw new Error(`Unexpected patternReference: ${draft.patternReference}`);
+  }
+  if (!Array.isArray(draft.securityChecklist) || draft.securityChecklist.length !== 2) {
+    throw new Error("Expected 2 securityChecklist entries");
+  }
+  if (!Array.isArray(draft.verificationCommands) || draft.verificationCommands.length !== 1) {
+    throw new Error("Expected 1 verificationCommands entry");
+  }
+}
+
+// ============================================================
 // 6c. create_github_milestone tool tests
 // ============================================================
 
@@ -2388,7 +2573,7 @@ async function main() {
   // --- Planning tools tests ---
   console.log("\n── Planning Tools Tests ──\n");
 
-  await run("Planning tools: all 10 tools registered with correct names", testPlanningToolRegistration);
+  await run("Planning tools: all 11 tools registered with correct names", testPlanningToolRegistration);
   await run("define_goal: returns structured template from raw intent", testDefineGoalReturnsTemplate);
   await run("define_goal: empty intent returns validation error", testDefineGoalEmptyIntentReturnsError);
   await run("save_goal: valid data returns goal with generated ID and timestamps", testSaveGoalValidDataReturnsGoalWithId);
@@ -2451,6 +2636,17 @@ async function main() {
   await run("generate_issue_drafts: path traversal in filesToModify returns error", testGenerateIssueDraftsPathTraversalReturnsError);
   await run("generate_issue_drafts: empty verificationCommands returns error", testGenerateIssueDraftsMissingVerificationCommandsReturnsError);
   await run("generate_issue_drafts: researchLinks are persisted on draft", testGenerateIssueDraftsResearchLinksArePersistedOnDraft);
+
+  // --- update_issue_draft tests ---
+  console.log("\n── update_issue_draft Tool Tests ──\n");
+
+  await run("update_issue_draft: fields are updated and returned", testUpdateIssueDraftFieldsAreUpdated);
+  await run("update_issue_draft: wrong sessionId returns error", testUpdateIssueDraftWrongSessionReturnsError);
+  await run("update_issue_draft: unknown draftId returns error", testUpdateIssueDraftNotFoundReturnsError);
+  await run("update_issue_draft: invalid FileRef returns error", testUpdateIssueDraftFileRefValidationOnUpdate);
+  await run("update_issue_draft: text fields are sanitized before storage", testUpdateIssueDraftTextFieldsAreSanitized);
+  await run("update_issue_draft: invalid status returns error", testUpdateIssueDraftInvalidStatusReturnsError);
+  await run("update_issue_draft: R9 fields can be updated", testUpdateIssueDraftR9FieldsCanBeUpdated);
 
   await run("create_github_milestone: GitHub tool names include new tool", testGithubToolRegistration);
   await run("create_github_milestone: creates new when none exists", testCreateGithubMilestoneCreatesNew);
