@@ -2663,6 +2663,382 @@ async function testCreateGithubIssueMissingNumberThrows(): Promise<void> {
 }
 
 // ============================================================
+// create_github_branch tool tests
+// ============================================================
+
+async function testCreateGithubBranchCreatesNew(): Promise<void> {
+  const tools = createGitHubTools("test-token");
+  const tool = tools.find((t) => t.name === "create_github_branch")!;
+
+  const orig = (global as any).fetch;
+  (global as any).fetch = async (url: string, init?: any) => {
+    const method = init?.method ?? "GET";
+    if (method === "POST" && String(url).includes("/git/refs")) {
+      return {
+        ok: true,
+        status: 201,
+        json: async () => ({
+          ref: "refs/heads/stage-4/my-feature",
+          object: { sha: "abc123", type: "commit" },
+        }),
+        headers: { get: () => null },
+      };
+    }
+    return orig(url, init);
+  };
+  try {
+    const result: any = await tool.handler(
+      { owner: "owner", repo: "repo", branchName: "stage-4/my-feature", baseSha: "abc123" },
+      STUB_INVOCATION
+    );
+    if (result.branchName !== "stage-4/my-feature") {
+      throw new Error(`Expected branchName 'stage-4/my-feature', got '${result.branchName}'`);
+    }
+    if (result.ref !== "refs/heads/stage-4/my-feature") {
+      throw new Error(`Unexpected ref: ${result.ref}`);
+    }
+    if (result.alreadyExists !== false) throw new Error("Expected alreadyExists false");
+  } finally {
+    (global as any).fetch = orig;
+  }
+}
+
+async function testCreateGithubBranchSanitizesBranchName(): Promise<void> {
+  const tools = createGitHubTools("test-token");
+  const tool = tools.find((t) => t.name === "create_github_branch")!;
+
+  let capturedBody: any;
+  const orig = (global as any).fetch;
+  (global as any).fetch = async (url: string, init?: any) => {
+    const method = init?.method ?? "GET";
+    if (method === "POST" && String(url).includes("/git/refs")) {
+      capturedBody = JSON.parse(init?.body ?? "{}");
+      return {
+        ok: true,
+        status: 201,
+        json: async () => ({
+          ref: capturedBody.ref,
+          object: { sha: capturedBody.sha, type: "commit" },
+        }),
+        headers: { get: () => null },
+      };
+    }
+    return orig(url, init);
+  };
+  try {
+    const result: any = await tool.handler(
+      { owner: "owner", repo: "repo", branchName: "stage 4: my@feature!", baseSha: "abc123" },
+      STUB_INVOCATION
+    );
+    // Spaces, colons, @, ! should be replaced with hyphens
+    if (!/^[a-zA-Z0-9._/-]+$/.test(result.branchName)) {
+      throw new Error(`Branch name still contains unsafe characters: '${result.branchName}'`);
+    }
+  } finally {
+    (global as any).fetch = orig;
+  }
+}
+
+async function testCreateGithubBranchIdempotentWhenExists(): Promise<void> {
+  const tools = createGitHubTools("test-token");
+  const tool = tools.find((t) => t.name === "create_github_branch")!;
+
+  const orig = (global as any).fetch;
+  (global as any).fetch = async (url: string, init?: any) => {
+    const method = init?.method ?? "GET";
+    if (method === "POST" && String(url).includes("/git/refs")) {
+      return {
+        ok: false,
+        status: 422,
+        text: async () =>
+          JSON.stringify({
+            message: "Reference already exists",
+            errors: [{ code: "already_exists" }],
+          }),
+        headers: { get: () => null },
+      };
+    }
+    // GET for fetching the existing ref after 422
+    if (method === "GET" && String(url).includes("/git/ref/heads/")) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          ref: "refs/heads/my-branch",
+          object: { sha: "existingsha456", type: "commit" },
+        }),
+        headers: { get: () => null },
+      };
+    }
+    return orig(url, init);
+  };
+  try {
+    const result: any = await tool.handler(
+      { owner: "owner", repo: "repo", branchName: "my-branch", baseSha: "abc123" },
+      STUB_INVOCATION
+    );
+    if (result.alreadyExists !== true) {
+      throw new Error("Expected alreadyExists true for 422 already_exists");
+    }
+    // Should return the actual SHA from the existing ref, not baseSha
+    if (result.sha !== "existingsha456") {
+      throw new Error(`Expected sha 'existingsha456' from existing ref, got '${result.sha}'`);
+    }
+  } finally {
+    (global as any).fetch = orig;
+  }
+}
+
+async function testCreateGithubBranchMissingOwnerThrows(): Promise<void> {
+  const tools = createGitHubTools("test-token");
+  const tool = tools.find((t) => t.name === "create_github_branch")!;
+  try {
+    await tool.handler(
+      { owner: "", repo: "repo", branchName: "my-branch", baseSha: "abc123" },
+      STUB_INVOCATION
+    );
+    throw new Error("Expected error for empty owner");
+  } catch (err: any) {
+    if (!err.message.includes("owner")) {
+      throw new Error(`Expected error about 'owner', got: ${err.message}`);
+    }
+  }
+}
+
+async function testCreateGithubBranchMissingBaseShaThrows(): Promise<void> {
+  const tools = createGitHubTools("test-token");
+  const tool = tools.find((t) => t.name === "create_github_branch")!;
+  try {
+    await tool.handler(
+      { owner: "owner", repo: "repo", branchName: "my-branch", baseSha: "" },
+      STUB_INVOCATION
+    );
+    throw new Error("Expected error for empty baseSha");
+  } catch (err: any) {
+    if (!err.message.includes("baseSha")) {
+      throw new Error(`Expected error about 'baseSha', got: ${err.message}`);
+    }
+  }
+}
+
+// ============================================================
+// manage_github_labels tool tests
+// ============================================================
+
+async function testManageGithubLabelsCreatesNew(): Promise<void> {
+  const tools = createGitHubTools("test-token");
+  const tool = tools.find((t) => t.name === "manage_github_labels")!;
+
+  const orig = (global as any).fetch;
+  (global as any).fetch = async (url: string, init?: any) => {
+    const method = init?.method ?? "GET";
+    if (method === "POST" && String(url).includes("/labels")) {
+      const body = JSON.parse(init?.body ?? "{}");
+      return {
+        ok: true,
+        status: 201,
+        json: async () => ({
+          name: body.name,
+          color: body.color,
+          url: `https://api.github.com/repos/owner/repo/labels/${encodeURIComponent(body.name)}`,
+        }),
+        headers: { get: () => null },
+      };
+    }
+    return orig(url, init);
+  };
+  try {
+    const result: any = await tool.handler(
+      {
+        owner: "owner",
+        repo: "repo",
+        labels: [
+          { name: "stage-4", color: "0075ca", description: "Stage 4 issues" },
+          { name: "enhancement", color: "a2eeef" },
+        ],
+      },
+      STUB_INVOCATION
+    );
+    if (!Array.isArray(result.labels) || result.labels.length !== 2) {
+      throw new Error(`Expected 2 labels in result, got: ${JSON.stringify(result)}`);
+    }
+    if (result.labels[0].alreadyExists !== false) {
+      throw new Error("Expected alreadyExists false for first label");
+    }
+    if (result.labels[1].alreadyExists !== false) {
+      throw new Error("Expected alreadyExists false for second label");
+    }
+  } finally {
+    (global as any).fetch = orig;
+  }
+}
+
+async function testManageGithubLabelsIdempotentWhenExists(): Promise<void> {
+  const tools = createGitHubTools("test-token");
+  const tool = tools.find((t) => t.name === "manage_github_labels")!;
+
+  const orig = (global as any).fetch;
+  (global as any).fetch = async (url: string, init?: any) => {
+    const method = init?.method ?? "GET";
+    if (method === "POST" && String(url).includes("/labels")) {
+      return {
+        ok: false,
+        status: 422,
+        text: async () =>
+          JSON.stringify({
+            message: "Validation Failed",
+            errors: [{ resource: "Label", field: "name", code: "already_exists" }],
+          }),
+        headers: { get: () => null },
+      };
+    }
+    return orig(url, init);
+  };
+  try {
+    const result: any = await tool.handler(
+      { owner: "owner", repo: "repo", labels: [{ name: "existing-label" }] },
+      STUB_INVOCATION
+    );
+    if (result.labels[0].alreadyExists !== true) {
+      throw new Error("Expected alreadyExists true for 422 already_exists");
+    }
+  } finally {
+    (global as any).fetch = orig;
+  }
+}
+
+async function testManageGithubLabelsDefaultColor(): Promise<void> {
+  const tools = createGitHubTools("test-token");
+  const tool = tools.find((t) => t.name === "manage_github_labels")!;
+
+  let capturedBody: any;
+  const orig = (global as any).fetch;
+  (global as any).fetch = async (url: string, init?: any) => {
+    const method = init?.method ?? "GET";
+    if (method === "POST" && String(url).includes("/labels")) {
+      capturedBody = JSON.parse(init?.body ?? "{}");
+      return {
+        ok: true,
+        status: 201,
+        json: async () => ({ name: capturedBody.name, color: capturedBody.color, url: "" }),
+        headers: { get: () => null },
+      };
+    }
+    return orig(url, init);
+  };
+  try {
+    await tool.handler(
+      { owner: "owner", repo: "repo", labels: [{ name: "no-color-label" }] },
+      STUB_INVOCATION
+    );
+    // Default color should be '0075ca'
+    if (capturedBody?.color !== "0075ca") {
+      throw new Error(`Expected default color '0075ca', got '${capturedBody?.color}'`);
+    }
+  } finally {
+    (global as any).fetch = orig;
+  }
+}
+
+async function testManageGithubLabelsInvalidColorThrows(): Promise<void> {
+  const tools = createGitHubTools("test-token");
+  const tool = tools.find((t) => t.name === "manage_github_labels")!;
+  try {
+    await tool.handler(
+      { owner: "owner", repo: "repo", labels: [{ name: "bad-color", color: "#invalid" }] },
+      STUB_INVOCATION
+    );
+    throw new Error("Expected error for invalid color");
+  } catch (err: any) {
+    if (!err.message.toLowerCase().includes("color")) {
+      throw new Error(`Expected error about 'color', got: ${err.message}`);
+    }
+  }
+}
+
+async function testManageGithubLabelsColorWithWhitespaceAccepted(): Promise<void> {
+  const tools = createGitHubTools("test-token");
+  const tool = tools.find((t) => t.name === "manage_github_labels")!;
+
+  let capturedBody: any;
+  const orig = (global as any).fetch;
+  (global as any).fetch = async (url: string, init?: any) => {
+    const method = init?.method ?? "GET";
+    if (method === "POST" && String(url).includes("/labels")) {
+      capturedBody = JSON.parse(init?.body ?? "{}");
+      return {
+        ok: true,
+        status: 201,
+        json: async () => ({ name: capturedBody.name, color: capturedBody.color, url: "" }),
+        headers: { get: () => null },
+      };
+    }
+    return orig(url, init);
+  };
+  try {
+    // Whitespace-padded color should be trimmed and accepted
+    await tool.handler(
+      { owner: "owner", repo: "repo", labels: [{ name: "trimmed-color", color: " 0075ca " }] },
+      STUB_INVOCATION
+    );
+    if (capturedBody?.color !== "0075ca") {
+      throw new Error(`Expected trimmed color '0075ca' sent to API, got '${capturedBody?.color}'`);
+    }
+  } finally {
+    (global as any).fetch = orig;
+  }
+}
+
+async function testManageGithubLabelsDescriptionTooLongThrows(): Promise<void> {
+  const tools = createGitHubTools("test-token");
+  const tool = tools.find((t) => t.name === "manage_github_labels")!;
+  try {
+    await tool.handler(
+      {
+        owner: "owner",
+        repo: "repo",
+        labels: [{ name: "label", description: "x".repeat(101) }],
+      },
+      STUB_INVOCATION
+    );
+    throw new Error("Expected error for description > 100 chars");
+  } catch (err: any) {
+    if (!err.message.toLowerCase().includes("description")) {
+      throw new Error(`Expected error about 'description', got: ${err.message}`);
+    }
+  }
+}
+
+async function testManageGithubLabelsMissingOwnerThrows(): Promise<void> {
+  const tools = createGitHubTools("test-token");
+  const tool = tools.find((t) => t.name === "manage_github_labels")!;
+  try {
+    await tool.handler(
+      { owner: "", repo: "repo", labels: [{ name: "label" }] },
+      STUB_INVOCATION
+    );
+    throw new Error("Expected error for empty owner");
+  } catch (err: any) {
+    if (!err.message.includes("owner")) {
+      throw new Error(`Expected error about 'owner', got: ${err.message}`);
+    }
+  }
+}
+
+async function testManageGithubLabelsEmptyArrayThrows(): Promise<void> {
+  const tools = createGitHubTools("test-token");
+  const tool = tools.find((t) => t.name === "manage_github_labels")!;
+  try {
+    await tool.handler({ owner: "owner", repo: "repo", labels: [] }, STUB_INVOCATION);
+    throw new Error("Expected error for empty labels array");
+  } catch (err: any) {
+    if (!err.message.toLowerCase().includes("labels")) {
+      throw new Error(`Expected error about 'labels', got: ${err.message}`);
+    }
+  }
+}
+
+// ============================================================
 // 7. Research API endpoint tests (HTTP)
 // ============================================================
 
@@ -3317,6 +3693,27 @@ async function main() {
   await run("create_github_issue: issue body contains all required sections", testCreateGithubIssueBodyContainsAllSections);
   await run("create_github_issue: draft with status 'draft' is rejected", testCreateGithubIssueDraftNotReadyThrows);
   await run("create_github_issue: missing issue number in response throws", testCreateGithubIssueMissingNumberThrows);
+
+  // --- create_github_branch tests ---
+  console.log("\n── create_github_branch Tool Tests ──\n");
+
+  await run("create_github_branch: creates new branch from base SHA", testCreateGithubBranchCreatesNew);
+  await run("create_github_branch: sanitizes unsafe characters in branch name", testCreateGithubBranchSanitizesBranchName);
+  await run("create_github_branch: idempotent when branch already exists (422)", testCreateGithubBranchIdempotentWhenExists);
+  await run("create_github_branch: empty owner throws", testCreateGithubBranchMissingOwnerThrows);
+  await run("create_github_branch: empty baseSha throws", testCreateGithubBranchMissingBaseShaThrows);
+
+  // --- manage_github_labels tests ---
+  console.log("\n── manage_github_labels Tool Tests ──\n");
+
+  await run("manage_github_labels: creates new labels", testManageGithubLabelsCreatesNew);
+  await run("manage_github_labels: idempotent when label already exists (422)", testManageGithubLabelsIdempotentWhenExists);
+  await run("manage_github_labels: uses default color when none provided", testManageGithubLabelsDefaultColor);
+  await run("manage_github_labels: invalid color throws", testManageGithubLabelsInvalidColorThrows);
+  await run("manage_github_labels: whitespace-padded color is trimmed and accepted", testManageGithubLabelsColorWithWhitespaceAccepted);
+  await run("manage_github_labels: description over 100 chars throws", testManageGithubLabelsDescriptionTooLongThrows);
+  await run("manage_github_labels: empty owner throws", testManageGithubLabelsMissingOwnerThrows);
+  await run("manage_github_labels: empty labels array throws", testManageGithubLabelsEmptyArrayThrows);
 
   // --- Summary ---
   console.log("\n═══════════════════════════════════════════════");
