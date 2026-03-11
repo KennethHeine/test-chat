@@ -442,6 +442,46 @@ async function testServerQuotaNoAuth(): Promise<void> {
   }
 }
 
+async function testReasoningEffortInvalidValue(): Promise<void> {
+  const res = await fetch(`${BASE}/api/chat`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ message: "hello", model: FREE_MODEL, reasoningEffort: "ultra" }),
+  });
+  if (res.status !== 400) throw new Error(`Expected 400 for invalid reasoningEffort, got ${res.status}`);
+  const data = await res.json();
+  if (!data.error || !data.error.includes("reasoningEffort")) {
+    throw new Error(`Expected error message referencing reasoningEffort, got: ${JSON.stringify(data)}`);
+  }
+}
+
+async function testReasoningEffortValidValues(): Promise<void> {
+  // NOTE: This test only validates server-side input handling — it confirms the server
+  // accepts each allowed value without a pre-stream 400. It does not verify that the
+  // reasoningEffort is actually applied in the SDK session config.
+  for (const effort of ["low", "medium", "high", "xhigh"]) {
+    const controller = new AbortController();
+    const res = await fetch(`${BASE}/api/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+      body: JSON.stringify({ message: "Reply with: EFFORT_TEST_OK", model: FREE_MODEL, reasoningEffort: effort }),
+      signal: controller.signal,
+    });
+    // Valid effort should not return 400; it returns 200 (SSE) or another non-400 status
+    if (res.status === 400) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(`Valid reasoningEffort "${effort}" was rejected with 400: ${JSON.stringify(data)}`);
+    }
+    // Abort the SSE stream after confirming headers to avoid waiting for full response
+    try {
+      controller.abort();
+    } catch {
+      // ignore abort errors
+    }
+  }
+  log("  ", "All 4 valid reasoning effort values accepted");
+}
+
 // ============================================================
 // 5. Goal API tests
 // ============================================================
@@ -3604,6 +3644,8 @@ async function main() {
   await run("Model switch validates required fields", testServerModelSwitchMissingFields);
   await run("Quota endpoint returns data", testServerQuotaEndpoint);
   await run("Quota endpoint handles no auth gracefully", testServerQuotaNoAuth);
+  await run("Reasoning effort: invalid value returns 400", testReasoningEffortInvalidValue);
+  await run("Reasoning effort: valid values accepted", testReasoningEffortValidValues);
 
   // --- Goal API tests ---
   console.log("\n── Goal API Tests ──\n");
