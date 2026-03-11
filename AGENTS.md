@@ -124,6 +124,7 @@
 | GET | `/api/goals` | Bearer token | List all goals for the user |
 | GET | `/api/goals/:id` | Bearer token | Get a specific goal by ID |
 | GET | `/api/goals/:id/research` | Bearer token | List research items for a goal |
+| PATCH | `/api/goals/:goalId/research/:itemId` | Bearer token | Update findings/decision/status on a research item |
 | GET | `/api/goals/:id/milestones` | Bearer token | List milestones for a goal in order |
 | GET | `/api/milestones/:id/issues` | Bearer token | List issue drafts for a milestone in order |
 
