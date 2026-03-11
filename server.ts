@@ -664,6 +664,36 @@ app.get("/api/goals/:id/milestones", async (req: Request, res: Response) => {
   }
 });
 
+// Get issue drafts for a specific milestone, scoped to the authenticated user
+app.get("/api/milestones/:id/issues", async (req: Request, res: Response) => {
+  const token = extractToken(req);
+  if (!token) {
+    res.status(401).json({ error: "Missing token. Provide Authorization: Bearer <token> header." });
+    return;
+  }
+
+  const milestoneId = req.params.id as string;
+
+  try {
+    const milestone = await planningStore.getMilestone(milestoneId);
+    if (!milestone) {
+      res.status(404).json({ error: "Milestone not found" });
+      return;
+    }
+
+    const goal = await getOwnedGoal(token, milestone.goalId);
+    if (!goal) {
+      res.status(404).json({ error: "Milestone not found" });
+      return;
+    }
+
+    const issues = await planningStore.listIssueDrafts(milestoneId);
+    res.json({ issues });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Failed to get issue drafts" });
+  }
+});
+
 // Test-only: seed a goal directly into the planning store (only active when ENABLE_GOAL_SEED=true)
 if (process.env.ENABLE_GOAL_SEED === "true") {
   app.post("/api/test/seed-goal", async (req: Request, res: Response) => {
@@ -774,6 +804,45 @@ if (process.env.ENABLE_GOAL_SEED === "true") {
     } catch (err: any) {
       // Unexpected errors (e.g., getOwnedGoal/session store failures) → 500 Internal Server Error
       res.status(500).json({ error: err.message || "Failed to seed milestone" });
+    }
+  });
+
+  app.post("/api/test/seed-issue-draft", async (req: Request, res: Response) => {
+    const token = extractToken(req);
+    if (!token) {
+      res.status(401).json({ error: "Missing token. Provide Authorization: Bearer <token> header." });
+      return;
+    }
+    try {
+      const draft = req.body as import("./planning-types.js").IssueDraft;
+
+      if (typeof draft.milestoneId !== "string" || draft.milestoneId.trim().length === 0) {
+        res.status(400).json({ error: "milestoneId is required and must be a string" });
+        return;
+      }
+
+      const milestone = await planningStore.getMilestone(draft.milestoneId);
+      if (!milestone) {
+        res.status(404).json({ error: "Referenced milestone does not exist" });
+        return;
+      }
+
+      const goal = await getOwnedGoal(token, milestone.goalId);
+      if (!goal) {
+        res.status(404).json({ error: "Referenced milestone does not exist or does not belong to the authenticated user" });
+        return;
+      }
+
+      try {
+        const created = await planningStore.createIssueDraft(draft);
+        res.status(201).json(created);
+      } catch (err: any) {
+        // Validation or domain errors from createIssueDraft → 400 Bad Request
+        res.status(400).json({ error: err.message || "Invalid issue draft" });
+      }
+    } catch (err: any) {
+      // Unexpected errors → 500 Internal Server Error
+      res.status(500).json({ error: err.message || "Failed to seed issue draft" });
     }
   });
 }

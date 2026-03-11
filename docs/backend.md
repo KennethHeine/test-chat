@@ -28,6 +28,7 @@ The backend is a single Express.js server written in TypeScript (`server.ts`), e
 | `GET` | `/api/goals/:id` | Bearer token | Gets a specific goal by ID, scoped to the authenticated user |
 | `GET` | `/api/goals/:id/research` | Bearer token | Lists all research items for a goal, scoped to the authenticated user |
 | `GET` | `/api/goals/:id/milestones` | Bearer token | Lists all milestones for a goal in order, scoped to the authenticated user |
+| `GET` | `/api/milestones/:id/issues` | Bearer token | Lists all issue drafts for a milestone in order, scoped to the authenticated user |
 
 ### `POST /api/chat` — Chat with Streaming
 

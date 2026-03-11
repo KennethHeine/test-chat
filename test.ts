@@ -2478,6 +2478,188 @@ async function testMilestonesSeedAndRetrieve(): Promise<void> {
 }
 
 // ============================================================
+// 9. Issue Draft API endpoint tests (HTTP)
+// ============================================================
+
+async function testIssueDraftsGetNoAuthHeaderIsHandled(): Promise<void> {
+  const res = await fetch(`${BASE}/api/milestones/some-milestone-id/issues`);
+  // Same env-token fallback caveat as other no-auth tests: missing Authorization
+  // header may be satisfied by an env-based token, so 401/404/200 are all acceptable.
+  if (res.status !== 401 && res.status !== 404 && res.status !== 200) {
+    throw new Error(`Expected 401, 404, or 200 (env-token fallback), got ${res.status}`);
+  }
+}
+
+async function testIssueDraftsGetNotFound(): Promise<void> {
+  const res = await fetch(`${BASE}/api/milestones/nonexistent-milestone-id-99999/issues`, {
+    headers: testAuthHeaders(),
+  });
+  if (res.status !== 404) throw new Error(`Expected 404, got ${res.status}`);
+  const data = await res.json();
+  if (!data.error) throw new Error("Expected error message in 404 response");
+}
+
+async function testIssueDraftsGetEmptyForMilestoneWithNoIssues(): Promise<void> {
+  // Create a session so that the ownership check passes
+  const sessionId = `test-issues-empty-session-${Date.now()}`;
+  const saveRes = await fetch(`${BASE}/api/sessions/${sessionId}/messages`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ messages: [{ role: "user", text: "issues empty test" }] }),
+  });
+  if (!saveRes.ok) throw new Error(`Failed to seed session: HTTP ${saveRes.status}`);
+
+  const goalId = `test-issues-empty-goal-${Date.now()}`;
+  const seedGoalBody = {
+    id: goalId,
+    sessionId,
+    intent: "Test issues empty",
+    goal: "Verify empty issues array",
+    problemStatement: "No issue drafts exist",
+    businessValue: "Reliable API",
+    targetOutcome: "Empty array returned",
+    successCriteria: [],
+    assumptions: [],
+    constraints: [],
+    risks: [],
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+  const seedGoalRes = await fetch(`${BASE}/api/test/seed-goal`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify(seedGoalBody),
+  });
+  if (!seedGoalRes.ok) throw new Error(`Failed to seed goal: HTTP ${seedGoalRes.status}`);
+
+  const milestoneId = `test-issues-empty-milestone-${Date.now()}`;
+  const seedMilestoneRes = await fetch(`${BASE}/api/test/seed-milestone`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({
+      id: milestoneId,
+      goalId,
+      name: "Empty Milestone",
+      goal: "Milestone with no issues",
+      scope: "None",
+      order: 1,
+      dependencies: [],
+      acceptanceCriteria: ["done"],
+      exitCriteria: [],
+      status: "draft",
+    }),
+  });
+  if (!seedMilestoneRes.ok) throw new Error(`Failed to seed milestone: HTTP ${seedMilestoneRes.status}`);
+
+  const res = await fetch(`${BASE}/api/milestones/${milestoneId}/issues`, { headers: testAuthHeaders() });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const data = await res.json();
+  if (!Array.isArray(data.issues)) throw new Error("Expected issues array in response");
+  if (data.issues.length !== 0) throw new Error(`Expected empty issues array, got ${data.issues.length}`);
+  log("  ", "Issues is empty for milestone with no drafts");
+}
+
+async function testIssueDraftsSeedAndRetrieve(): Promise<void> {
+  // Create a session so that the ownership check passes
+  const sessionId = `test-issues-session-${Date.now()}`;
+  const saveRes = await fetch(`${BASE}/api/sessions/${sessionId}/messages`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ messages: [{ role: "user", text: "issues seed test" }] }),
+  });
+  if (!saveRes.ok) throw new Error(`Failed to seed session: HTTP ${saveRes.status}`);
+
+  const goalId = `test-issues-goal-${Date.now()}`;
+  const seedGoalBody = {
+    id: goalId,
+    sessionId,
+    intent: "Test issues retrieval",
+    goal: "Verify issue drafts are returned in order",
+    problemStatement: "Need to test issues endpoint",
+    businessValue: "Reliable API",
+    targetOutcome: "Issue drafts returned",
+    successCriteria: ["Drafts returned"],
+    assumptions: [],
+    constraints: [],
+    risks: [],
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+  const goalSeedRes = await fetch(`${BASE}/api/test/seed-goal`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify(seedGoalBody),
+  });
+  if (!goalSeedRes.ok) throw new Error(`Failed to seed goal: HTTP ${goalSeedRes.status}`);
+
+  const milestoneId = `test-issues-milestone-${Date.now()}`;
+  const seedMilestoneRes = await fetch(`${BASE}/api/test/seed-milestone`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({
+      id: milestoneId,
+      goalId,
+      name: "Test Milestone",
+      goal: "Milestone for issue drafts",
+      scope: "Issue drafts",
+      order: 1,
+      dependencies: [],
+      acceptanceCriteria: ["done"],
+      exitCriteria: [],
+      status: "draft",
+    }),
+  });
+  if (!seedMilestoneRes.ok) throw new Error(`Failed to seed milestone: HTTP ${seedMilestoneRes.status}`);
+
+  // Seed two issue drafts in reverse order to verify ordering
+  const ts = Date.now();
+  const draft2Id = `test-draft-2-${ts}`;
+  const draft1Id = `test-draft-1-${ts}`;
+
+  const commonDraftFields = {
+    milestoneId,
+    purpose: "Test purpose",
+    problem: "Test problem",
+    expectedOutcome: "Test outcome",
+    scopeBoundaries: "In scope: everything",
+    technicalContext: "No context",
+    dependencies: [],
+    acceptanceCriteria: ["Done"],
+    testingExpectations: "Run tests",
+    researchLinks: [],
+    status: "draft" as const,
+    filesToModify: [{ path: "server.ts", reason: "Add endpoint" }],
+    filesToRead: [],
+    securityChecklist: ["Check auth"],
+    verificationCommands: ["npx tsc --noEmit"],
+  };
+
+  const seedDraft2Res = await fetch(`${BASE}/api/test/seed-issue-draft`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ ...commonDraftFields, id: draft2Id, title: "Draft 2", order: 2 }),
+  });
+  if (!seedDraft2Res.ok) throw new Error(`Failed to seed draft 2: HTTP ${seedDraft2Res.status}`);
+
+  const seedDraft1Res = await fetch(`${BASE}/api/test/seed-issue-draft`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ ...commonDraftFields, id: draft1Id, title: "Draft 1", order: 1 }),
+  });
+  if (!seedDraft1Res.ok) throw new Error(`Failed to seed draft 1: HTTP ${seedDraft1Res.status}`);
+
+  const res = await fetch(`${BASE}/api/milestones/${milestoneId}/issues`, { headers: testAuthHeaders() });
+  if (!res.ok) throw new Error(`GET /api/milestones/:id/issues HTTP ${res.status}`);
+  const data = await res.json();
+  if (!Array.isArray(data.issues)) throw new Error("Expected issues array in response");
+  if (data.issues.length !== 2) throw new Error(`Expected 2 issue drafts, got ${data.issues.length}`);
+  if (data.issues[0].order !== 1) throw new Error(`Expected first draft order 1, got ${data.issues[0].order}`);
+  if (data.issues[1].order !== 2) throw new Error(`Expected second draft order 2, got ${data.issues[1].order}`);
+  if (data.issues[0].milestoneId !== milestoneId) throw new Error("IssueDraft milestoneId mismatch");
+  log("  ", `Issue drafts seed → get round-trip passed (2 drafts in order)`);
+}
+
+// ============================================================
 // Main
 // ============================================================
 
@@ -2566,6 +2748,14 @@ async function main() {
   await run("GET /api/goals/:id/milestones returns 404 for unknown goal", testMilestonesGetNotFound);
   await run("GET /api/goals/:id/milestones returns empty array for goal with no milestones", testMilestonesGetEmptyForGoalWithNoMilestones);
   await run("Milestone seed → get round-trip (ordered)", testMilestonesSeedAndRetrieve);
+
+  // --- Issue Draft API tests ---
+  console.log("\n── Issue Draft API Tests ──\n");
+
+  await run("GET /api/milestones/:id/issues — no Authorization header is handled", testIssueDraftsGetNoAuthHeaderIsHandled);
+  await run("GET /api/milestones/:id/issues returns 404 for unknown milestone", testIssueDraftsGetNotFound);
+  await run("GET /api/milestones/:id/issues returns empty array for milestone with no drafts", testIssueDraftsGetEmptyForMilestoneWithNoIssues);
+  await run("Issue draft seed → get round-trip (ordered)", testIssueDraftsSeedAndRetrieve);
 
   // Cleanup
   serverProcess.kill();
