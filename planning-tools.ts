@@ -5,7 +5,7 @@
 
 import type { Tool } from "@github/copilot-sdk";
 import type { PlanningStore } from "./planning-store.js";
-import type { Goal, Milestone, ResearchItem } from "./planning-types.js";
+import type { FileRef, Goal, IssueDraft, Milestone, ResearchItem } from "./planning-types.js";
 
 // --- Exported tool names for permission handler reference ---
 
@@ -19,6 +19,7 @@ export const PLANNING_TOOL_NAMES = [
   "create_milestone_plan",
   "update_milestone",
   "get_milestones",
+  "generate_issue_drafts",
 ] as const;
 
 // --- Max field lengths (from planning-types.ts JSDoc) ---
@@ -42,6 +43,26 @@ const MAX_CRITERIA_ITEMS = 50;
 const MAX_MILESTONES_PER_PLAN = 20;
 
 const VALID_MILESTONE_STATUSES = new Set<string>(["draft", "ready", "in-progress", "complete"]);
+
+// --- IssueDraft field length constants ---
+
+const MAX_ISSUE_TITLE_LENGTH = 256;
+const MAX_ISSUE_PURPOSE_LENGTH = 500;
+const MAX_ISSUE_PROBLEM_LENGTH = 1000;
+const MAX_ISSUE_OUTCOME_LENGTH = 500;
+const MAX_ISSUE_SCOPE_LENGTH = 1000;
+const MAX_ISSUE_TECHNICAL_CONTEXT_LENGTH = 2000;
+const MAX_ISSUE_TESTING_EXPECTATIONS_LENGTH = 1000;
+const MAX_ISSUE_FILE_PATH_LENGTH = 256;
+const MAX_ISSUE_FILE_REASON_LENGTH = 500;
+const MAX_ISSUES_PER_MILESTONE = 50;
+
+// --- R9 Issue Quality Checklist constraints ---
+
+const R9_MIN_ACCEPTANCE_CRITERIA = 1;
+const R9_MIN_FILES_TO_MODIFY = 1;
+const R9_MAX_FILES_TO_MODIFY = 5;
+const R9_MIN_VERIFICATION_COMMANDS = 1;
 
 // --- Validation helpers ---
 
@@ -98,6 +119,28 @@ function validateUrl(value: string, fieldName: string): string | null {
  */
 function sanitizeMilestoneName(name: string): string {
   return sanitizeText(name.replace(/[\x00-\x1F\x7F]/g, " ").replace(/\s+/g, " ").trim());
+}
+
+/**
+ * Sanitizes a file path reference by stripping control characters.
+ * Does not HTML-escape to preserve path structure.
+ */
+function sanitizeFilePath(path: string): string {
+  return path.replace(/[\x00-\x1F\x7F]/g, "").trim();
+}
+
+/**
+ * Validates that a file path is a safe relative path (no path traversal).
+ * Returns an error message or null if valid.
+ */
+function validateFileRefPath(path: string, fieldName: string): string | null {
+  if (path.includes("..")) {
+    return `${fieldName}: path must not contain ".."`;
+  }
+  if (path.startsWith("/")) {
+    return `${fieldName}: path must be a relative path (must not start with "/")`;
+  }
+  return null;
 }
 
 /**
@@ -218,7 +261,7 @@ const RESEARCH_CATEGORIES: ReadonlyArray<{
  *
  * @param token - The user's GitHub PAT (reserved for future use)
  * @param planningStore - The PlanningStore instance for persisting goals
- * @returns Array of Tool objects [defineGoal, saveGoal, getGoal, generateResearchChecklist, updateResearchItem, getResearch, createMilestonePlan, updateMilestone, getMilestones]
+ * @returns Array of Tool objects [defineGoal, saveGoal, getGoal, generateResearchChecklist, updateResearchItem, getResearch, createMilestonePlan, updateMilestone, getMilestones, generateIssueDrafts]
  */
 export function createPlanningTools(token: string, planningStore: PlanningStore): Tool[] {
   /**
@@ -1161,5 +1204,495 @@ export function createPlanningTools(token: string, planningStore: PlanningStore)
     },
   };
 
-  return [defineGoal, saveGoal, getGoal, generateResearchChecklist, updateResearchItem, getResearch, createMilestonePlan, updateMilestone, getMilestones];
+  /**
+   * generate_issue_drafts: Takes a set of issue draft specs for a milestone and
+   * generates fully formed IssueDraft entities. Validates ownership (via goalId +
+   * sessionId), validates each spec against the R9 Issue Quality Checklist,
+   * detects circular dependencies, sanitizes all text fields, and persists the
+   * drafts. Returns the created drafts sorted by order.
+   */
+  const generateIssueDrafts: Tool = {
+    name: "generate_issue_drafts",
+    description:
+      "Generate implementation-ready issue drafts for a milestone. " +
+      "Accepts an array of issue specs (each with title, problem, acceptance criteria, " +
+      "file references, verification commands, and R9 quality fields) and persists them as " +
+      "IssueDraft entities. Validates R9 quality constraints: ≥1 acceptance criterion, " +
+      `≥${R9_MIN_FILES_TO_MODIFY} and ≤${R9_MAX_FILES_TO_MODIFY} files to modify, ` +
+      `≥${R9_MIN_VERIFICATION_COMMANDS} verification command. ` +
+      "Dependencies within the batch are expressed as order values (integers). " +
+      "Circular dependency detection is performed before saving. " +
+      "Returns created issue drafts ordered by position.",
+    parameters: {
+      type: "object",
+      properties: {
+        sessionId: {
+          type: "string",
+          description: "The session identifier of the caller. Must match the goal's sessionId.",
+        },
+        goalId: {
+          type: "string",
+          description: "The ID of the goal that owns this milestone.",
+        },
+        milestoneId: {
+          type: "string",
+          description: "The ID of the milestone to generate issue drafts for.",
+        },
+        issues: {
+          type: "array",
+          description: `Array of issue draft specs (max ${MAX_ISSUES_PER_MILESTONE}). Each entry defines one issue.`,
+          items: {
+            type: "object",
+            properties: {
+              title: {
+                type: "string",
+                description: `GitHub issue title. Max ${MAX_ISSUE_TITLE_LENGTH} chars.`,
+              },
+              purpose: {
+                type: "string",
+                description: `Brief description of what this issue is for. Max ${MAX_ISSUE_PURPOSE_LENGTH} chars.`,
+              },
+              problem: {
+                type: "string",
+                description: `The specific problem or gap this issue addresses. Max ${MAX_ISSUE_PROBLEM_LENGTH} chars.`,
+              },
+              expectedOutcome: {
+                type: "string",
+                description: `Desired end state once implemented. Max ${MAX_ISSUE_OUTCOME_LENGTH} chars.`,
+              },
+              scopeBoundaries: {
+                type: "string",
+                description: `What is in scope and explicitly out of scope. Max ${MAX_ISSUE_SCOPE_LENGTH} chars.`,
+              },
+              technicalContext: {
+                type: "string",
+                description: `Background information, patterns, and constraints. Max ${MAX_ISSUE_TECHNICAL_CONTEXT_LENGTH} chars.`,
+              },
+              acceptanceCriteria: {
+                type: "array",
+                items: { type: "string" },
+                description: `Conditions that must be true for the issue to be complete. Minimum ${R9_MIN_ACCEPTANCE_CRITERIA}.`,
+              },
+              testingExpectations: {
+                type: "string",
+                description: `Description of required tests and testing strategy. Max ${MAX_ISSUE_TESTING_EXPECTATIONS_LENGTH} chars.`,
+              },
+              filesToModify: {
+                type: "array",
+                description: `Files to create or modify during implementation. Min ${R9_MIN_FILES_TO_MODIFY}, max ${R9_MAX_FILES_TO_MODIFY}.`,
+                items: {
+                  type: "object",
+                  properties: {
+                    path: {
+                      type: "string",
+                      description: `Relative file path (e.g., "server.ts"). Max ${MAX_ISSUE_FILE_PATH_LENGTH} chars. Must not contain ".." or start with "/".`,
+                    },
+                    reason: {
+                      type: "string",
+                      description: `Why this file is modified. Max ${MAX_ISSUE_FILE_REASON_LENGTH} chars.`,
+                    },
+                  },
+                  required: ["path", "reason"],
+                },
+              },
+              filesToRead: {
+                type: "array",
+                description: "Files to read for context (not modified).",
+                items: {
+                  type: "object",
+                  properties: {
+                    path: {
+                      type: "string",
+                      description: `Relative file path. Max ${MAX_ISSUE_FILE_PATH_LENGTH} chars. Must not contain ".." or start with "/".`,
+                    },
+                    reason: {
+                      type: "string",
+                      description: `Why this file is read. Max ${MAX_ISSUE_FILE_REASON_LENGTH} chars.`,
+                    },
+                  },
+                  required: ["path", "reason"],
+                },
+              },
+              patternReference: {
+                type: "string",
+                description: "Optional: existing file or pattern to use as implementation reference.",
+              },
+              securityChecklist: {
+                type: "array",
+                items: { type: "string" },
+                description: "Security-specific validation rules for this issue.",
+              },
+              verificationCommands: {
+                type: "array",
+                items: { type: "string" },
+                description: `Exact commands to run for self-verification after implementation. Minimum ${R9_MIN_VERIFICATION_COMMANDS}.`,
+              },
+              order: {
+                type: "integer",
+                minimum: 1,
+                description: "Position of this issue within the milestone (1-based, must be unique within this batch).",
+              },
+              dependencies: {
+                type: "array",
+                items: { type: "integer", minimum: 1 },
+                description: "Order values of other issues in this batch that must be completed before this one.",
+              },
+              researchLinks: {
+                type: "array",
+                items: { type: "string" },
+                description: "IDs of resolved ResearchItems whose findings are relevant to this issue.",
+              },
+            },
+            required: [
+              "title",
+              "purpose",
+              "problem",
+              "expectedOutcome",
+              "scopeBoundaries",
+              "technicalContext",
+              "acceptanceCriteria",
+              "testingExpectations",
+              "filesToModify",
+              "filesToRead",
+              "securityChecklist",
+              "verificationCommands",
+              "order",
+              "dependencies",
+              "researchLinks",
+            ],
+          },
+        },
+      },
+      required: ["sessionId", "goalId", "milestoneId", "issues"],
+    },
+    handler: async (args: any) => {
+      const sessionIdErr = validateStringField(args.sessionId, "sessionId", MAX_SESSION_ID_LENGTH);
+      if (sessionIdErr) return { error: sessionIdErr };
+
+      const goalIdErr = validateStringField(args.goalId, "goalId", 256);
+      if (goalIdErr) return { error: goalIdErr };
+
+      const milestoneIdErr = validateStringField(args.milestoneId, "milestoneId", 256);
+      if (milestoneIdErr) return { error: milestoneIdErr };
+
+      // Ownership check via goal
+      const goal = await planningStore.getGoal(args.goalId);
+      if (!goal || goal.sessionId !== args.sessionId) {
+        return { error: `Goal not found: ${args.goalId}` };
+      }
+
+      // Verify milestone belongs to the stated goal
+      const milestone = await planningStore.getMilestone(args.milestoneId);
+      if (!milestone || milestone.goalId !== args.goalId) {
+        return { error: `Milestone not found: ${args.milestoneId}` };
+      }
+
+      // Validate issues array
+      if (!Array.isArray(args.issues) || args.issues.length === 0) {
+        return { error: "issues must be a non-empty array" };
+      }
+      if (args.issues.length > MAX_ISSUES_PER_MILESTONE) {
+        return { error: `issues must have at most ${MAX_ISSUES_PER_MILESTONE} entries` };
+      }
+
+      // Helper to validate and sanitize a single FileRef array
+      type SanitizedFileRef = { path: string; reason: string };
+
+      function validateAndSanitizeFileRefs(
+        refs: unknown,
+        fieldName: string
+      ): { result: SanitizedFileRef[] } | { error: string } {
+        if (!Array.isArray(refs)) {
+          return { error: `${fieldName} must be an array` };
+        }
+        const sanitized: SanitizedFileRef[] = [];
+        for (let k = 0; k < refs.length; k++) {
+          const ref = refs[k];
+          const refPrefix = `${fieldName}[${k}]`;
+          if (ref == null || typeof ref !== "object") {
+            return { error: `${refPrefix} must be a non-null object with path and reason` };
+          }
+          if (typeof ref.path !== "string" || ref.path.trim().length === 0) {
+            return { error: `${refPrefix}.path must be a non-empty string` };
+          }
+          if (ref.path.length > MAX_ISSUE_FILE_PATH_LENGTH) {
+            return { error: `${refPrefix}.path must be at most ${MAX_ISSUE_FILE_PATH_LENGTH} characters` };
+          }
+          const pathTraversalErr = validateFileRefPath(ref.path as string, `${refPrefix}.path`);
+          if (pathTraversalErr) return { error: pathTraversalErr };
+          if (typeof ref.reason !== "string" || ref.reason.trim().length === 0) {
+            return { error: `${refPrefix}.reason must be a non-empty string` };
+          }
+          if (ref.reason.length > MAX_ISSUE_FILE_REASON_LENGTH) {
+            return { error: `${refPrefix}.reason must be at most ${MAX_ISSUE_FILE_REASON_LENGTH} characters` };
+          }
+          sanitized.push({
+            path: sanitizeFilePath(ref.path as string),
+            reason: sanitizeText(ref.reason as string),
+          });
+        }
+        return { result: sanitized };
+      }
+
+      // Validate and pre-compute sanitized values for each issue spec
+      type SanitizedIssueSpec = {
+        title: string;
+        purpose: string;
+        problem: string;
+        expectedOutcome: string;
+        scopeBoundaries: string;
+        technicalContext: string;
+        acceptanceCriteria: string[];
+        testingExpectations: string;
+        filesToModify: SanitizedFileRef[];
+        filesToRead: SanitizedFileRef[];
+        patternReference?: string;
+        securityChecklist: string[];
+        verificationCommands: string[];
+        order: number;
+        rawDependencies: number[];
+        researchLinks: string[];
+      };
+
+      const sanitizedSpecs: SanitizedIssueSpec[] = [];
+
+      for (let i = 0; i < args.issues.length; i++) {
+        const spec = args.issues[i];
+        const prefix = `issues[${i}]`;
+
+        // Validate and sanitize required string fields
+        const titleErr = validateStringField(spec.title, `${prefix}.title`, MAX_ISSUE_TITLE_LENGTH);
+        if (titleErr) return { error: titleErr };
+        const sanitizedTitle = sanitizeText(spec.title as string);
+        if (sanitizedTitle.length > MAX_ISSUE_TITLE_LENGTH) {
+          return { error: `${prefix}.title exceeds ${MAX_ISSUE_TITLE_LENGTH} characters after sanitization` };
+        }
+
+        const purposeErr = validateStringField(spec.purpose, `${prefix}.purpose`, MAX_ISSUE_PURPOSE_LENGTH);
+        if (purposeErr) return { error: purposeErr };
+        const sanitizedPurpose = sanitizeText(spec.purpose as string);
+        if (sanitizedPurpose.length > MAX_ISSUE_PURPOSE_LENGTH) {
+          return { error: `${prefix}.purpose exceeds ${MAX_ISSUE_PURPOSE_LENGTH} characters after sanitization` };
+        }
+
+        const problemErr = validateStringField(spec.problem, `${prefix}.problem`, MAX_ISSUE_PROBLEM_LENGTH);
+        if (problemErr) return { error: problemErr };
+        const sanitizedProblem = sanitizeText(spec.problem as string);
+        if (sanitizedProblem.length > MAX_ISSUE_PROBLEM_LENGTH) {
+          return { error: `${prefix}.problem exceeds ${MAX_ISSUE_PROBLEM_LENGTH} characters after sanitization` };
+        }
+
+        const outcomeErr = validateStringField(spec.expectedOutcome, `${prefix}.expectedOutcome`, MAX_ISSUE_OUTCOME_LENGTH);
+        if (outcomeErr) return { error: outcomeErr };
+        const sanitizedOutcome = sanitizeText(spec.expectedOutcome as string);
+        if (sanitizedOutcome.length > MAX_ISSUE_OUTCOME_LENGTH) {
+          return { error: `${prefix}.expectedOutcome exceeds ${MAX_ISSUE_OUTCOME_LENGTH} characters after sanitization` };
+        }
+
+        const scopeErr = validateStringField(spec.scopeBoundaries, `${prefix}.scopeBoundaries`, MAX_ISSUE_SCOPE_LENGTH);
+        if (scopeErr) return { error: scopeErr };
+        const sanitizedScope = sanitizeText(spec.scopeBoundaries as string);
+        if (sanitizedScope.length > MAX_ISSUE_SCOPE_LENGTH) {
+          return { error: `${prefix}.scopeBoundaries exceeds ${MAX_ISSUE_SCOPE_LENGTH} characters after sanitization` };
+        }
+
+        const contextErr = validateStringField(spec.technicalContext, `${prefix}.technicalContext`, MAX_ISSUE_TECHNICAL_CONTEXT_LENGTH);
+        if (contextErr) return { error: contextErr };
+        const sanitizedContext = sanitizeText(spec.technicalContext as string);
+        if (sanitizedContext.length > MAX_ISSUE_TECHNICAL_CONTEXT_LENGTH) {
+          return { error: `${prefix}.technicalContext exceeds ${MAX_ISSUE_TECHNICAL_CONTEXT_LENGTH} characters after sanitization` };
+        }
+
+        const testingErr = validateStringField(spec.testingExpectations, `${prefix}.testingExpectations`, MAX_ISSUE_TESTING_EXPECTATIONS_LENGTH);
+        if (testingErr) return { error: testingErr };
+        const sanitizedTesting = sanitizeText(spec.testingExpectations as string);
+        if (sanitizedTesting.length > MAX_ISSUE_TESTING_EXPECTATIONS_LENGTH) {
+          return { error: `${prefix}.testingExpectations exceeds ${MAX_ISSUE_TESTING_EXPECTATIONS_LENGTH} characters after sanitization` };
+        }
+
+        // Validate order
+        if (typeof spec.order !== "number" || !Number.isInteger(spec.order) || spec.order < 1) {
+          return { error: `${prefix}.order must be a positive integer` };
+        }
+
+        // Validate dependencies
+        if (!Array.isArray(spec.dependencies)) {
+          return { error: `${prefix}.dependencies must be an array` };
+        }
+        for (let j = 0; j < spec.dependencies.length; j++) {
+          const dep = spec.dependencies[j];
+          if (typeof dep !== "number" || !Number.isInteger(dep) || dep < 1) {
+            return { error: `${prefix}.dependencies[${j}] must be a positive integer order value` };
+          }
+        }
+
+        // Validate researchLinks
+        if (!Array.isArray(spec.researchLinks)) {
+          return { error: `${prefix}.researchLinks must be an array` };
+        }
+        for (let j = 0; j < spec.researchLinks.length; j++) {
+          if (typeof spec.researchLinks[j] !== "string" || (spec.researchLinks[j] as string).trim().length === 0) {
+            return { error: `${prefix}.researchLinks[${j}] must be a non-empty string` };
+          }
+        }
+
+        // Validate and sanitize acceptanceCriteria (R9: ≥1 criterion)
+        const sanitizedAcceptanceCriteria = Array.isArray(spec.acceptanceCriteria)
+          ? (spec.acceptanceCriteria as string[]).map(sanitizeText)
+          : [];
+        const acErr = validateCriteriaArray(sanitizedAcceptanceCriteria, `${prefix}.acceptanceCriteria`);
+        if (acErr) return { error: acErr };
+        if (sanitizedAcceptanceCriteria.length < R9_MIN_ACCEPTANCE_CRITERIA) {
+          return { error: `${prefix}.acceptanceCriteria must have at least ${R9_MIN_ACCEPTANCE_CRITERIA} criterion` };
+        }
+
+        // Validate and sanitize verificationCommands (R9: ≥1 command)
+        if (!Array.isArray(spec.verificationCommands)) {
+          return { error: `${prefix}.verificationCommands must be an array` };
+        }
+        if (spec.verificationCommands.length < R9_MIN_VERIFICATION_COMMANDS) {
+          return { error: `${prefix}.verificationCommands must have at least ${R9_MIN_VERIFICATION_COMMANDS} command` };
+        }
+        const sanitizedVerificationCommands = (spec.verificationCommands as string[]).map(sanitizeText);
+        for (let j = 0; j < sanitizedVerificationCommands.length; j++) {
+          if (sanitizedVerificationCommands[j].trim().length === 0) {
+            return { error: `${prefix}.verificationCommands[${j}] must be a non-empty string` };
+          }
+        }
+
+        // Validate and sanitize securityChecklist
+        if (!Array.isArray(spec.securityChecklist)) {
+          return { error: `${prefix}.securityChecklist must be an array` };
+        }
+        const sanitizedSecurityChecklist = (spec.securityChecklist as string[]).map(sanitizeText);
+        for (let j = 0; j < sanitizedSecurityChecklist.length; j++) {
+          if (sanitizedSecurityChecklist[j].trim().length === 0) {
+            return { error: `${prefix}.securityChecklist[${j}] must be a non-empty string` };
+          }
+        }
+
+        // Validate and sanitize filesToModify (R9: ≥1 and ≤5)
+        const modifyResult = validateAndSanitizeFileRefs(spec.filesToModify, `${prefix}.filesToModify`);
+        if ("error" in modifyResult) return { error: modifyResult.error };
+        if (modifyResult.result.length < R9_MIN_FILES_TO_MODIFY) {
+          return { error: `${prefix}.filesToModify must have at least ${R9_MIN_FILES_TO_MODIFY} file` };
+        }
+        if (modifyResult.result.length > R9_MAX_FILES_TO_MODIFY) {
+          return { error: `${prefix}.filesToModify must have at most ${R9_MAX_FILES_TO_MODIFY} files (R9 quality constraint)` };
+        }
+
+        // Validate and sanitize filesToRead
+        const readResult = validateAndSanitizeFileRefs(spec.filesToRead, `${prefix}.filesToRead`);
+        if ("error" in readResult) return { error: readResult.error };
+
+        // Validate and sanitize optional patternReference
+        let sanitizedPatternReference: string | undefined;
+        if (spec.patternReference !== undefined && spec.patternReference !== null) {
+          const prErr = validateStringField(spec.patternReference, `${prefix}.patternReference`, MAX_ISSUE_TECHNICAL_CONTEXT_LENGTH);
+          if (prErr) return { error: prErr };
+          sanitizedPatternReference = sanitizeText(spec.patternReference as string);
+        }
+
+        sanitizedSpecs.push({
+          title: sanitizedTitle,
+          purpose: sanitizedPurpose,
+          problem: sanitizedProblem,
+          expectedOutcome: sanitizedOutcome,
+          scopeBoundaries: sanitizedScope,
+          technicalContext: sanitizedContext,
+          acceptanceCriteria: sanitizedAcceptanceCriteria,
+          testingExpectations: sanitizedTesting,
+          filesToModify: modifyResult.result,
+          filesToRead: readResult.result,
+          patternReference: sanitizedPatternReference,
+          securityChecklist: sanitizedSecurityChecklist,
+          verificationCommands: sanitizedVerificationCommands,
+          order: spec.order as number,
+          rawDependencies: spec.dependencies as number[],
+          researchLinks: (spec.researchLinks as string[]).map((id: string) => id.trim()),
+        });
+      }
+
+      // Validate unique order values
+      const orderSet = new Set<number>();
+      for (const s of sanitizedSpecs) {
+        if (orderSet.has(s.order)) {
+          return { error: `Duplicate order value: ${s.order}` };
+        }
+        orderSet.add(s.order);
+      }
+
+      // Validate that all dependency order values reference issues in this batch
+      for (let i = 0; i < sanitizedSpecs.length; i++) {
+        for (const depOrder of sanitizedSpecs[i].rawDependencies) {
+          if (!orderSet.has(depOrder)) {
+            return { error: `issues[${i}].dependencies references unknown order: ${depOrder}` };
+          }
+        }
+      }
+
+      // Assign UUIDs and build order → id map
+      const orderToId = new Map<number, string>();
+      const issueIds: string[] = sanitizedSpecs.map((s) => {
+        const id = crypto.randomUUID();
+        orderToId.set(s.order, id);
+        return id;
+      });
+
+      // Detect circular dependencies
+      const depGraph = sanitizedSpecs.map((s, i) => ({
+        id: issueIds[i],
+        dependencyIds: s.rawDependencies.map((depOrder) => orderToId.get(depOrder)!),
+      }));
+      if (hasCircularDependencies(depGraph)) {
+        return { error: "Circular dependency detected among issues" };
+      }
+
+      // Persist issue drafts; on failure, roll back any drafts already created
+      const created: IssueDraft[] = [];
+      for (let i = 0; i < sanitizedSpecs.length; i++) {
+        const s = sanitizedSpecs[i];
+        const draft: IssueDraft = {
+          id: issueIds[i],
+          milestoneId: args.milestoneId,
+          title: s.title,
+          purpose: s.purpose,
+          problem: s.problem,
+          expectedOutcome: s.expectedOutcome,
+          scopeBoundaries: s.scopeBoundaries,
+          technicalContext: s.technicalContext,
+          dependencies: s.rawDependencies.map((depOrder) => orderToId.get(depOrder)!),
+          acceptanceCriteria: s.acceptanceCriteria,
+          testingExpectations: s.testingExpectations,
+          researchLinks: s.researchLinks,
+          order: s.order,
+          status: "draft",
+          filesToModify: s.filesToModify as FileRef[],
+          filesToRead: s.filesToRead as FileRef[],
+          patternReference: s.patternReference,
+          securityChecklist: s.securityChecklist,
+          verificationCommands: s.verificationCommands,
+        };
+        try {
+          const saved = await planningStore.createIssueDraft(draft);
+          created.push(saved);
+        } catch (err: any) {
+          // Best-effort rollback: delete any drafts created in this batch before failing
+          try {
+            if (created.length > 0) {
+              await Promise.all(created.map((d) => planningStore.deleteIssueDraft(d.id)));
+            }
+          } catch {
+            // Ignore rollback errors; report the original failure
+          }
+          return { error: err?.message ?? `Failed to create issues[${i}]` };
+        }
+      }
+
+      created.sort((a, b) => a.order - b.order);
+      return { issues: created };
+    },
+  };
+
+  return [defineGoal, saveGoal, getGoal, generateResearchChecklist, updateResearchItem, getResearch, createMilestonePlan, updateMilestone, getMilestones, generateIssueDrafts];
 }
