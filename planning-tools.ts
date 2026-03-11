@@ -252,6 +252,27 @@ const RESEARCH_CATEGORIES: ReadonlyArray<{
   },
 ];
 
+// --- IssueDraft processing type (used by generate_issue_drafts handler) ---
+
+type SanitizedIssueSpec = {
+  title: string;
+  purpose: string;
+  problem: string;
+  expectedOutcome: string;
+  scopeBoundaries: string;
+  technicalContext: string;
+  acceptanceCriteria: string[];
+  testingExpectations: string;
+  filesToModify: FileRef[];
+  filesToRead: FileRef[];
+  patternReference?: string;
+  securityChecklist: string[];
+  verificationCommands: string[];
+  order: number;
+  rawDependencies: number[];
+  researchLinks: string[];
+};
+
 // --- Tool factory ---
 
 /**
@@ -1396,16 +1417,14 @@ export function createPlanningTools(token: string, planningStore: PlanningStore)
       }
 
       // Helper to validate and sanitize a single FileRef array
-      type SanitizedFileRef = { path: string; reason: string };
-
       function validateAndSanitizeFileRefs(
         refs: unknown,
         fieldName: string
-      ): { result: SanitizedFileRef[] } | { error: string } {
+      ): { result: FileRef[] } | { error: string } {
         if (!Array.isArray(refs)) {
           return { error: `${fieldName} must be an array` };
         }
-        const sanitized: SanitizedFileRef[] = [];
+        const sanitized: FileRef[] = [];
         for (let k = 0; k < refs.length; k++) {
           const ref = refs[k];
           const refPrefix = `${fieldName}[${k}]`;
@@ -1435,25 +1454,6 @@ export function createPlanningTools(token: string, planningStore: PlanningStore)
       }
 
       // Validate and pre-compute sanitized values for each issue spec
-      type SanitizedIssueSpec = {
-        title: string;
-        purpose: string;
-        problem: string;
-        expectedOutcome: string;
-        scopeBoundaries: string;
-        technicalContext: string;
-        acceptanceCriteria: string[];
-        testingExpectations: string;
-        filesToModify: SanitizedFileRef[];
-        filesToRead: SanitizedFileRef[];
-        patternReference?: string;
-        securityChecklist: string[];
-        verificationCommands: string[];
-        order: number;
-        rawDependencies: number[];
-        researchLinks: string[];
-      };
-
       const sanitizedSpecs: SanitizedIssueSpec[] = [];
 
       for (let i = 0; i < args.issues.length; i++) {
@@ -1667,8 +1667,8 @@ export function createPlanningTools(token: string, planningStore: PlanningStore)
           researchLinks: s.researchLinks,
           order: s.order,
           status: "draft",
-          filesToModify: s.filesToModify as FileRef[],
-          filesToRead: s.filesToRead as FileRef[],
+          filesToModify: s.filesToModify,
+          filesToRead: s.filesToRead,
           patternReference: s.patternReference,
           securityChecklist: s.securityChecklist,
           verificationCommands: s.verificationCommands,
