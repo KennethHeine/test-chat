@@ -876,14 +876,18 @@ async function main() {
   if (azureAccount) {
     console.log(`\nInitializing AzurePlanningStore for account: ${azureAccount}`);
     const azureStore = new AzurePlanningStore(azureAccount);
+    let azureInitialized = false;
     try {
       await azureStore.initialize();
+      azureInitialized = true;
     } catch (err: any) {
       console.error(`Failed to initialize AzurePlanningStore: ${err.message}`);
       console.log("Skipping Azure tests.");
     }
-    // Each test gets a fresh store instance (but backed by Azure tables; isolation via unique IDs in fixtures)
-    await runPlanningStoreTests("AzurePlanningStore", () => new AzurePlanningStore(azureAccount));
+    if (azureInitialized) {
+      // Each test gets a fresh store instance backed by Azure tables; isolation via unique IDs in fixtures
+      await runPlanningStoreTests("AzurePlanningStore", () => new AzurePlanningStore(azureAccount));
+    }
   } else {
     console.log("\n(Skipping AzurePlanningStore tests — set AZURE_STORAGE_ACCOUNT_NAME to enable)");
   }

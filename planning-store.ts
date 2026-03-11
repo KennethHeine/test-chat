@@ -669,6 +669,12 @@ export class AzurePlanningStore implements PlanningStore {
     if (updates.updatedAt !== undefined) requireNonEmpty(updates.updatedAt, "updatedAt");
 
     const updated: Goal = { ...existing, ...updates, id: existing.id, createdAt: existing.createdAt };
+
+    // If sessionId changed, the PartitionKey changes — delete old entity first to avoid orphaned rows
+    if (updates.sessionId !== undefined && updates.sessionId !== existing.sessionId) {
+      await this.goalTable.deleteEntity(existing.sessionId, existing.id);
+    }
+
     await this.goalTable.upsertEntity(goalToEntity(updated), "Merge");
     return structuredClone(updated);
   }
