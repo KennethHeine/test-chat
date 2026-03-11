@@ -467,3 +467,215 @@ test("research checklist XSS prevention: question text is escaped before renderi
   await expect(card).toBeVisible();
   await expect(card.locator(".research-item-question").first()).toContainText("Malicious question");
 });
+
+// ─── Milestone Timeline Card ────────────────────────────────────
+
+test("milestone timeline card renders with correct order, status badges, and dependencies", async ({ page }) => {
+  await page.goto("/");
+
+  const mockMilestones = [
+    {
+      id: "ms-1",
+      goalId: "goal-1",
+      name: "Foundation",
+      goal: "Set up core infrastructure",
+      scope: "Auth and data layer only",
+      order: 1,
+      dependencies: [],
+      acceptanceCriteria: ["Login works"],
+      exitCriteria: [],
+      status: "complete",
+    },
+    {
+      id: "ms-2",
+      goalId: "goal-1",
+      name: "API Layer",
+      goal: "Expose REST endpoints",
+      scope: "CRUD endpoints, no UI",
+      order: 2,
+      dependencies: ["ms-1"],
+      acceptanceCriteria: ["All endpoints return 200"],
+      exitCriteria: [],
+      status: "in-progress",
+    },
+    {
+      id: "ms-3",
+      goalId: "goal-1",
+      name: "Frontend",
+      goal: "Build the user interface",
+      scope: "Dashboard only",
+      order: 3,
+      dependencies: ["ms-2"],
+      acceptanceCriteria: ["UI renders on mobile"],
+      exitCriteria: [],
+      status: "draft",
+    },
+  ];
+
+  // Directly call renderMilestoneTimeline to test card rendering without a real API call
+  await page.evaluate((milestones) => {
+    // @ts-ignore — renderMilestoneTimeline is defined in app.js global scope
+    renderMilestoneTimeline(milestones);
+  }, mockMilestones);
+
+  // The milestone card should appear in the messages area
+  const card = page.locator(".milestone-card").first();
+  await expect(card).toBeVisible();
+
+  // Verify the header
+  await expect(card.locator(".milestone-card-header")).toHaveText("🗺️ Milestone Plan");
+
+  // Verify three milestone items are rendered
+  const items = card.locator(".milestone-item");
+  await expect(items).toHaveCount(3);
+
+  // Verify order numbers
+  await expect(items.nth(0).locator(".milestone-order")).toHaveText("#1");
+  await expect(items.nth(1).locator(".milestone-order")).toHaveText("#2");
+  await expect(items.nth(2).locator(".milestone-order")).toHaveText("#3");
+
+  // Verify milestone names
+  await expect(items.nth(0).locator(".milestone-name")).toHaveText("Foundation");
+  await expect(items.nth(1).locator(".milestone-name")).toHaveText("API Layer");
+  await expect(items.nth(2).locator(".milestone-name")).toHaveText("Frontend");
+
+  // Verify status badges
+  await expect(items.nth(0).locator(".milestone-status")).toHaveText("complete");
+  await expect(items.nth(1).locator(".milestone-status")).toHaveText("in-progress");
+  await expect(items.nth(2).locator(".milestone-status")).toHaveText("draft");
+
+  // Verify status CSS classes
+  await expect(items.nth(0).locator(".milestone-status")).toHaveClass(/status-complete/);
+  await expect(items.nth(1).locator(".milestone-status")).toHaveClass(/status-in-progress/);
+  await expect(items.nth(2).locator(".milestone-status")).toHaveClass(/status-draft/);
+
+  // Verify goal text is rendered
+  await expect(items.nth(0).locator(".milestone-goal")).toHaveText("Set up core infrastructure");
+
+  // Verify dependencies are shown using order references
+  await expect(items.nth(1).locator(".milestone-deps")).toContainText("Depends on:");
+  await expect(items.nth(1).locator(".milestone-deps")).toContainText("#1");
+  await expect(items.nth(2).locator(".milestone-deps")).toContainText("#2");
+
+  // Verify the first milestone has no dependencies section
+  await expect(items.nth(0).locator(".milestone-deps")).toHaveCount(0);
+
+  // Verify summary line
+  await expect(card.locator(".milestone-card-summary")).toContainText("Draft: 1");
+  await expect(card.locator(".milestone-card-summary")).toContainText("In Progress: 1");
+  await expect(card.locator(".milestone-card-summary")).toContainText("Complete: 1");
+});
+
+test("SSE tool_complete event for create_milestone_plan renders timeline via handleToolComplete", async ({ page }) => {
+  await page.goto("/");
+
+  const mockResult = {
+    milestones: [
+      {
+        id: "ms-a",
+        goalId: "goal-2",
+        name: "Phase 1",
+        goal: "Initial setup",
+        scope: "Infra only",
+        order: 1,
+        dependencies: [],
+        acceptanceCriteria: [],
+        exitCriteria: [],
+        status: "ready",
+      },
+      {
+        id: "ms-b",
+        goalId: "goal-2",
+        name: "Phase 2",
+        goal: "Feature development",
+        scope: "Core features",
+        order: 2,
+        dependencies: ["ms-a"],
+        acceptanceCriteria: [],
+        exitCriteria: [],
+        status: "draft",
+      },
+    ],
+  };
+
+  // Simulate the SSE dispatch path: call handleToolComplete with a create_milestone_plan result
+  await page.evaluate((result) => {
+    // @ts-ignore — handleToolComplete is defined in app.js global scope
+    handleToolComplete({ type: "tool_complete", tool: "create_milestone_plan", result });
+  }, mockResult);
+
+  // The milestone card should be rendered
+  const card = page.locator(".milestone-card").first();
+  await expect(card).toBeVisible();
+  await expect(card.locator(".milestone-card-header")).toHaveText("🗺️ Milestone Plan");
+
+  const items = card.locator(".milestone-item");
+  await expect(items).toHaveCount(2);
+  await expect(items.nth(0).locator(".milestone-name")).toHaveText("Phase 1");
+  await expect(items.nth(1).locator(".milestone-name")).toHaveText("Phase 2");
+});
+
+test("SSE tool_complete event for get_milestones renders timeline via handleToolComplete", async ({ page }) => {
+  await page.goto("/");
+
+  const mockResult = {
+    milestones: [
+      {
+        id: "ms-x",
+        goalId: "goal-3",
+        name: "Milestone X",
+        goal: "Deliver X",
+        scope: "Only X",
+        order: 1,
+        dependencies: [],
+        acceptanceCriteria: [],
+        exitCriteria: [],
+        status: "in-progress",
+      },
+    ],
+  };
+
+  await page.evaluate((result) => {
+    // @ts-ignore
+    handleToolComplete({ type: "tool_complete", tool: "get_milestones", result });
+  }, mockResult);
+
+  const card = page.locator(".milestone-card").first();
+  await expect(card).toBeVisible();
+  await expect(card.locator(".milestone-item .milestone-name").first()).toHaveText("Milestone X");
+  await expect(card.locator(".milestone-item .milestone-status").first()).toHaveClass(/status-in-progress/);
+});
+
+test("milestone timeline XSS prevention: milestone name and goal are escaped before rendering", async ({ page }) => {
+  await page.goto("/");
+
+  const maliciousMilestones = [
+    {
+      id: "ms-xss",
+      goalId: "g1",
+      name: '<script>window.__xss_ms=true</script>Malicious name',
+      goal: '<img src=x onerror="window.__xss_ms=true">Malicious goal',
+      scope: "test",
+      order: 1,
+      dependencies: [],
+      acceptanceCriteria: [],
+      exitCriteria: [],
+      status: "draft",
+    },
+  ];
+
+  await page.evaluate((milestones) => {
+    // @ts-ignore
+    renderMilestoneTimeline(milestones);
+  }, maliciousMilestones);
+
+  // XSS should NOT have executed
+  const xssExecuted = await page.evaluate(() => (window as any).__xss_ms);
+  expect(xssExecuted).toBeFalsy();
+
+  // Malicious text should appear as literal text content
+  const card = page.locator(".milestone-card").first();
+  await expect(card).toBeVisible();
+  await expect(card.locator(".milestone-name").first()).toContainText("Malicious name");
+  await expect(card.locator(".milestone-goal").first()).toContainText("Malicious goal");
+});
