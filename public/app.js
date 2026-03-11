@@ -2,6 +2,8 @@
 let sessionId = null;
 let isStreaming = false;
 let modelData = {}; // modelId -> full model object (populated after loadModels)
+let currentView = "chat"; // "chat" | "dashboard"
+let currentDashboardPage = "goals"; // "goals" | "research" | "milestones" | "issues"
 
 // --- DOM ---
 const messagesEl = document.getElementById("messages");
@@ -28,6 +30,9 @@ const quotaText = document.getElementById("quota-text");
 const agentStatusEl = document.getElementById("agent-status");
 const agentStatusText = document.getElementById("agent-status-text");
 const sidebarBackdrop = document.getElementById("sidebar-backdrop");
+const viewToggleBtn = document.getElementById("view-toggle-btn");
+const chatAreaEl = document.getElementById("chat-area");
+const dashboardViewEl = document.getElementById("dashboard-view");
 
 // --- Token Management ---
 function getToken() {
@@ -314,6 +319,39 @@ function restoreSidebarState() {
   }
 }
 
+// --- View Toggle (Chat ↔ Dashboard) ---
+
+function switchView(view) {
+  currentView = view;
+  localStorage.setItem("copilot_current_view", view);
+  if (view === "dashboard") {
+    chatAreaEl.style.display = "none";
+    dashboardViewEl.classList.add("active");
+    viewToggleBtn.textContent = "Chat";
+    viewToggleBtn.title = "Switch to chat view";
+    viewToggleBtn.setAttribute("aria-label", "Switch to chat view");
+  } else {
+    chatAreaEl.style.display = "";
+    dashboardViewEl.classList.remove("active");
+    viewToggleBtn.textContent = "Dashboard";
+    viewToggleBtn.title = "Switch to dashboard view";
+    viewToggleBtn.setAttribute("aria-label", "Switch to dashboard view");
+  }
+}
+
+// --- Dashboard Navigation ---
+
+function navigateDashboard(page) {
+  currentDashboardPage = page;
+  localStorage.setItem("copilot_dashboard_page", page);
+  document.querySelectorAll(".dashboard-nav-item").forEach((item) => {
+    item.classList.toggle("active", item.dataset.page === page);
+  });
+  document.querySelectorAll(".dashboard-page").forEach((el) => {
+    el.classList.toggle("active", el.id === `dashboard-page-${page}`);
+  });
+}
+
 function restoreLastSession() {
   const lastId = localStorage.getItem("copilot_last_session");
   if (!lastId) return;
@@ -397,10 +435,30 @@ if (getToken()) {
   loadQuota();
 }
 
+// Restore dashboard view state from localStorage
+const savedView = localStorage.getItem("copilot_current_view");
+if (savedView === "dashboard") {
+  switchView("dashboard");
+}
+const savedDashboardPage = localStorage.getItem("copilot_dashboard_page");
+if (savedDashboardPage && ["goals", "research", "milestones", "issues"].includes(savedDashboardPage)) {
+  navigateDashboard(savedDashboardPage);
+}
+
 toggleSidebarBtn.addEventListener("click", toggleSidebar);
 
 // Close sidebar when backdrop is tapped (mobile)
 sidebarBackdrop.addEventListener("click", closeSidebarOnMobile);
+
+// View toggle (Chat ↔ Dashboard)
+viewToggleBtn.addEventListener("click", () => {
+  switchView(currentView === "chat" ? "dashboard" : "chat");
+});
+
+// Dashboard nav items
+document.querySelectorAll(".dashboard-nav-item").forEach((item) => {
+  item.addEventListener("click", () => navigateDashboard(item.dataset.page));
+});
 
 // --- Stop Button ---
 stopBtn.addEventListener("click", async () => {
