@@ -155,6 +155,19 @@ const VALID_RESEARCH_STATUSES = ["open", "researching", "resolved"] as const;
 const MAX_RESEARCH_FINDINGS_LENGTH = 2000;
 const MAX_RESEARCH_DECISION_LENGTH = 1000;
 
+/**
+ * HTML-escapes a string to prevent stored XSS if the value is later rendered
+ * in a browser context. Mirrors the sanitizeText() helper in planning-tools.ts.
+ */
+function sanitizeResearchText(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#x27;");
+}
+
 // Build the shared session config used for both new and resumed sessions
 function buildSessionConfig(token: string, model: string, reasoningEffort?: ReasoningEffort): SessionConfig {
   const cfg: SessionConfig = {
@@ -894,11 +907,12 @@ app.patch("/api/goals/:goalId/research/:itemId", async (req: Request, res: Respo
       res.status(400).json({ error: "findings must be a string" });
       return;
     }
-    if (body.findings.length > MAX_RESEARCH_FINDINGS_LENGTH) {
+    const trimmedFindings = body.findings.trim();
+    if (trimmedFindings.length > MAX_RESEARCH_FINDINGS_LENGTH) {
       res.status(400).json({ error: `findings must be at most ${MAX_RESEARCH_FINDINGS_LENGTH} characters` });
       return;
     }
-    updates.findings = body.findings.trim();
+    updates.findings = sanitizeResearchText(trimmedFindings);
   }
 
   if ("decision" in body) {
@@ -906,11 +920,12 @@ app.patch("/api/goals/:goalId/research/:itemId", async (req: Request, res: Respo
       res.status(400).json({ error: "decision must be a string" });
       return;
     }
-    if (body.decision.length > MAX_RESEARCH_DECISION_LENGTH) {
+    const trimmedDecision = body.decision.trim();
+    if (trimmedDecision.length > MAX_RESEARCH_DECISION_LENGTH) {
       res.status(400).json({ error: `decision must be at most ${MAX_RESEARCH_DECISION_LENGTH} characters` });
       return;
     }
-    updates.decision = body.decision.trim();
+    updates.decision = sanitizeResearchText(trimmedDecision);
   }
 
   if ("status" in body) {
@@ -930,6 +945,13 @@ app.patch("/api/goals/:goalId/research/:itemId", async (req: Request, res: Respo
     const goal = await getOwnedGoal(token, goalId);
     if (!goal) {
       res.status(404).json({ error: "Goal not found" });
+      return;
+    }
+
+    // Verify the research item exists and belongs to the requested goal (IDOR guard)
+    const existingItem = await planningStore.getResearchItem(itemId);
+    if (!existingItem || existingItem.goalId !== goalId) {
+      res.status(404).json({ error: "Research item not found" });
       return;
     }
 
