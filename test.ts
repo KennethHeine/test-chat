@@ -456,22 +456,28 @@ async function testReasoningEffortInvalidValue(): Promise<void> {
 }
 
 async function testReasoningEffortValidValues(): Promise<void> {
-  // Each allowed value should not cause a 400 before SSE headers are sent
-  // We only check that sending a valid effort doesn't get rejected pre-stream
-  // (we won't wait for the full SSE response to keep the test fast)
+  // NOTE: This test only validates server-side input handling — it confirms the server
+  // accepts each allowed value without a pre-stream 400. It does not verify that the
+  // reasoningEffort is actually applied in the SDK session config.
   for (const effort of ["low", "medium", "high", "xhigh"]) {
+    const controller = new AbortController();
     const res = await fetch(`${BASE}/api/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...testAuthHeaders() },
       body: JSON.stringify({ message: "Reply with: EFFORT_TEST_OK", model: FREE_MODEL, reasoningEffort: effort }),
+      signal: controller.signal,
     });
     // Valid effort should not return 400; it returns 200 (SSE) or another non-400 status
     if (res.status === 400) {
       const data = await res.json().catch(() => ({}));
       throw new Error(`Valid reasoningEffort "${effort}" was rejected with 400: ${JSON.stringify(data)}`);
     }
-    // Consume body to avoid connection hang
-    await res.text();
+    // Abort the SSE stream after confirming headers to avoid waiting for full response
+    try {
+      controller.abort();
+    } catch {
+      // ignore abort errors
+    }
   }
   log("  ", "All 4 valid reasoning effort values accepted");
 }

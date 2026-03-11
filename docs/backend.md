@@ -42,7 +42,7 @@ The backend is a single Express.js server written in TypeScript (`server.ts`), e
 }
 ```
 
-- `reasoningEffort` — Optional. One of `low`, `medium`, `high`, `xhigh`. Only valid for models where `capabilities.supports.reasoningEffort === true` (e.g., `o4-mini`). Returns `400` if an invalid value is supplied.
+- `reasoningEffort` — Optional. One of `low`, `medium`, `high`, `xhigh`. Only applicable/meaningful for models where `capabilities.supports.reasoningEffort === true` (e.g., `o4-mini`). Returns `400` if an invalid value is supplied.
 
 **Response:** Server-Sent Events (SSE) stream
 
