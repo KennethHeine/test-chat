@@ -120,6 +120,11 @@
 | POST | `/api/chat/abort` | Bearer token | Abort streaming response |
 | POST | `/api/chat/model` | Bearer token | Switch model mid-conversation |
 | GET | `/api/quota` | Bearer token | Premium request quota |
+| GET | `/api/goals` | Bearer token | List all goals for the user |
+| GET | `/api/goals/:id` | Bearer token | Get a specific goal by ID |
+| GET | `/api/goals/:id/research` | Bearer token | List research items for a goal |
+| GET | `/api/goals/:id/milestones` | Bearer token | List milestones for a goal in order |
+| GET | `/api/milestones/:id/issues` | Bearer token | List issue drafts for a milestone in order |
 
 ## SDK Quick Reference
 
