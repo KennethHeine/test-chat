@@ -2758,6 +2758,18 @@ async function testCreateGithubBranchIdempotentWhenExists(): Promise<void> {
         headers: { get: () => null },
       };
     }
+    // GET for fetching the existing ref after 422
+    if (method === "GET" && String(url).includes("/git/ref/heads/")) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          ref: "refs/heads/my-branch",
+          object: { sha: "existingsha456", type: "commit" },
+        }),
+        headers: { get: () => null },
+      };
+    }
     return orig(url, init);
   };
   try {
@@ -2767,6 +2779,10 @@ async function testCreateGithubBranchIdempotentWhenExists(): Promise<void> {
     );
     if (result.alreadyExists !== true) {
       throw new Error("Expected alreadyExists true for 422 already_exists");
+    }
+    // Should return the actual SHA from the existing ref, not baseSha
+    if (result.sha !== "existingsha456") {
+      throw new Error(`Expected sha 'existingsha456' from existing ref, got '${result.sha}'`);
     }
   } finally {
     (global as any).fetch = orig;
@@ -2937,6 +2953,39 @@ async function testManageGithubLabelsInvalidColorThrows(): Promise<void> {
     if (!err.message.toLowerCase().includes("color")) {
       throw new Error(`Expected error about 'color', got: ${err.message}`);
     }
+  }
+}
+
+async function testManageGithubLabelsColorWithWhitespaceAccepted(): Promise<void> {
+  const tools = createGitHubTools("test-token");
+  const tool = tools.find((t) => t.name === "manage_github_labels")!;
+
+  let capturedBody: any;
+  const orig = (global as any).fetch;
+  (global as any).fetch = async (url: string, init?: any) => {
+    const method = init?.method ?? "GET";
+    if (method === "POST" && String(url).includes("/labels")) {
+      capturedBody = JSON.parse(init?.body ?? "{}");
+      return {
+        ok: true,
+        status: 201,
+        json: async () => ({ name: capturedBody.name, color: capturedBody.color, url: "" }),
+        headers: { get: () => null },
+      };
+    }
+    return orig(url, init);
+  };
+  try {
+    // Whitespace-padded color should be trimmed and accepted
+    await tool.handler(
+      { owner: "owner", repo: "repo", labels: [{ name: "trimmed-color", color: " 0075ca " }] },
+      STUB_INVOCATION
+    );
+    if (capturedBody?.color !== "0075ca") {
+      throw new Error(`Expected trimmed color '0075ca' sent to API, got '${capturedBody?.color}'`);
+    }
+  } finally {
+    (global as any).fetch = orig;
   }
 }
 
@@ -3661,6 +3710,7 @@ async function main() {
   await run("manage_github_labels: idempotent when label already exists (422)", testManageGithubLabelsIdempotentWhenExists);
   await run("manage_github_labels: uses default color when none provided", testManageGithubLabelsDefaultColor);
   await run("manage_github_labels: invalid color throws", testManageGithubLabelsInvalidColorThrows);
+  await run("manage_github_labels: whitespace-padded color is trimmed and accepted", testManageGithubLabelsColorWithWhitespaceAccepted);
   await run("manage_github_labels: description over 100 chars throws", testManageGithubLabelsDescriptionTooLongThrows);
   await run("manage_github_labels: empty owner throws", testManageGithubLabelsMissingOwnerThrows);
   await run("manage_github_labels: empty labels array throws", testManageGithubLabelsEmptyArrayThrows);

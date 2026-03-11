@@ -782,7 +782,9 @@ export function createGitHubTools(token: string, planningStore?: PlanningStore):
         throw new Error("branchName is invalid after sanitization");
       }
 
-      const { owner, repo, baseSha } = args;
+      const owner = args.owner.trim();
+      const repo = args.repo.trim();
+      const baseSha = args.baseSha.trim();
       const ref = `refs/heads/${sanitizedName}`;
 
       try {
@@ -790,12 +792,12 @@ export function createGitHubTools(token: string, planningStore?: PlanningStore):
           token,
           "POST",
           `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/refs`,
-          { ref, sha: baseSha.trim() }
+          { ref, sha: baseSha }
         )) as any;
         return {
           branchName: sanitizedName,
           ref: created.ref,
-          sha: created.object?.sha ?? baseSha.trim(),
+          sha: created.object?.sha ?? baseSha,
           alreadyExists: false,
         };
       } catch (err: any) {
@@ -815,12 +817,27 @@ export function createGitHubTools(token: string, planningStore?: PlanningStore):
             // JSON parse failed; re-throw the original error rather than masking it
           }
           if (alreadyExists) {
-            return {
-              branchName: sanitizedName,
-              ref,
-              sha: baseSha.trim(),
-              alreadyExists: true,
-            };
+            // Fetch the actual ref so we return the current SHA, not the caller's baseSha
+            try {
+              const existingRef = (await githubFetch(
+                token,
+                `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/ref/heads/${encodeURIComponent(sanitizedName)}`
+              )) as any;
+              return {
+                branchName: sanitizedName,
+                ref: existingRef?.ref ?? ref,
+                sha: existingRef?.object?.sha ?? null,
+                alreadyExists: true,
+              };
+            } catch {
+              // If we can't retrieve the existing ref, avoid returning a potentially inaccurate SHA
+              return {
+                branchName: sanitizedName,
+                ref,
+                sha: null,
+                alreadyExists: true,
+              };
+            }
           }
         }
         throw err;
@@ -888,7 +905,8 @@ export function createGitHubTools(token: string, planningStore?: PlanningStore):
         throw new Error("labels must be a non-empty array");
       }
 
-      const { owner, repo } = args;
+      const owner = args.owner.trim();
+      const repo = args.repo.trim();
       const results: Array<{ name: string; color: string; alreadyExists: boolean; url?: string }> = [];
 
       for (const labelSpec of args.labels) {
@@ -899,11 +917,17 @@ export function createGitHubTools(token: string, planningStore?: PlanningStore):
 
         // Validate or default color
         let color = DEFAULT_LABEL_COLOR;
-        if (labelSpec.color !== undefined && labelSpec.color !== null && labelSpec.color !== "") {
-          if (typeof labelSpec.color !== "string" || !HEX_COLOR_RE.test(labelSpec.color)) {
+        if (labelSpec.color !== undefined && labelSpec.color !== null) {
+          if (typeof labelSpec.color !== "string") {
             throw new Error(`Label '${name}': color must be a 6-digit hex string without # prefix (e.g., '0075ca')`);
           }
-          color = labelSpec.color;
+          const trimmedColor = labelSpec.color.trim();
+          if (trimmedColor !== "") {
+            if (!HEX_COLOR_RE.test(trimmedColor)) {
+              throw new Error(`Label '${name}': color must be a 6-digit hex string without # prefix (e.g., '0075ca')`);
+            }
+            color = trimmedColor;
+          }
         }
 
         // Validate optional description length
