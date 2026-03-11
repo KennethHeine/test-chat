@@ -443,6 +443,7 @@ function hideToolActivity() {
  * For save_goal, renders the goal summary card using the result data when present,
  * or falls back to fetching the latest goal from the API.
  * For generate_research_checklist, renders the categorized research checklist.
+ * For create_milestone_plan and get_milestones, renders the milestone timeline.
  * @param {Object} event - The parsed tool_complete SSE event
  */
 function handleToolComplete(event) {
@@ -459,6 +460,12 @@ function handleToolComplete(event) {
   if (event.tool === "generate_research_checklist") {
     if (event.result && Array.isArray(event.result.items)) {
       renderResearchChecklist(event.result.items);
+    }
+  }
+  // When create_milestone_plan or get_milestones completes, render the milestone timeline
+  if (event.tool === "create_milestone_plan" || event.tool === "get_milestones") {
+    if (event.result && Array.isArray(event.result.milestones)) {
+      renderMilestoneTimeline(event.result.milestones);
     }
   }
   hideToolActivity();
@@ -871,6 +878,12 @@ const CATEGORY_LABELS = {
 };
 const VALID_STATUSES = ["open", "researching", "resolved"];
 
+/** Valid milestone status values. */
+const VALID_MILESTONE_STATUSES = ["draft", "ready", "in-progress", "complete"];
+
+/** Default milestone status used when an unrecognized value is encountered. */
+const DEFAULT_MILESTONE_STATUS = "draft";
+
 /**
  * Renders a categorized research checklist card in the chat flow.
  * All user-supplied content is inserted via textContent to prevent XSS.
@@ -949,6 +962,120 @@ function renderResearchChecklist(items) {
   if (resolved > 0) summaryParts.push(`Resolved: ${resolved}`);
   const summaryEl = document.createElement("div");
   summaryEl.className = "research-card-summary";
+  summaryEl.textContent = summaryParts.join(" · ");
+  body.appendChild(summaryEl);
+
+  card.appendChild(body);
+  messagesEl.appendChild(card);
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+
+/**
+ * Renders a milestone timeline/list card in the chat flow.
+ * Milestones are shown in order with status indicators and dependency labels.
+ * All user-supplied content is inserted via textContent to prevent XSS.
+ * @param {Array} milestones - Array of Milestone objects sorted by order
+ */
+function renderMilestoneTimeline(milestones) {
+  if (!milestones || milestones.length === 0) return;
+
+  // Sort by order ascending (defensive copy)
+  const sorted = [...milestones].sort((a, b) => (a.order || 0) - (b.order || 0));
+
+  const card = document.createElement("div");
+  card.className = "milestone-card";
+
+  // Header
+  const header = document.createElement("div");
+  header.className = "milestone-card-header";
+  const headerTitle = document.createElement("span");
+  headerTitle.textContent = "🗺️ Milestone Plan";
+  header.appendChild(headerTitle);
+  card.appendChild(header);
+
+  // Body
+  const body = document.createElement("div");
+  body.className = "milestone-card-body";
+
+  // Build a map from milestone ID to order for dependency display
+  /** @type {Map<string, number>} */
+  const idToOrder = new Map();
+  for (const ms of sorted) {
+    if (ms.id) idToOrder.set(ms.id, ms.order);
+  }
+
+  for (const ms of sorted) {
+    const itemEl = document.createElement("div");
+    itemEl.className = "milestone-item";
+    itemEl.setAttribute("data-milestone-id", ms.id || "");
+
+    // Header row: order number, name, status badge
+    const itemHeader = document.createElement("div");
+    itemHeader.className = "milestone-item-header";
+
+    const orderEl = document.createElement("span");
+    orderEl.className = "milestone-order";
+    orderEl.textContent = `#${ms.order}`;
+    itemHeader.appendChild(orderEl);
+
+    const nameEl = document.createElement("span");
+    nameEl.className = "milestone-name";
+    nameEl.textContent = ms.name || "";
+    itemHeader.appendChild(nameEl);
+
+    const rawStatus = ms.status || DEFAULT_MILESTONE_STATUS;
+    const status = VALID_MILESTONE_STATUSES.includes(rawStatus) ? rawStatus : DEFAULT_MILESTONE_STATUS;
+    const statusEl = document.createElement("span");
+    statusEl.className = "milestone-status status-" + status;
+    statusEl.textContent = status;
+    itemHeader.appendChild(statusEl);
+
+    itemEl.appendChild(itemHeader);
+
+    // Goal/description line
+    if (ms.goal) {
+      const goalEl = document.createElement("div");
+      goalEl.className = "milestone-goal";
+      goalEl.textContent = ms.goal;
+      itemEl.appendChild(goalEl);
+    }
+
+    // Dependencies
+    if (Array.isArray(ms.dependencies) && ms.dependencies.length > 0) {
+      const depsEl = document.createElement("div");
+      depsEl.className = "milestone-deps";
+
+      const depsLabel = document.createElement("span");
+      depsLabel.className = "milestone-deps-label";
+      depsLabel.textContent = "Depends on:";
+      depsEl.appendChild(depsLabel);
+
+      const depList = ms.dependencies.map((depId) => {
+        const depOrder = idToOrder.get(depId);
+        return depOrder !== undefined ? `#${depOrder}` : depId;
+      });
+
+      const depsText = document.createTextNode(" " + depList.join(", "));
+      depsEl.appendChild(depsText);
+      itemEl.appendChild(depsEl);
+    }
+
+    body.appendChild(itemEl);
+  }
+
+  // Summary line
+  const total = sorted.length;
+  const complete = sorted.filter(m => m.status === "complete").length;
+  const inProgress = sorted.filter(m => m.status === "in-progress").length;
+  const ready = sorted.filter(m => m.status === "ready").length;
+  const draft = total - complete - inProgress - ready;
+  const summaryParts = [];
+  if (draft > 0) summaryParts.push(`Draft: ${draft}`);
+  if (ready > 0) summaryParts.push(`Ready: ${ready}`);
+  if (inProgress > 0) summaryParts.push(`In Progress: ${inProgress}`);
+  if (complete > 0) summaryParts.push(`Complete: ${complete}`);
+  const summaryEl = document.createElement("div");
+  summaryEl.className = "milestone-card-summary";
   summaryEl.textContent = summaryParts.join(" · ");
   body.appendChild(summaryEl);
 

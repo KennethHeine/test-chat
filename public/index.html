@@ -725,6 +725,137 @@
         font-size: 13px;
       }
     }
+
+    /* Milestone Timeline Card */
+    .milestone-card {
+      align-self: flex-start;
+      max-width: 80%;
+      border: 1px solid var(--color-accent);
+      border-radius: 10px;
+      overflow: hidden;
+      font-size: 14px;
+      line-height: 1.5;
+      word-wrap: break-word;
+    }
+
+    .milestone-card-header {
+      background: var(--color-accent-emphasis);
+      color: #fff;
+      padding: 8px 14px;
+      font-weight: 600;
+      font-size: 14px;
+      letter-spacing: 0.2px;
+    }
+
+    .milestone-card-body {
+      background: var(--color-assistant-bubble);
+      padding: 12px 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .milestone-item {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      padding: 8px 10px;
+      border-radius: var(--radius);
+      border: 1px solid var(--color-border);
+      background: var(--color-bg-tertiary);
+    }
+
+    .milestone-item-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .milestone-order {
+      flex-shrink: 0;
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--color-text-muted);
+      min-width: 24px;
+    }
+
+    .milestone-name {
+      font-weight: 600;
+      color: var(--color-text);
+      flex: 1;
+    }
+
+    .milestone-status {
+      flex-shrink: 0;
+      font-size: 11px;
+      font-weight: 600;
+      padding: 2px 6px;
+      border-radius: 4px;
+      text-transform: uppercase;
+      letter-spacing: 0.3px;
+    }
+
+    .milestone-status.status-draft {
+      background: var(--color-bg-tertiary);
+      color: var(--color-text-muted);
+      border: 1px solid var(--color-border);
+    }
+
+    .milestone-status.status-ready {
+      background: rgba(88, 166, 255, 0.15);
+      color: var(--color-accent);
+      border: 1px solid var(--color-accent);
+    }
+
+    .milestone-status.status-in-progress {
+      background: rgba(210, 153, 34, 0.15);
+      color: #d29922;
+      border: 1px solid #d29922;
+    }
+
+    .milestone-status.status-complete {
+      background: rgba(63, 185, 80, 0.15);
+      color: var(--color-success);
+      border: 1px solid var(--color-success);
+    }
+
+    .milestone-goal {
+      font-size: 13px;
+      color: var(--color-text-muted);
+    }
+
+    .milestone-deps {
+      font-size: 12px;
+      color: var(--color-text-muted);
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .milestone-deps-label {
+      font-weight: 600;
+    }
+
+    .milestone-card-summary {
+      font-size: 12px;
+      color: var(--color-text-muted);
+      border-top: 1px solid var(--color-border);
+      padding-top: 8px;
+      margin-top: 2px;
+    }
+
+    @media (max-width: 768px) {
+      .milestone-card {
+        max-width: 92%;
+      }
+    }
+
+    @media (max-width: 480px) {
+      .milestone-card {
+        max-width: 96%;
+        font-size: 13px;
+      }
+    }
   </style>
 </head>
 <body>
