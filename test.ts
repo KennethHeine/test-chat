@@ -1111,6 +1111,70 @@ async function testResearchSeedAndRetrieve(): Promise<void> {
 }
 
 // ============================================================
+// 8. Fleet API tests
+// ============================================================
+
+async function testFleetStartNoAuth(): Promise<void> {
+  const res = await fetch(`${BASE}/api/fleet/start`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      // Force deterministic 401 by sending an empty Bearer token so extractToken()
+      // does not fall back to process.env.COPILOT_GITHUB_TOKEN.
+      Authorization: "Bearer ",
+    },
+    body: JSON.stringify({ sessionId: "some-session" }),
+  });
+  if (res.status !== 401) {
+    throw new Error(`Expected 401 for unauthenticated fleet start, got ${res.status}`);
+  }
+  log("  ", "Confirmed 401 with empty auth token");
+}
+
+async function testFleetStartMissingSessionId(): Promise<void> {
+  const res = await fetch(`${BASE}/api/fleet/start`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({}),
+  });
+  if (res.status !== 400) throw new Error(`Expected 400, got ${res.status}`);
+  const data = await res.json();
+  if (!data.error) throw new Error("Expected error message in 400 response");
+}
+
+async function testFleetStartUnknownSession(): Promise<void> {
+  const res = await fetch(`${BASE}/api/fleet/start`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ sessionId: "nonexistent-session-id-99999" }),
+  });
+  if (res.status !== 404) throw new Error(`Expected 404, got ${res.status}`);
+  const data = await res.json();
+  if (!data.error) throw new Error("Expected error message in 404 response");
+}
+
+async function testFleetStatusNoAuth(): Promise<void> {
+  const res = await fetch(`${BASE}/api/fleet/nonexistent-fleet-id/status`, {
+    // Force deterministic 401 by sending an empty Authorization header, which
+    // prevents extractToken() from falling back to COPILOT_GITHUB_TOKEN.
+    headers: { Authorization: "Bearer " },
+  });
+  if (res.status !== 401) {
+    throw new Error(`Expected 401 without valid auth, got ${res.status}`);
+  }
+  log("  ", "Confirmed 401 with empty auth token");
+}
+
+async function testFleetStatusNotFound(): Promise<void> {
+  const res = await fetch(`${BASE}/api/fleet/nonexistent-fleet-id-99999/status`, {
+    headers: testAuthHeaders(),
+  });
+  if (res.status !== 404) throw new Error(`Expected 404, got ${res.status}`);
+  const data = await res.json();
+  if (!data.error) throw new Error("Expected error message in 404 response");
+}
+
+// ============================================================
 // Main
 // ============================================================
 
@@ -1191,6 +1255,15 @@ async function main() {
   await run("GET /api/goals/:id/research returns 404 for unknown goal", testResearchGetNotFound);
   await run("GET /api/goals/:id/research returns empty array for goal with no items", testResearchGetEmptyForGoalWithNoItems);
   await run("Research seed → get round-trip", testResearchSeedAndRetrieve);
+
+  // --- Fleet API tests ---
+  console.log("\n── Fleet API Tests ──\n");
+
+  await run("POST /api/fleet/start — no Authorization header is handled", testFleetStartNoAuth);
+  await run("POST /api/fleet/start returns 400 with missing sessionId", testFleetStartMissingSessionId);
+  await run("POST /api/fleet/start returns 404 for unknown session", testFleetStartUnknownSession);
+  await run("GET /api/fleet/:id/status — no Authorization header is handled", testFleetStatusNoAuth);
+  await run("GET /api/fleet/:id/status returns 404 for unknown fleet", testFleetStatusNotFound);
 
   // Cleanup
   serverProcess.kill();

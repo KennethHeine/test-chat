@@ -8,6 +8,7 @@ import { createSessionStore, hashToken, AzureSessionStore, InMemorySessionStore,
 import { createGitHubTools, GITHUB_TOOL_NAMES } from "./tools.js";
 import { InMemoryPlanningStore, type PlanningStore } from "./planning-store.js";
 import { createPlanningTools } from "./planning-tools.js";
+import { InMemoryFleetStore, type FleetStore } from "./fleet-store.js";
 
 // --- System Message for Agent Orchestration ---
 const ORCHESTRATOR_SYSTEM_MESSAGE = `You are a coding task orchestrator. Your role is to help users research codebases, plan coding tasks, and coordinate work across repositories.
@@ -44,6 +45,10 @@ let sessionStore: SessionStore = createSessionStore(storageAccountName || undefi
 // Goals are created via planning tools (planning-tools.ts), not through API endpoints.
 // This store is shared with the tool factory once planning tools are wired in.
 const planningStore: PlanningStore = new InMemoryPlanningStore();
+
+// --- Fleet Store ---
+// Tracks active and completed fleets per user (keyed by token hash).
+const fleetStore: FleetStore = new InMemoryFleetStore();
 
 // --- Per-user Copilot Clients ---
 
@@ -626,6 +631,105 @@ app.get("/api/goals/:id/research", async (req: Request, res: Response) => {
     res.json({ research });
   } catch (err: any) {
     res.status(500).json({ error: err.message || "Failed to get research items" });
+  }
+});
+
+// --- Fleet API Endpoints ---
+
+// Start a new fleet for an active session
+app.post("/api/fleet/start", async (req: Request, res: Response) => {
+  const token = extractToken(req);
+  if (!token) {
+    res.status(401).json({ error: "Missing token. Provide Authorization: Bearer <token> header." });
+    return;
+  }
+
+  const { sessionId: rawSessionId, prompt } = req.body;
+
+  if (typeof rawSessionId !== "string") {
+    res.status(400).json({ error: "Missing or invalid 'sessionId' field" });
+    return;
+  }
+
+  const sessionId = rawSessionId.trim();
+  if (sessionId.length === 0) {
+    res.status(400).json({ error: "Missing or invalid 'sessionId' field" });
+    return;
+  }
+
+  if (prompt !== undefined && typeof prompt !== "string") {
+    res.status(400).json({ error: "Invalid 'prompt' field: must be a string if provided" });
+    return;
+  }
+
+  const key = sessionKey(token, sessionId);
+  const session = sessions.get(key);
+  if (!session) {
+    res.status(404).json({ error: "Session not found" });
+    return;
+  }
+
+  try {
+    const fleetParams: { prompt?: string } = {};
+    if (typeof prompt === "string" && prompt.trim().length > 0) {
+      // Sanitize prompt before storage to prevent stored-XSS if ever rendered
+      fleetParams.prompt = prompt
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#x27;");
+    }
+
+    const rpcResult = await session.rpc.fleet.start(fleetParams);
+
+    const fleetId = crypto.randomUUID();
+    const now = new Date().toISOString();
+    const tHash = await hashToken(token);
+    const fleetRecord = await fleetStore.createFleet({
+      id: fleetId,
+      sessionId,
+      tokenHash: tHash,
+      status: rpcResult.started ? "started" : "failed",
+      ...(fleetParams.prompt !== undefined ? { prompt: fleetParams.prompt } : {}),
+      subagentCount: 0,
+      startedAt: now,
+      updatedAt: now,
+    });
+
+    res.status(201).json({ fleetId: fleetRecord.id, status: fleetRecord.status });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Failed to start fleet" });
+  }
+});
+
+// Get status and metadata for a fleet
+app.get("/api/fleet/:id/status", async (req: Request, res: Response) => {
+  const token = extractToken(req);
+  if (!token) {
+    res.status(401).json({ error: "Missing token. Provide Authorization: Bearer <token> header." });
+    return;
+  }
+
+  const fleetId = req.params.id as string;
+
+  try {
+    const fleet = await fleetStore.getFleet(fleetId);
+    if (!fleet) {
+      res.status(404).json({ error: "Fleet not found" });
+      return;
+    }
+
+    const tHash = await hashToken(token);
+    if (fleet.tokenHash !== tHash) {
+      res.status(404).json({ error: "Fleet not found" });
+      return;
+    }
+
+    const { tokenHash: _tokenHash, ...publicFleet } = fleet;
+    res.json(publicFleet);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Failed to get fleet status" });
   }
 });
 
