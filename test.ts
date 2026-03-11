@@ -987,6 +987,415 @@ async function testGetResearchUnknownGoalReturnsError(): Promise<void> {
   if (!result.error) throw new Error("Expected error for unknown goalId");
 }
 
+// ── Milestone tool tests ─────────────────────────────────────────────────────
+
+function makeValidMilestoneSpecs() {
+  return [
+    {
+      name: "Foundation",
+      goal: "Set up the project structure",
+      scope: "Project scaffolding only, excludes business logic",
+      order: 1,
+      dependencies: [],
+      acceptanceCriteria: ["Repo initialized"],
+      exitCriteria: ["CI passing"],
+    },
+    {
+      name: "Core Features",
+      goal: "Implement the main feature set",
+      scope: "Core features only, excludes polish",
+      order: 2,
+      dependencies: [1],
+      acceptanceCriteria: ["Feature works end-to-end"],
+      exitCriteria: ["Tests passing"],
+    },
+  ];
+}
+
+async function testCreateMilestonePlanReturnsOrderedMilestones(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const goalId = await seedGoal(store);
+  const tools = createPlanningTools("test-token", store);
+  const create = tools.find((t) => t.name === "create_milestone_plan")!;
+
+  const result: any = await create.handler(
+    {
+      sessionId: makeValidSaveGoalArgs().sessionId,
+      goalId,
+      milestones: makeValidMilestoneSpecs(),
+    },
+    STUB_INVOCATION
+  );
+
+  if (!result.milestones) throw new Error("Expected milestones in result");
+  if (result.milestones.length !== 2) {
+    throw new Error(`Expected 2 milestones, got ${result.milestones.length}`);
+  }
+  // Verify ordering
+  if (result.milestones[0].order !== 1) throw new Error("First milestone should have order 1");
+  if (result.milestones[1].order !== 2) throw new Error("Second milestone should have order 2");
+  // Verify IDs are assigned
+  if (!result.milestones[0].id) throw new Error("Milestone missing id");
+  if (!result.milestones[1].id) throw new Error("Milestone missing id");
+  // Verify dependency is resolved to actual ID
+  const dep = result.milestones[1].dependencies[0];
+  if (dep !== result.milestones[0].id) {
+    throw new Error(`Expected dependency ID to match first milestone id, got: ${dep}`);
+  }
+}
+
+async function testCreateMilestonePlanCircularDependencyReturnsError(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const goalId = await seedGoal(store);
+  const tools = createPlanningTools("test-token", store);
+  const create = tools.find((t) => t.name === "create_milestone_plan")!;
+
+  // A→B, B→A: circular
+  const result: any = await create.handler(
+    {
+      sessionId: makeValidSaveGoalArgs().sessionId,
+      goalId,
+      milestones: [
+        {
+          name: "Milestone A",
+          goal: "First milestone",
+          scope: "Scope A",
+          order: 1,
+          dependencies: [2],
+          acceptanceCriteria: ["done"],
+          exitCriteria: [],
+        },
+        {
+          name: "Milestone B",
+          goal: "Second milestone",
+          scope: "Scope B",
+          order: 2,
+          dependencies: [1],
+          acceptanceCriteria: ["done"],
+          exitCriteria: [],
+        },
+      ],
+    },
+    STUB_INVOCATION
+  );
+  if (!result.error) throw new Error("Expected error for circular dependency");
+  if (!result.error.toLowerCase().includes("circular")) {
+    throw new Error(`Expected 'circular' in error message, got: ${result.error}`);
+  }
+}
+
+async function testCreateMilestonePlanWrongSessionReturnsError(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const goalId = await seedGoal(store);
+  const tools = createPlanningTools("test-token", store);
+  const create = tools.find((t) => t.name === "create_milestone_plan")!;
+
+  const result: any = await create.handler(
+    {
+      sessionId: "wrong-session",
+      goalId,
+      milestones: makeValidMilestoneSpecs(),
+    },
+    STUB_INVOCATION
+  );
+  if (!result.error) throw new Error("Expected error for wrong sessionId");
+}
+
+async function testCreateMilestonePlanDuplicateOrderReturnsError(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const goalId = await seedGoal(store);
+  const tools = createPlanningTools("test-token", store);
+  const create = tools.find((t) => t.name === "create_milestone_plan")!;
+
+  const result: any = await create.handler(
+    {
+      sessionId: makeValidSaveGoalArgs().sessionId,
+      goalId,
+      milestones: [
+        { ...makeValidMilestoneSpecs()[0], order: 1 },
+        { ...makeValidMilestoneSpecs()[1], order: 1 }, // duplicate order
+      ],
+    },
+    STUB_INVOCATION
+  );
+  if (!result.error) throw new Error("Expected error for duplicate order");
+}
+
+async function testCreateMilestonePlanNameIsSanitized(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const goalId = await seedGoal(store);
+  const tools = createPlanningTools("test-token", store);
+  const create = tools.find((t) => t.name === "create_milestone_plan")!;
+
+  const result: any = await create.handler(
+    {
+      sessionId: makeValidSaveGoalArgs().sessionId,
+      goalId,
+      milestones: [
+        {
+          name: "<script>alert('xss')</script>Milestone",
+          goal: "Test sanitization",
+          scope: "Sanitization scope",
+          order: 1,
+          dependencies: [],
+          acceptanceCriteria: ["done"],
+          exitCriteria: [],
+        },
+      ],
+    },
+    STUB_INVOCATION
+  );
+  if (!result.milestones) throw new Error("Expected milestones in result");
+  const name = result.milestones[0].name;
+  if (name.includes("<script>")) throw new Error("Milestone name should not contain raw HTML tags");
+  if (!name.includes("&lt;script&gt;")) throw new Error("Expected HTML entities in sanitized name");
+}
+
+async function testUpdateMilestoneFieldsAreUpdated(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const goalId = await seedGoal(store);
+  const tools = createPlanningTools("test-token", store);
+  const create = tools.find((t) => t.name === "create_milestone_plan")!;
+  const update = tools.find((t) => t.name === "update_milestone")!;
+
+  const createResult: any = await create.handler(
+    {
+      sessionId: makeValidSaveGoalArgs().sessionId,
+      goalId,
+      milestones: [makeValidMilestoneSpecs()[0]],
+    },
+    STUB_INVOCATION
+  );
+  const milestoneId = createResult.milestones[0].id;
+
+  const result: any = await update.handler(
+    {
+      milestoneId,
+      goalId,
+      sessionId: makeValidSaveGoalArgs().sessionId,
+      name: "Updated Name",
+      status: "ready",
+    },
+    STUB_INVOCATION
+  );
+  if (!result.milestone) throw new Error("Expected milestone in update result");
+  if (result.milestone.name !== "Updated Name") {
+    throw new Error(`Expected name 'Updated Name', got '${result.milestone.name}'`);
+  }
+  if (result.milestone.status !== "ready") {
+    throw new Error(`Expected status 'ready', got '${result.milestone.status}'`);
+  }
+}
+
+async function testUpdateMilestoneWrongSessionReturnsError(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const goalId = await seedGoal(store);
+  const tools = createPlanningTools("test-token", store);
+  const create = tools.find((t) => t.name === "create_milestone_plan")!;
+  const update = tools.find((t) => t.name === "update_milestone")!;
+
+  const createResult: any = await create.handler(
+    {
+      sessionId: makeValidSaveGoalArgs().sessionId,
+      goalId,
+      milestones: [makeValidMilestoneSpecs()[0]],
+    },
+    STUB_INVOCATION
+  );
+  const milestoneId = createResult.milestones[0].id;
+
+  const result: any = await update.handler(
+    { milestoneId, goalId, sessionId: "wrong-session", name: "New Name" },
+    STUB_INVOCATION
+  );
+  if (!result.error) throw new Error("Expected error for wrong sessionId");
+}
+
+async function testUpdateMilestoneInvalidStatusReturnsError(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const goalId = await seedGoal(store);
+  const tools = createPlanningTools("test-token", store);
+  const create = tools.find((t) => t.name === "create_milestone_plan")!;
+  const update = tools.find((t) => t.name === "update_milestone")!;
+
+  const createResult: any = await create.handler(
+    {
+      sessionId: makeValidSaveGoalArgs().sessionId,
+      goalId,
+      milestones: [makeValidMilestoneSpecs()[0]],
+    },
+    STUB_INVOCATION
+  );
+  const milestoneId = createResult.milestones[0].id;
+
+  const result: any = await update.handler(
+    { milestoneId, goalId, sessionId: makeValidSaveGoalArgs().sessionId, status: "invalid-status" },
+    STUB_INVOCATION
+  );
+  if (!result.error) throw new Error("Expected error for invalid status");
+}
+
+async function testUpdateMilestoneCircularDependencyReturnsError(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const goalId = await seedGoal(store);
+  const tools = createPlanningTools("test-token", store);
+  const create = tools.find((t) => t.name === "create_milestone_plan")!;
+  const update = tools.find((t) => t.name === "update_milestone")!;
+
+  // Create two milestones: M1 (order 1) and M2 (order 2, depends on M1)
+  const createResult: any = await create.handler(
+    {
+      sessionId: makeValidSaveGoalArgs().sessionId,
+      goalId,
+      milestones: makeValidMilestoneSpecs(),
+    },
+    STUB_INVOCATION
+  );
+  const m1Id = createResult.milestones[0].id;
+  const m2Id = createResult.milestones[1].id;
+
+  // Attempt to make M1 depend on M2 — creates a cycle M1→M2→M1
+  const result: any = await update.handler(
+    {
+      milestoneId: m1Id,
+      goalId,
+      sessionId: makeValidSaveGoalArgs().sessionId,
+      dependencies: [m2Id],
+    },
+    STUB_INVOCATION
+  );
+  if (!result.error) throw new Error("Expected error for circular dependency in update");
+  if (!result.error.toLowerCase().includes("circular")) {
+    throw new Error(`Expected 'circular' in error message, got: ${result.error}`);
+  }
+}
+
+async function testGetMilestonesReturnsOrdered(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const goalId = await seedGoal(store);
+  const tools = createPlanningTools("test-token", store);
+  const create = tools.find((t) => t.name === "create_milestone_plan")!;
+  const get = tools.find((t) => t.name === "get_milestones")!;
+
+  // Create milestones in reverse order to test ordering
+  await create.handler(
+    {
+      sessionId: makeValidSaveGoalArgs().sessionId,
+      goalId,
+      milestones: [makeValidMilestoneSpecs()[1], makeValidMilestoneSpecs()[0]],
+    },
+    STUB_INVOCATION
+  );
+
+  const result: any = await get.handler(
+    { goalId, sessionId: makeValidSaveGoalArgs().sessionId },
+    STUB_INVOCATION
+  );
+  if (!result.milestones) throw new Error("Expected milestones in get result");
+  if (result.milestones.length !== 2) {
+    throw new Error(`Expected 2 milestones, got ${result.milestones.length}`);
+  }
+  if (result.milestones[0].order !== 1) throw new Error("First milestone should have order 1");
+  if (result.milestones[1].order !== 2) throw new Error("Second milestone should have order 2");
+}
+
+async function testGetMilestonesWrongSessionReturnsError(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const goalId = await seedGoal(store);
+  const tools = createPlanningTools("test-token", store);
+  const get = tools.find((t) => t.name === "get_milestones")!;
+
+  const result: any = await get.handler(
+    { goalId, sessionId: "wrong-session" },
+    STUB_INVOCATION
+  );
+  if (!result.error) throw new Error("Expected error for wrong sessionId");
+}
+
+async function testGetMilestonesUnknownGoalReturnsError(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const tools = createPlanningTools("test-token", store);
+  const get = tools.find((t) => t.name === "get_milestones")!;
+
+  const result: any = await get.handler(
+    { goalId: "nonexistent-goal", sessionId: "any-session" },
+    STUB_INVOCATION
+  );
+  if (!result.error) throw new Error("Expected error for unknown goalId");
+}
+
+async function testUpdateMilestoneOrderCollisionReturnsError(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const goalId = await seedGoal(store);
+  const tools = createPlanningTools("test-token", store);
+  const create = tools.find((t) => t.name === "create_milestone_plan")!;
+  const update = tools.find((t) => t.name === "update_milestone")!;
+
+  // Create two milestones with orders 1 and 2
+  const createResult: any = await create.handler(
+    {
+      sessionId: makeValidSaveGoalArgs().sessionId,
+      goalId,
+      milestones: makeValidMilestoneSpecs(),
+    },
+    STUB_INVOCATION
+  );
+  const m2Id = createResult.milestones[1].id; // order=2
+
+  // Try to update milestone 2's order to 1 — should collide with milestone 1
+  const result: any = await update.handler(
+    {
+      milestoneId: m2Id,
+      goalId,
+      sessionId: makeValidSaveGoalArgs().sessionId,
+      order: 1,
+    },
+    STUB_INVOCATION
+  );
+  if (!result.error) throw new Error("Expected error for duplicate order on update");
+  if (!result.error.includes("order 1")) {
+    throw new Error(`Expected error to mention order 1, got: ${result.error}`);
+  }
+}
+
+async function testCreateMilestonePlanNameLengthAfterSanitizationReturnsError(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const goalId = await seedGoal(store);
+  const tools = createPlanningTools("test-token", store);
+  const create = tools.find((t) => t.name === "create_milestone_plan")!;
+
+  // A name that is exactly at the limit before sanitization but exceeds it after HTML-escaping
+  // "<" becomes "&lt;" (4 chars → 4 chars net gain per character), so 97 "<" chars = 97 * 4 = 388 chars after escape
+  // We need something that is <= 100 chars raw but > 100 after sanitization
+  // "&&&&...100 chars" → each "&" becomes "&amp;" (5 chars instead of 1), so 20 "&" = 100 chars raw → 100 chars after = ok
+  // Actually we need 100 raw chars where escaping pushes it over. Use 20 "&" + spaces = 100 raw chars
+  // 20 * "&amp;" = 100 chars — still 100, not over. Need to use more special chars.
+  // Use 25 "&" chars = 25 raw chars → 125 after ("&amp;" = 5 each), well over 100
+  const name = "&".repeat(25) + "x"; // 26 chars raw → 26 * 5 = 130 after "&amp;", well over 100
+  const result: any = await create.handler(
+    {
+      sessionId: makeValidSaveGoalArgs().sessionId,
+      goalId,
+      milestones: [
+        {
+          name,
+          goal: "Test",
+          scope: "Test scope",
+          order: 1,
+          dependencies: [],
+          acceptanceCriteria: ["done"],
+          exitCriteria: [],
+        },
+      ],
+    },
+    STUB_INVOCATION
+  );
+  if (!result.error) throw new Error("Expected error when sanitized name exceeds max length");
+  if (!result.error.includes("sanitization")) {
+    throw new Error(`Expected error to mention 'sanitization', got: ${result.error}`);
+  }
+}
+
 // ============================================================
 // 7. Research API endpoint tests (HTTP)
 // ============================================================
@@ -1198,7 +1607,7 @@ async function main() {
   // --- Planning tools tests ---
   console.log("\n── Planning Tools Tests ──\n");
 
-  await run("Planning tools: all 6 tools registered with correct names", testPlanningToolRegistration);
+  await run("Planning tools: all 9 tools registered with correct names", testPlanningToolRegistration);
   await run("define_goal: returns structured template from raw intent", testDefineGoalReturnsTemplate);
   await run("define_goal: empty intent returns validation error", testDefineGoalEmptyIntentReturnsError);
   await run("save_goal: valid data returns goal with generated ID and timestamps", testSaveGoalValidDataReturnsGoalWithId);
@@ -1226,6 +1635,24 @@ async function main() {
   await run("get_research: returns all items for goal", testGetResearchReturnsItems);
   await run("get_research: wrong sessionId returns error", testGetResearchWrongSessionReturnsError);
   await run("get_research: unknown goalId returns error", testGetResearchUnknownGoalReturnsError);
+
+  // --- Milestone tools tests ---
+  console.log("\n── Milestone Tools Tests ──\n");
+
+  await run("create_milestone_plan: returns ordered milestones with resolved deps", testCreateMilestonePlanReturnsOrderedMilestones);
+  await run("create_milestone_plan: circular dependency returns error", testCreateMilestonePlanCircularDependencyReturnsError);
+  await run("create_milestone_plan: wrong sessionId returns error", testCreateMilestonePlanWrongSessionReturnsError);
+  await run("create_milestone_plan: duplicate order values return error", testCreateMilestonePlanDuplicateOrderReturnsError);
+  await run("create_milestone_plan: milestone name is sanitized", testCreateMilestonePlanNameIsSanitized);
+  await run("update_milestone: fields are updated and returned", testUpdateMilestoneFieldsAreUpdated);
+  await run("update_milestone: wrong sessionId returns error", testUpdateMilestoneWrongSessionReturnsError);
+  await run("update_milestone: invalid status returns error", testUpdateMilestoneInvalidStatusReturnsError);
+  await run("update_milestone: circular dependency in deps update returns error", testUpdateMilestoneCircularDependencyReturnsError);
+  await run("get_milestones: returns milestones ordered by position", testGetMilestonesReturnsOrdered);
+  await run("get_milestones: wrong sessionId returns error", testGetMilestonesWrongSessionReturnsError);
+  await run("get_milestones: unknown goalId returns error", testGetMilestonesUnknownGoalReturnsError);
+  await run("update_milestone: order collision returns error", testUpdateMilestoneOrderCollisionReturnsError);
+  await run("create_milestone_plan: name exceeding max length after sanitization returns error", testCreateMilestonePlanNameLengthAfterSanitizationReturnsError);
 
   // --- Summary ---
   console.log("\n═══════════════════════════════════════════════");
