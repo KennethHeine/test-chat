@@ -1394,7 +1394,394 @@ async function testCreateMilestonePlanNameLengthAfterSanitizationReturnsError():
 }
 
 // ============================================================
-// 6b. create_github_milestone tool tests
+// 6b. generate_issue_drafts tool tests
+// ============================================================
+
+/**
+ * Builds a minimal valid issue spec for use in generate_issue_drafts tests.
+ */
+function makeValidIssueSpec(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    title: "Implement login endpoint",
+    purpose: "Allow users to authenticate",
+    problem: "No authentication endpoint exists in the server",
+    expectedOutcome: "POST /api/login returns 200 with JWT on valid credentials",
+    scopeBoundaries: "In scope: login. Out of scope: registration, SSO",
+    technicalContext: "Use JWT via jsonwebtoken package. Follow existing route pattern in server.ts",
+    acceptanceCriteria: ["Returns 200 on valid credentials", "Returns 401 on invalid credentials"],
+    testingExpectations: "Unit tests for JWT helper; integration tests for endpoint",
+    filesToModify: [{ path: "server.ts", reason: "Add POST /api/login route" }],
+    filesToRead: [{ path: "tools.ts", reason: "Follow existing API tool pattern" }],
+    securityChecklist: ["Validate input", "Hash password before comparison"],
+    verificationCommands: ["npx tsc --noEmit", "npm test"],
+    order: 1,
+    dependencies: [],
+    researchLinks: [],
+    ...overrides,
+  };
+}
+
+async function testGenerateIssueDraftsReturnsOrderedDrafts(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const { goalId, milestoneId, sessionId } = await seedGoalAndMilestone(store);
+  const tools = createPlanningTools("test-token", store);
+  const gen = tools.find((t) => t.name === "generate_issue_drafts")!;
+
+  const result: any = await gen.handler(
+    {
+      sessionId,
+      goalId,
+      milestoneId,
+      issues: [
+        makeValidIssueSpec({ order: 2, title: "Issue B" }),
+        makeValidIssueSpec({ order: 1, title: "Issue A" }),
+      ],
+    },
+    STUB_INVOCATION
+  );
+
+  if (result.error) throw new Error(`Unexpected error: ${result.error}`);
+  if (!Array.isArray(result.issues)) throw new Error("Expected issues array in result");
+  if (result.issues.length !== 2) throw new Error(`Expected 2 issues, got ${result.issues.length}`);
+  if (result.issues[0].order !== 1) throw new Error(`Expected first issue order 1, got ${result.issues[0].order}`);
+  if (result.issues[1].order !== 2) throw new Error(`Expected second issue order 2, got ${result.issues[1].order}`);
+  if (result.issues[0].title !== "Issue A") throw new Error(`Expected 'Issue A', got '${result.issues[0].title}'`);
+  if (result.issues[0].milestoneId !== milestoneId) throw new Error("milestoneId mismatch");
+  if (result.issues[0].status !== "draft") throw new Error(`Expected status 'draft', got '${result.issues[0].status}'`);
+  if (!result.issues[0].id) throw new Error("Missing id on created issue draft");
+  // Verify persisted in store
+  const persisted = await store.listIssueDrafts(milestoneId);
+  if (persisted.length !== 2) throw new Error(`Expected 2 persisted drafts, got ${persisted.length}`);
+}
+
+async function testGenerateIssueDraftsR9FieldsPresent(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const { goalId, milestoneId, sessionId } = await seedGoalAndMilestone(store);
+  const tools = createPlanningTools("test-token", store);
+  const gen = tools.find((t) => t.name === "generate_issue_drafts")!;
+
+  const result: any = await gen.handler(
+    {
+      sessionId,
+      goalId,
+      milestoneId,
+      issues: [
+        makeValidIssueSpec({
+          filesToModify: [{ path: "server.ts", reason: "Add endpoint" }],
+          filesToRead: [{ path: "tools.ts", reason: "Follow pattern" }],
+          patternReference: "tools.ts:githubFetch()",
+          securityChecklist: ["Sanitize input"],
+          verificationCommands: ["npx tsc --noEmit"],
+        }),
+      ],
+    },
+    STUB_INVOCATION
+  );
+
+  if (result.error) throw new Error(`Unexpected error: ${result.error}`);
+  const draft = result.issues[0];
+  if (!Array.isArray(draft.filesToModify) || draft.filesToModify.length === 0) {
+    throw new Error("Expected filesToModify in draft");
+  }
+  if (draft.filesToModify[0].path !== "server.ts") throw new Error("filesToModify path mismatch");
+  if (!Array.isArray(draft.filesToRead)) throw new Error("Expected filesToRead in draft");
+  if (draft.patternReference !== "tools.ts:githubFetch()") throw new Error("patternReference mismatch");
+  if (!Array.isArray(draft.securityChecklist) || draft.securityChecklist.length === 0) {
+    throw new Error("Expected securityChecklist in draft");
+  }
+  if (!Array.isArray(draft.verificationCommands) || draft.verificationCommands.length === 0) {
+    throw new Error("Expected verificationCommands in draft");
+  }
+}
+
+async function testGenerateIssueDraftsDependencyChainRespected(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const { goalId, milestoneId, sessionId } = await seedGoalAndMilestone(store);
+  const tools = createPlanningTools("test-token", store);
+  const gen = tools.find((t) => t.name === "generate_issue_drafts")!;
+
+  const result: any = await gen.handler(
+    {
+      sessionId,
+      goalId,
+      milestoneId,
+      issues: [
+        makeValidIssueSpec({ order: 1, title: "Issue A", dependencies: [] }),
+        makeValidIssueSpec({ order: 2, title: "Issue B", dependencies: [1] }),
+      ],
+    },
+    STUB_INVOCATION
+  );
+
+  if (result.error) throw new Error(`Unexpected error: ${result.error}`);
+  const issueA = result.issues.find((d: any) => d.order === 1);
+  const issueB = result.issues.find((d: any) => d.order === 2);
+  if (!issueA || !issueB) throw new Error("Missing expected issues");
+  if (!Array.isArray(issueB.dependencies) || issueB.dependencies.length !== 1) {
+    throw new Error(`Expected Issue B to have 1 dependency, got ${JSON.stringify(issueB.dependencies)}`);
+  }
+  if (issueB.dependencies[0] !== issueA.id) {
+    throw new Error(`Expected Issue B dependency to be Issue A's ID`);
+  }
+  if (issueA.dependencies.length !== 0) throw new Error("Issue A should have no dependencies");
+}
+
+async function testGenerateIssueDraftsCircularDependencyReturnsError(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const { goalId, milestoneId, sessionId } = await seedGoalAndMilestone(store);
+  const tools = createPlanningTools("test-token", store);
+  const gen = tools.find((t) => t.name === "generate_issue_drafts")!;
+
+  const result: any = await gen.handler(
+    {
+      sessionId,
+      goalId,
+      milestoneId,
+      issues: [
+        makeValidIssueSpec({ order: 1, dependencies: [2] }),
+        makeValidIssueSpec({ order: 2, dependencies: [1] }),
+      ],
+    },
+    STUB_INVOCATION
+  );
+
+  if (!result.error) throw new Error("Expected error for circular dependency");
+  if (!result.error.toLowerCase().includes("circular")) {
+    throw new Error(`Expected 'circular' in error, got: ${result.error}`);
+  }
+}
+
+async function testGenerateIssueDraftsWrongSessionReturnsError(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const { goalId, milestoneId } = await seedGoalAndMilestone(store);
+  const tools = createPlanningTools("test-token", store);
+  const gen = tools.find((t) => t.name === "generate_issue_drafts")!;
+
+  const result: any = await gen.handler(
+    {
+      sessionId: "wrong-session",
+      goalId,
+      milestoneId,
+      issues: [makeValidIssueSpec()],
+    },
+    STUB_INVOCATION
+  );
+
+  if (!result.error) throw new Error("Expected error for wrong sessionId");
+  if (!result.error.includes("Goal not found")) {
+    throw new Error(`Expected 'Goal not found' error, got: ${result.error}`);
+  }
+}
+
+async function testGenerateIssueDraftsUnknownMilestoneReturnsError(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const { goalId, sessionId } = await seedGoalAndMilestone(store);
+  const tools = createPlanningTools("test-token", store);
+  const gen = tools.find((t) => t.name === "generate_issue_drafts")!;
+
+  const result: any = await gen.handler(
+    {
+      sessionId,
+      goalId,
+      milestoneId: "nonexistent-milestone-id",
+      issues: [makeValidIssueSpec()],
+    },
+    STUB_INVOCATION
+  );
+
+  if (!result.error) throw new Error("Expected error for unknown milestoneId");
+  if (!result.error.includes("Milestone not found")) {
+    throw new Error(`Expected 'Milestone not found' error, got: ${result.error}`);
+  }
+}
+
+async function testGenerateIssueDraftsR9TooManyFilesToModifyReturnsError(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const { goalId, milestoneId, sessionId } = await seedGoalAndMilestone(store);
+  const tools = createPlanningTools("test-token", store);
+  const gen = tools.find((t) => t.name === "generate_issue_drafts")!;
+
+  const result: any = await gen.handler(
+    {
+      sessionId,
+      goalId,
+      milestoneId,
+      issues: [
+        makeValidIssueSpec({
+          filesToModify: [
+            { path: "a.ts", reason: "r1" },
+            { path: "b.ts", reason: "r2" },
+            { path: "c.ts", reason: "r3" },
+            { path: "d.ts", reason: "r4" },
+            { path: "e.ts", reason: "r5" },
+            { path: "f.ts", reason: "r6" }, // 6 > max 5
+          ],
+        }),
+      ],
+    },
+    STUB_INVOCATION
+  );
+
+  if (!result.error) throw new Error("Expected error when filesToModify exceeds R9 limit");
+  if (!result.error.includes("filesToModify")) {
+    throw new Error(`Expected error to mention 'filesToModify', got: ${result.error}`);
+  }
+}
+
+async function testGenerateIssueDraftsMissingFilesToModifyReturnsError(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const { goalId, milestoneId, sessionId } = await seedGoalAndMilestone(store);
+  const tools = createPlanningTools("test-token", store);
+  const gen = tools.find((t) => t.name === "generate_issue_drafts")!;
+
+  const result: any = await gen.handler(
+    {
+      sessionId,
+      goalId,
+      milestoneId,
+      issues: [makeValidIssueSpec({ filesToModify: [] })],
+    },
+    STUB_INVOCATION
+  );
+
+  if (!result.error) throw new Error("Expected error for empty filesToModify");
+  if (!result.error.includes("filesToModify")) {
+    throw new Error(`Expected error to mention 'filesToModify', got: ${result.error}`);
+  }
+}
+
+async function testGenerateIssueDraftsDuplicateOrderReturnsError(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const { goalId, milestoneId, sessionId } = await seedGoalAndMilestone(store);
+  const tools = createPlanningTools("test-token", store);
+  const gen = tools.find((t) => t.name === "generate_issue_drafts")!;
+
+  const result: any = await gen.handler(
+    {
+      sessionId,
+      goalId,
+      milestoneId,
+      issues: [
+        makeValidIssueSpec({ order: 1 }),
+        makeValidIssueSpec({ order: 1 }), // duplicate
+      ],
+    },
+    STUB_INVOCATION
+  );
+
+  if (!result.error) throw new Error("Expected error for duplicate order values");
+  if (!result.error.toLowerCase().includes("duplicate")) {
+    throw new Error(`Expected 'duplicate' in error, got: ${result.error}`);
+  }
+}
+
+async function testGenerateIssueDraftsTextFieldsAreSanitized(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const { goalId, milestoneId, sessionId } = await seedGoalAndMilestone(store);
+  const tools = createPlanningTools("test-token", store);
+  const gen = tools.find((t) => t.name === "generate_issue_drafts")!;
+
+  const result: any = await gen.handler(
+    {
+      sessionId,
+      goalId,
+      milestoneId,
+      issues: [
+        makeValidIssueSpec({
+          title: "<script>alert(1)</script>",
+          problem: "User input <b>bold</b> & 'quoted'",
+        }),
+      ],
+    },
+    STUB_INVOCATION
+  );
+
+  if (result.error) throw new Error(`Unexpected error: ${result.error}`);
+  const draft = result.issues[0];
+  if (draft.title.includes("<script>")) throw new Error("title was not sanitized");
+  if (draft.problem.includes("<b>")) throw new Error("problem was not sanitized");
+  if (!draft.title.includes("&lt;script&gt;")) {
+    throw new Error(`Expected HTML-escaped title, got: ${draft.title}`);
+  }
+}
+
+async function testGenerateIssueDraftsPathTraversalReturnsError(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const { goalId, milestoneId, sessionId } = await seedGoalAndMilestone(store);
+  const tools = createPlanningTools("test-token", store);
+  const gen = tools.find((t) => t.name === "generate_issue_drafts")!;
+
+  const result: any = await gen.handler(
+    {
+      sessionId,
+      goalId,
+      milestoneId,
+      issues: [
+        makeValidIssueSpec({
+          filesToModify: [{ path: "../etc/passwd", reason: "Path traversal attempt" }],
+        }),
+      ],
+    },
+    STUB_INVOCATION
+  );
+
+  if (!result.error) throw new Error("Expected error for path traversal in filesToModify");
+  if (!result.error.includes("..")) {
+    throw new Error(`Expected error to mention "..", got: ${result.error}`);
+  }
+}
+
+async function testGenerateIssueDraftsMissingVerificationCommandsReturnsError(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const { goalId, milestoneId, sessionId } = await seedGoalAndMilestone(store);
+  const tools = createPlanningTools("test-token", store);
+  const gen = tools.find((t) => t.name === "generate_issue_drafts")!;
+
+  const result: any = await gen.handler(
+    {
+      sessionId,
+      goalId,
+      milestoneId,
+      issues: [makeValidIssueSpec({ verificationCommands: [] })],
+    },
+    STUB_INVOCATION
+  );
+
+  if (!result.error) throw new Error("Expected error for empty verificationCommands");
+  if (!result.error.includes("verificationCommands")) {
+    throw new Error(`Expected error to mention 'verificationCommands', got: ${result.error}`);
+  }
+}
+
+async function testGenerateIssueDraftsResearchLinksArePersistedOnDraft(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const { goalId, milestoneId, sessionId } = await seedGoalAndMilestone(store);
+  const tools = createPlanningTools("test-token", store);
+  const gen = tools.find((t) => t.name === "generate_issue_drafts")!;
+  const researchId = "research-item-abc-123";
+
+  const result: any = await gen.handler(
+    {
+      sessionId,
+      goalId,
+      milestoneId,
+      issues: [makeValidIssueSpec({ researchLinks: [researchId] })],
+    },
+    STUB_INVOCATION
+  );
+
+  if (result.error) throw new Error(`Unexpected error: ${result.error}`);
+  const draft = result.issues[0];
+  if (!Array.isArray(draft.researchLinks) || draft.researchLinks.length !== 1) {
+    throw new Error(`Expected 1 research link, got ${JSON.stringify(draft.researchLinks)}`);
+  }
+  if (draft.researchLinks[0] !== researchId) {
+    throw new Error(`Expected research link ${researchId}, got ${draft.researchLinks[0]}`);
+  }
+}
+
+// ============================================================
+// 6c. create_github_milestone tool tests
 // ============================================================
 
 /**
@@ -2001,7 +2388,7 @@ async function main() {
   // --- Planning tools tests ---
   console.log("\n── Planning Tools Tests ──\n");
 
-  await run("Planning tools: all 9 tools registered with correct names", testPlanningToolRegistration);
+  await run("Planning tools: all 10 tools registered with correct names", testPlanningToolRegistration);
   await run("define_goal: returns structured template from raw intent", testDefineGoalReturnsTemplate);
   await run("define_goal: empty intent returns validation error", testDefineGoalEmptyIntentReturnsError);
   await run("save_goal: valid data returns goal with generated ID and timestamps", testSaveGoalValidDataReturnsGoalWithId);
@@ -2047,6 +2434,24 @@ async function main() {
   await run("get_milestones: unknown goalId returns error", testGetMilestonesUnknownGoalReturnsError);
   await run("update_milestone: order collision returns error", testUpdateMilestoneOrderCollisionReturnsError);
   await run("create_milestone_plan: name exceeding max length after sanitization returns error", testCreateMilestonePlanNameLengthAfterSanitizationReturnsError);
+
+  // --- generate_issue_drafts tests ---
+  console.log("\n── generate_issue_drafts Tool Tests ──\n");
+
+  await run("generate_issue_drafts: returns ordered issue drafts", testGenerateIssueDraftsReturnsOrderedDrafts);
+  await run("generate_issue_drafts: R9 fields are present on created drafts", testGenerateIssueDraftsR9FieldsPresent);
+  await run("generate_issue_drafts: dependency chain is resolved to IDs", testGenerateIssueDraftsDependencyChainRespected);
+  await run("generate_issue_drafts: circular dependency returns error", testGenerateIssueDraftsCircularDependencyReturnsError);
+  await run("generate_issue_drafts: wrong sessionId returns error", testGenerateIssueDraftsWrongSessionReturnsError);
+  await run("generate_issue_drafts: unknown milestoneId returns error", testGenerateIssueDraftsUnknownMilestoneReturnsError);
+  await run("generate_issue_drafts: >5 filesToModify returns R9 quality error", testGenerateIssueDraftsR9TooManyFilesToModifyReturnsError);
+  await run("generate_issue_drafts: empty filesToModify returns error", testGenerateIssueDraftsMissingFilesToModifyReturnsError);
+  await run("generate_issue_drafts: duplicate order values return error", testGenerateIssueDraftsDuplicateOrderReturnsError);
+  await run("generate_issue_drafts: text fields are sanitized before storage", testGenerateIssueDraftsTextFieldsAreSanitized);
+  await run("generate_issue_drafts: path traversal in filesToModify returns error", testGenerateIssueDraftsPathTraversalReturnsError);
+  await run("generate_issue_drafts: empty verificationCommands returns error", testGenerateIssueDraftsMissingVerificationCommandsReturnsError);
+  await run("generate_issue_drafts: researchLinks are persisted on draft", testGenerateIssueDraftsResearchLinksArePersistedOnDraft);
+
   await run("create_github_milestone: GitHub tool names include new tool", testGithubToolRegistration);
   await run("create_github_milestone: creates new when none exists", testCreateGithubMilestoneCreatesNew);
   await run("create_github_milestone: idempotent when milestone exists on GitHub", testCreateGithubMilestoneIdempotentWhenExists);
