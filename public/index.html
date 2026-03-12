@@ -209,9 +209,9 @@
     /* Reduce motion for accessibility */
     @media (prefers-reduced-motion: reduce) {
       *, *::before, *::after {
-        animation-duration: 0.01ms !important;
+        animation-duration: 10ms !important;
         animation-iteration-count: 1 !important;
-        transition-duration: 0.01ms !important;
+        transition-duration: 10ms !important;
       }
     }
 
@@ -2502,10 +2502,10 @@
           <h2>Copilot Agent Orchestrator</h2>
           <p>Research codebases, plan coding tasks, and orchestrate agents</p>
           <div class="welcome-prompts" id="welcome-prompts">
-            <button class="welcome-prompt-btn" data-prompt="Research the structure and architecture of a GitHub repo">🔍 Research a repo</button>
-            <button class="welcome-prompt-btn" data-prompt="Help me plan a new feature with milestones and issues">📋 Plan a feature</button>
-            <button class="welcome-prompt-btn" data-prompt="Explore the codebase and explain how key components work">🧭 Explore code</button>
-            <button class="welcome-prompt-btn" data-prompt="Create a goal with research questions and milestone plan">🎯 Define a goal</button>
+            <button class="welcome-prompt-btn" data-prompt="Research the structure and architecture of a GitHub repo"><span aria-hidden="true">🔍</span> Research a repo</button>
+            <button class="welcome-prompt-btn" data-prompt="Help me plan a new feature with milestones and issues"><span aria-hidden="true">📋</span> Plan a feature</button>
+            <button class="welcome-prompt-btn" data-prompt="Explore the codebase and explain how key components work"><span aria-hidden="true">🧭</span> Explore code</button>
+            <button class="welcome-prompt-btn" data-prompt="Create a goal with research questions and milestone plan"><span aria-hidden="true">🎯</span> Define a goal</button>
           </div>
         </div>
       </div>
