@@ -837,9 +837,16 @@ export function createPlanningTools(token: string, planningStore: PlanningStore)
       const sessionIdErr = validateStringField(args.sessionId, "sessionId", MAX_SESSION_ID_LENGTH);
       if (sessionIdErr) return { error: sessionIdErr };
 
-      if (args.context !== undefined && args.context !== null) {
-        const contextErr = validateStringField(args.context, "context", 4000);
-        if (contextErr) return { error: contextErr };
+      if (typeof args.context === "string") {
+        const trimmedContext = args.context.trim();
+        if (trimmedContext.length > 0) {
+          const contextErr = validateStringField(trimmedContext, "context", 4000);
+          if (contextErr) return { error: contextErr };
+          args.context = trimmedContext;
+        } else {
+          // Treat empty/whitespace-only context as if it were not provided.
+          args.context = undefined;
+        }
       }
 
       const goal = await planningStore.getGoal(args.goalId);
@@ -855,6 +862,7 @@ export function createPlanningTools(token: string, planningStore: PlanningStore)
         goal.businessValue,
         goal.targetOutcome,
         ...(goal.successCriteria ?? []),
+        ...(goal.assumptions ?? []),
         ...(goal.constraints ?? []),
         ...(goal.risks ?? []),
         typeof args.context === "string" ? args.context : "",
@@ -874,7 +882,7 @@ export function createPlanningTools(token: string, planningStore: PlanningStore)
       }
 
       const createdItems: ResearchItem[] = [];
-      const triggerSummary: Record<string, string[]> = {};
+      const triggerSummary: Partial<Record<ResearchTriggerType, string[]>> = {};
 
       for (const suggestion of triggered) {
         const item: ResearchItem = {
@@ -882,6 +890,8 @@ export function createPlanningTools(token: string, planningStore: PlanningStore)
           goalId: goal.id,
           category: suggestion.category,
           question: suggestion.question,
+          // NOTE: trigger metadata (triggerType, detectedKeyword) is only available in the
+          // returned triggerSummary object; it is not persisted in the ResearchItem store.
           status: "open",
           findings: "",
           decision: "",
@@ -892,7 +902,8 @@ export function createPlanningTools(token: string, planningStore: PlanningStore)
         if (!triggerSummary[suggestion.triggerType]) {
           triggerSummary[suggestion.triggerType] = [];
         }
-        triggerSummary[suggestion.triggerType].push(suggestion.detectedKeyword);
+        // Non-null assertion is safe: we just assigned an array above.
+        triggerSummary[suggestion.triggerType]!.push(suggestion.detectedKeyword);
       }
 
       return { items: createdItems, triggerSummary };
