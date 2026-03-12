@@ -1,6 +1,6 @@
 # Frontend Documentation
 
-The frontend is vanilla HTML, CSS, and JavaScript — no frameworks, no build step. Files are served as static assets by the Express server.
+The frontend is vanilla HTML, CSS, and JavaScript — no frameworks, no build step. Files are served as static assets by the Express server. Styling follows Spark design system principles: consistent CSS variables, accessibility-first patterns, and component-driven architecture.
 
 ## Files
 
@@ -9,6 +9,49 @@ The frontend is vanilla HTML, CSS, and JavaScript — no frameworks, no build st
 | `public/index.html` | Chat UI — GitHub dark theme, model selector, session sidebar |
 | `public/app.js` | Frontend logic — token management, SSE parsing, session management |
 | `public/staticwebapp.config.json` | Azure Static Web Apps routing config |
+
+## Design System
+
+The frontend uses CSS custom properties for a consistent, maintainable design system inspired by Spark principles.
+
+### CSS Custom Properties
+
+| Variable | Value | Purpose |
+|----------|-------|---------|
+| `--color-bg` | `#0d1117` | Primary background |
+| `--color-bg-secondary` | `#161b22` | Secondary background (sidebar, input area) |
+| `--color-bg-tertiary` | `#21262d` | Tertiary background (inputs, buttons) |
+| `--color-border` | `#30363d` | Border color |
+| `--color-text` | `#e6edf3` | Primary text |
+| `--color-text-muted` | `#8b949e` | Muted/secondary text |
+| `--color-accent` | `#58a6ff` | Accent color (links, focus) |
+| `--color-accent-emphasis` | `#1f6feb` | Strong accent (primary buttons, user bubbles) |
+| `--color-accent-hover` | `#388bfd` | Accent hover state |
+| `--color-success` | `#3fb950` | Success indicators |
+| `--color-danger` | `#f85149` | Error/danger indicators |
+| `--color-danger-hover` | `#da3633` | Danger hover state |
+| `--color-white` | `#ffffff` | White text on colored backgrounds |
+| `--radius` | `6px` | Standard border radius |
+| `--radius-lg` | `12px` | Large border radius (message bubbles) |
+| `--sidebar-width` | `260px` | Sidebar width (consistent across breakpoints) |
+| `--focus-ring` | `0 0 0 2px rgba(...)` | Focus ring box-shadow |
+| `--font-sans` | System fonts | Primary font stack |
+| `--font-mono` | Monospace fonts | Code font stack |
+
+### Accessibility
+
+The frontend follows Spark accessibility patterns:
+
+- **Keyboard navigation**: `:focus-visible` outlines on all interactive elements (2px solid accent color)
+- **ARIA landmarks**: `role="banner"` (header), `role="main"` (chat area), `role="complementary"` (sidebar), `role="status"` (status bar)
+- **ARIA labels**: Dashboard nav items, emoji icons marked `aria-hidden="true"`, descriptive button labels
+- **Live regions**: Status bar uses `aria-live="polite"` for screen reader announcements
+- **Reduced motion**: `@media (prefers-reduced-motion: reduce)` disables animations for users who prefer it
+- **Decorative SVGs**: Logo SVGs use `aria-hidden="true"` to avoid redundant screen reader announcements
+
+### Loading States
+
+Dashboard loading indicators use an animated CSS spinner (`.spinner` class) instead of static emoji for clear visual feedback. The spinner uses a `spin` keyframe animation with `border-top-color` differentiation.
 
 ## UI Layout
 
@@ -45,6 +88,7 @@ The frontend is vanilla HTML, CSS, and JavaScript — no frameworks, no build st
 | Reasoning effort | `#reasoning-effort-select` | Conditional dropdown — visible only when selected model supports reasoning |
 | New Chat | `#new-chat-btn` | Resets `sessionId`, clears messages, shows welcome screen |
 | Session sidebar | `#sessions-list` | List of previous conversations with timestamps |
+| Welcome prompts | `#welcome-prompts` | Quick-action buttons that pre-fill the message input with common tasks |
 | Message input | `#message-input` | Textarea for user messages |
 | Send button | `#send-btn` | Sends the message (also triggered by Enter key) |
 | Stop button | `#stop-btn` | Cancels streaming via `POST /api/chat/abort` |

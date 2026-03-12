@@ -391,7 +391,7 @@ async function loadGoalsDashboard() {
     return;
   }
 
-  goalsListContent.innerHTML = '<div class="dashboard-empty"><span class="dashboard-empty-icon" style="font-size:24px">⏳</span><p>Loading goals…</p></div>';
+  goalsListContent.innerHTML = '<div class="dashboard-empty"><span class="spinner" aria-label="Loading"></span><p>Loading goals…</p></div>';
 
   try {
     const res = await fetch("/api/goals", { headers: authHeaders() });
@@ -540,7 +540,7 @@ function showGoalsList() {
 async function showGoalDetail(goalId) {
   goalsListView.classList.add("hidden");
   goalsDetailView.classList.remove("hidden");
-  goalsDetailView.innerHTML = '<div class="dashboard-empty"><span class="dashboard-empty-icon" style="font-size:24px">⏳</span><p>Loading goal…</p></div>';
+  goalsDetailView.innerHTML = '<div class="dashboard-empty"><span class="spinner" aria-label="Loading"></span><p>Loading goal…</p></div>';
 
   try {
     const [goalRes, countsResult] = await Promise.all([
@@ -698,7 +698,7 @@ async function loadResearchDashboard() {
   }
 
   researchGoalSelector.style.display = "none";
-  researchPageContent.innerHTML = '<div class="dashboard-empty"><span class="dashboard-empty-icon" style="font-size:24px">⏳</span><p>Loading…</p></div>';
+  researchPageContent.innerHTML = '<div class="dashboard-empty"><span class="spinner" aria-label="Loading"></span><p>Loading…</p></div>';
 
   try {
     const res = await fetch("/api/goals", { headers: authHeaders() });
@@ -765,7 +765,7 @@ async function loadResearchDashboard() {
  * @param {string} goalId
  */
 async function loadResearchForGoal(goalId) {
-  researchPageContent.innerHTML = '<div class="dashboard-empty"><span class="dashboard-empty-icon" style="font-size:24px">⏳</span><p>Loading research…</p></div>';
+  researchPageContent.innerHTML = '<div class="dashboard-empty"><span class="spinner" aria-label="Loading"></span><p>Loading research…</p></div>';
 
   try {
     const res = await fetch(`/api/goals/${encodeURIComponent(goalId)}/research`, { headers: authHeaders() });
@@ -1032,7 +1032,7 @@ async function loadMilestonesDashboard() {
   }
 
   milestoneGoalSelector.style.display = "none";
-  milestonePageContent.innerHTML = '<div class="dashboard-empty"><span class="dashboard-empty-icon" style="font-size:24px">⏳</span><p>Loading…</p></div>';
+  milestonePageContent.innerHTML = '<div class="dashboard-empty"><span class="spinner" aria-label="Loading"></span><p>Loading…</p></div>';
 
   try {
     const res = await fetch("/api/goals", { headers: authHeaders() });
@@ -1100,7 +1100,7 @@ async function loadMilestonesDashboard() {
  * @param {string} goalId
  */
 async function loadMilestonesForGoal(goalId) {
-  milestonePageContent.innerHTML = '<div class="dashboard-empty"><span class="dashboard-empty-icon" style="font-size:24px">⏳</span><p>Loading milestones…</p></div>';
+  milestonePageContent.innerHTML = '<div class="dashboard-empty"><span class="spinner" aria-label="Loading"></span><p>Loading milestones…</p></div>';
 
   try {
     const res = await fetch(`/api/goals/${encodeURIComponent(goalId)}/milestones`, { headers: authHeaders() });
@@ -1313,7 +1313,7 @@ async function loadIssuesDashboard() {
   issueGoalSelector.style.display = "none";
   issueMilestoneSelector.style.display = "none";
   pushToGithubBtn.style.display = "none";
-  issuePageContent.innerHTML = '<div class="dashboard-empty"><span class="dashboard-empty-icon" style="font-size:24px">⏳</span><p>Loading…</p></div>';
+  issuePageContent.innerHTML = '<div class="dashboard-empty"><span class="spinner" aria-label="Loading"></span><p>Loading…</p></div>';
 
   try {
     const res = await fetch("/api/goals", { headers: authHeaders() });
@@ -1386,7 +1386,7 @@ async function loadIssuesDashboard() {
  */
 async function loadMilestonesForIssues(goalId) {
   issueMilestoneSelector.style.display = "none";
-  issuePageContent.innerHTML = '<div class="dashboard-empty"><span class="dashboard-empty-icon" style="font-size:24px">⏳</span><p>Loading milestones…</p></div>';
+  issuePageContent.innerHTML = '<div class="dashboard-empty"><span class="spinner" aria-label="Loading"></span><p>Loading milestones…</p></div>';
 
   try {
     const res = await fetch(`/api/goals/${encodeURIComponent(goalId)}/milestones`, { headers: authHeaders() });
@@ -1449,7 +1449,7 @@ async function loadMilestonesForIssues(goalId) {
  * @param {string} milestoneId
  */
 async function loadIssuesForMilestone(milestoneId) {
-  issuePageContent.innerHTML = '<div class="dashboard-empty"><span class="dashboard-empty-icon" style="font-size:24px">⏳</span><p>Loading issue drafts…</p></div>';
+  issuePageContent.innerHTML = '<div class="dashboard-empty"><span class="spinner" aria-label="Loading"></span><p>Loading issue drafts…</p></div>';
 
   try {
     const res = await fetch(`/api/milestones/${encodeURIComponent(milestoneId)}/issues`, { headers: authHeaders() });
@@ -2109,7 +2109,7 @@ async function openPushApprovalModal(goalId) {
     }
   }
   pushConfirmBtn.disabled = true;
-  pushMutationList.innerHTML = '<div class="push-loading">⏳ Loading planned mutations…</div>';
+  pushMutationList.innerHTML = '<div class="push-loading"><span class="spinner" aria-label="Loading"></span> Loading planned mutations…</div>';
   pushMutationCount.textContent = "";
 
   try {
@@ -3040,6 +3040,17 @@ newChatBtn.addEventListener("click", () => {
   clearChatUI();
   renderSessionList();
   inputEl.focus();
+});
+
+// --- Welcome Prompt Quick Actions ---
+document.getElementById("welcome-prompts").addEventListener("click", (e) => {
+  const btn = e.target.closest(".welcome-prompt-btn");
+  if (!btn) return;
+  const prompt = btn.getAttribute("data-prompt");
+  if (prompt) {
+    inputEl.value = prompt;
+    inputEl.focus();
+  }
 });
 
 // --- Health Check ---
