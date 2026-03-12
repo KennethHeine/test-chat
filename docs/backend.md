@@ -182,7 +182,7 @@ GitHub API tools are defined in `tools.ts` by constructing `Tool` objects direct
 | Tool | Description |
 |------|-------------|
 | `create_github_milestone` | Create a GitHub Milestone from a planning `Milestone`. Idempotent — reuses existing milestones with the same title and stores the GitHub milestone number and URL on the record |
-| `create_github_issue` | Create a real GitHub issue from an `IssueDraft`. Formats the body as Markdown with structured R9-quality fields. Idempotent — if the draft is already `status: "created"`, returns the stored `githubIssueNumber` and `githubIssueUrl` |
+| `create_github_issue` | Create a real GitHub issue from an `IssueDraft`. Formats the body as Markdown with structured R9-quality fields. Idempotent — if the draft is already `status: "created"`, returns `{ draftId, githubIssueNumber, alreadyCreated: true }` |
 | `create_github_branch` | Create a GitHub branch from a full commit SHA. Sanitizes the branch name (alphanumerics, dots, hyphens, underscores, slashes) |
 | `manage_github_labels` | Create or get labels in a repository. Validates hex color format. Returns `name`, `color`, `alreadyExists`, and `url` |
 
@@ -192,21 +192,28 @@ GitHub API tools are defined in `tools.ts` by constructing `Tool` objects direct
 
 The `githubWrite()` internal helper wraps all GitHub REST write calls:
 
-- Sends `POST`/`PATCH` requests with the user's token in the `Authorization` header
+- Sends GitHub REST write requests (`POST`, `PATCH`, `PUT`, `DELETE`) with the user's token in the `Authorization` header
 - Monitors `x-ratelimit-remaining` and sleeps 1 second when it drops below 10 (proactive rate-limit protection)
 - Returns `null` for `204 No Content` responses
 - Throws a descriptive error for any non-2xx response
 
 #### Idempotency Pattern
 
-Both `create_github_milestone` and `create_github_issue` implement idempotency:
+The GitHub write tools use different mechanisms to reduce duplicate creation:
 
-1. Check if the planning record already has a `githubNumber` / `githubIssueNumber` — if so, return the stored value immediately
-2. Call `GET` to list existing GitHub milestones/issues and match by title
-3. If a match exists, store its ID/URL on the planning record and return it
-4. If no match exists, call `POST` to create it, then store the result
+**`create_github_issue`:**
+1. Checks the planning store for the issue draft; if its `status` is already `"created"` (with a stored `githubIssueNumber`), it returns `{ draftId, githubIssueNumber, alreadyCreated: true }` without calling GitHub again.
+2. If the draft is not yet marked as created, it sends a `POST` request to create a new issue, then updates the planning record with the returned GitHub metadata and `status: "created"`.
+3. It does **not** list existing GitHub issues or attempt to match by title; idempotency is provided solely via the planning store state.
 
-This ensures re-running tools after a partial failure never creates duplicates.
+**`create_github_milestone`:**
+1. Calls `GET` to list existing milestones for the repository.
+2. Searches that list for a milestone with a title matching the planning record's milestone name.
+3. If a match exists, stores the GitHub milestone number/URL on the planning record (if not already present) and returns it.
+4. If no title match exists, sends a `POST` request to create a new milestone, then stores the result on the planning record.
+5. It does **not** first short-circuit on an existing `milestone.githubNumber`; the title-based lookup is the primary idempotency mechanism.
+
+These behaviors reduce the chance of creating duplicates when tools are re-run after partial failures, but they rely on different strategies: planning store state for issues, and title-based matching for milestones.
 
 ## Planning Tools (planning-tools.ts)
 

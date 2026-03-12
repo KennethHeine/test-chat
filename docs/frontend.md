@@ -177,7 +177,7 @@ Clicking a goal navigates to a detail view (`showGoalDetail(goalId)`) that shows
 
 #### Research Page
 
-Loaded by `loadResearchDashboard()`. Fetches all goals and their research items (via `GET /api/goals/:id/research`). Each research item card shows:
+Loaded by `loadResearchDashboard()`. Fetches all goals via `GET /api/goals`, then loads research items for the selected goal (defaulting to the first) via `GET /api/goals/:id/research`. A goal selector allows switching between goals. Each research item card shows:
 
 - Category badge (`domain`, `architecture`, `security`, `infrastructure`, `integration`, `data_model`, `operational`, `ux`)
 - Question text
@@ -186,7 +186,7 @@ Loaded by `loadResearchDashboard()`. Fetches all goals and their research items 
 
 #### Milestones Page
 
-Loaded by `loadMilestonesDashboard()`. Fetches all goals and their milestones (via `GET /api/goals/:id/milestones`). Each milestone card shows:
+Loaded by `loadMilestonesDashboard()`. Fetches all goals via `GET /api/goals`, then loads milestones for the selected goal (defaulting to the first) via `GET /api/goals/:id/milestones`. A goal selector allows switching between goals. Each milestone card shows:
 
 - Order number and milestone name
 - Status badge (`draft`, `ready`, `in-progress`, `complete`)
@@ -195,7 +195,7 @@ Loaded by `loadMilestonesDashboard()`. Fetches all goals and their milestones (v
 
 #### Issues Page
 
-Loaded by `loadIssuesDashboard()`. Fetches all goals → milestones → issue drafts (via `GET /api/milestones/:id/issues`). Each issue draft card shows:
+Loaded by `loadIssuesDashboard()`. Uses two selectors with incremental fetching: loads goals via `GET /api/goals`, then milestones for the selected goal via `GET /api/goals/:id/milestones`, then issue drafts for the selected milestone (defaulting to first) via `GET /api/milestones/:id/issues`. Each issue draft card shows:
 
 - Title and order number
 - Status badge (`draft`, `ready`, `created`)
@@ -204,13 +204,15 @@ Loaded by `loadIssuesDashboard()`. Fetches all goals → milestones → issue dr
 
 ### Push Approval Workflow
 
-When the planning agent creates milestones or issue drafts with `status: "ready"`, a **Push to GitHub** action becomes available in the dashboard. The workflow:
+When the planning agent creates milestones and issue drafts, a **Push to GitHub** action becomes available in the dashboard. The workflow:
 
-1. Agent marks a `Milestone` or `IssueDraft` as `status: "ready"` via `update_milestone` / `update_issue_draft`
+1. Agent creates or updates milestones and issue drafts; issue drafts that are candidates for pushing are marked `status: "ready"` via `update_issue_draft` (milestones appear in the push modal regardless of `status` and are queued when missing a `githubNumber`)
 2. User reviews the item in the Milestones or Issues dashboard page
 3. User triggers "Push to GitHub" → frontend calls `POST /api/milestones/:id/push-to-github` or `POST /api/milestones/:milestoneId/issues/:issueId/push-to-github`
 4. Server calls the `create_github_milestone` / `create_github_issue` tool (idempotent)
-5. On success, the record is updated with `githubNumber` / `githubIssueNumber` and status changes to `"created"`
+5. On success:
+   - Milestones are updated with `githubNumber` / `githubUrl` (status is unchanged — milestones do not have a `"created"` status)
+   - Issue drafts are updated with `githubIssueNumber` and their status changes to `"created"`
 6. Dashboard card updates to show the GitHub link
 
 Both push endpoints are idempotent — re-triggering a push for an already-created item returns the existing GitHub data without creating duplicates.
