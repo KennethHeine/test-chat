@@ -1116,25 +1116,26 @@ async function loadMilestonesForGoal(goalId) {
     const data = await res.json();
     const milestones = Array.isArray(data.milestones) ? data.milestones : [];
 
-    // Fetch issue counts for each milestone
+    // Fetch issue counts for each milestone with limited concurrency to avoid large request bursts
+    const MILESTONE_ISSUE_FETCH_CONCURRENCY = 5;
     /** @type {Map<string, number>} */
     const issueCounts = new Map();
-    await Promise.all(
-      milestones.map(async (ms) => {
-        try {
-          const issueRes = await fetch(`/api/milestones/${encodeURIComponent(ms.id)}/issues`, { headers: authHeaders() });
-          if (issueRes.ok) {
-            const issueData = await issueRes.json();
-            const count = Array.isArray(issueData.issues) ? issueData.issues.length : 0;
+    for (let i = 0; i < milestones.length; i += MILESTONE_ISSUE_FETCH_CONCURRENCY) {
+      const batch = milestones.slice(i, i + MILESTONE_ISSUE_FETCH_CONCURRENCY);
+      await Promise.all(
+        batch.map(async (ms) => {
+          try {
+            const issueRes = await fetch(`/api/milestones/${encodeURIComponent(ms.id)}/issues`, { headers: authHeaders() });
+            const count = issueRes.ok
+              ? await issueRes.json().then((d) => (Array.isArray(d.issues) ? d.issues.length : 0)).catch(() => 0)
+              : 0;
             issueCounts.set(ms.id, count);
-          } else {
+          } catch {
             issueCounts.set(ms.id, 0);
           }
-        } catch {
-          issueCounts.set(ms.id, 0);
-        }
-      })
-    );
+        })
+      );
+    }
 
     renderMilestoneDashboardItems(milestones, issueCounts);
   } catch (err) {
@@ -1188,7 +1189,8 @@ function renderMilestoneDashboardItems(milestones, issueCounts) {
 
     const orderEl = document.createElement("span");
     orderEl.className = "milestone-timeline-order";
-    orderEl.textContent = `#${ms.order}`;
+    const displayOrder = typeof ms.order === "number" && isFinite(ms.order) ? ms.order : "?";
+    orderEl.textContent = `#${displayOrder}`;
     headerEl.appendChild(orderEl);
 
     const nameEl = document.createElement("span");
@@ -1249,12 +1251,20 @@ function renderMilestoneDashboardItems(milestones, issueCounts) {
     milestonePageContent.appendChild(itemEl);
   }
 
-  // Summary line
-  const total = sorted.length;
-  const complete = sorted.filter((m) => m.status === "complete").length;
-  const inProgress = sorted.filter((m) => m.status === "in-progress").length;
-  const ready = sorted.filter((m) => m.status === "ready").length;
-  const draft = total - complete - inProgress - ready;
+  // Summary line (use normalized statuses so badges and counts agree)
+  const statusCounts = { draft: 0, ready: 0, "in-progress": 0, complete: 0 };
+  for (const m of sorted) {
+    const rawS = m && typeof m.status === "string" ? m.status : "";
+    const normalizedS = VALID_MILESTONE_STATUSES.includes(rawS) ? rawS : DEFAULT_MILESTONE_STATUS;
+    if (normalizedS === "complete") statusCounts.complete++;
+    else if (normalizedS === "in-progress") statusCounts["in-progress"]++;
+    else if (normalizedS === "ready") statusCounts.ready++;
+    else statusCounts.draft++;
+  }
+  const draft = statusCounts.draft;
+  const ready = statusCounts.ready;
+  const inProgress = statusCounts["in-progress"];
+  const complete = statusCounts.complete;
   const summaryParts = [];
   if (draft > 0) summaryParts.push(`Draft: ${draft}`);
   if (ready > 0) summaryParts.push(`Ready: ${ready}`);

@@ -1259,6 +1259,14 @@ async function stubMilestoneRoutes(page: Page) {
     });
   });
 
+  await page.route(`**/api/goals/${STUB_GOAL_ID}/research`, (route) => {
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ research: [] }),
+    });
+  });
+
   await page.route(`**/api/milestones/ms-a/issues`, (route) => {
     route.fulfill({
       status: 200,
