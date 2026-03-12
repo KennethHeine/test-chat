@@ -1,4 +1,4 @@
-import express, { Request, Response } from "express";
+import express, { Request, Response, NextFunction } from "express";
 import { CopilotClient, CopilotSession } from "@github/copilot-sdk";
 import type { SessionConfig, PermissionHandler } from "@github/copilot-sdk";
 import { fileURLToPath } from "url";
@@ -42,7 +42,15 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const app = express();
 app.use(express.json());
-app.use(express.static(path.join(__dirname, "public")));
+
+// Serve the Vite-built React frontend from frontend/dist (production) or fall back to public/ (legacy)
+import fs from "fs";
+const frontendDistPath = path.join(__dirname, "frontend", "dist");
+const publicPath = path.join(__dirname, "public");
+const distIndexPath = path.join(frontendDistPath, "index.html");
+const hasBuiltFrontend = fs.existsSync(distIndexPath);
+const staticRoot = hasBuiltFrontend ? frontendDistPath : publicPath;
+app.use(express.static(staticRoot));
 
 const PORT = parseInt(process.env.PORT || "3000", 10);
 
@@ -1601,6 +1609,15 @@ if (process.env.ENABLE_GOAL_SEED === "true") {
     res.status(201).json({ ok: true, requestId });
   });
 }
+
+// --- SPA Catch-All Route ---
+// Serve index.html for any non-API request that doesn't match a static file.
+// This supports client-side routing in the React frontend.
+// Express 5 uses {*path} syntax instead of the old * wildcard.
+app.get("/{*path}", (req: Request, res: Response, next: NextFunction) => {
+  if (req.path.startsWith("/api/")) return next();
+  res.sendFile(path.join(staticRoot, "index.html"));
+});
 
 // --- Start Server ---
 
