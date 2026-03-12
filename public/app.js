@@ -2373,9 +2373,20 @@ async function executePushToGitHub() {
     pushProgressBar.style.width = `${Math.round((completed / total) * 100)}%`;
   }
 
-  // Now process issues
+  // Now process issues — skip issues whose milestone failed (to avoid creating orphan issues)
   for (const mut of toCreate) {
     if (mut.type !== "issue") continue;
+    // Skip if the parent milestone push failed
+    const msResult = milestoneResults.get(mut.milestoneId);
+    if (msResult && !msResult.success) {
+      upsertProgressItem(mut, "error", null, "Skipped — parent milestone push failed");
+      results.push({ mut, success: false, error: "Skipped — parent milestone push failed" });
+      failCount++;
+      completed++;
+      pushProgressCount.textContent = `${completed} / ${total}`;
+      pushProgressBar.style.width = `${Math.round((completed / total) * 100)}%`;
+      continue;
+    }
     upsertProgressItem(mut, "pending");
     try {
       const res = await fetch(

@@ -574,6 +574,7 @@ function issueDraftToEntity(draft: IssueDraft): TableEntity<Record<string, unkno
     order: draft.order,
     status: draft.status,
     githubIssueNumber: draft.githubIssueNumber ?? 0,
+    githubIssueUrl: draft.githubIssueUrl ?? "",
     filesToModify: JSON.stringify(draft.filesToModify),
     filesToRead: JSON.stringify(draft.filesToRead),
     patternReference: draft.patternReference ?? "",
@@ -604,6 +605,7 @@ function entityToIssueDraft(entity: any): IssueDraft {
     verificationCommands: JSON.parse(entity.verificationCommands as string) as string[],
   };
   if (entity.githubIssueNumber !== 0) draft.githubIssueNumber = entity.githubIssueNumber as number;
+  if (entity.githubIssueUrl !== "") draft.githubIssueUrl = entity.githubIssueUrl as string;
   if (entity.patternReference !== "") draft.patternReference = entity.patternReference as string;
   return draft;
 }

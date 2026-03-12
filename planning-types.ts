@@ -217,6 +217,9 @@ export interface IssueDraft {
   /** The GitHub issue number assigned after the issue is pushed to GitHub. Undefined when status is not `created`. */
   githubIssueNumber?: number;
 
+  /** The GitHub issue HTML URL assigned after the issue is pushed to GitHub. Undefined when status is not `created`. */
+  githubIssueUrl?: string;
+
   /** Files that should be created or modified during implementation, with per-file reasons. */
   filesToModify: FileRef[];
 

@@ -1251,7 +1251,7 @@ app.post("/api/milestones/:id/push-to-github", async (req: Request, res: Respons
     while (githubNumber === undefined) {
       const existing = (await githubFetch(
         token,
-        `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/milestones?state=open&per_page=100&page=${page}`
+        `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/milestones?state=all&per_page=100&page=${page}`
       )) as any[];
       const match = existing.find((m: any) => m.title === title);
       if (match) {
@@ -1356,7 +1356,8 @@ app.post("/api/milestones/:milestoneId/issues/:issueId/push-to-github", async (r
       res.json({
         draftId: issueId,
         githubIssueNumber: draft.githubIssueNumber,
-        githubIssueUrl: `https://github.com/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues/${draft.githubIssueNumber}`,
+        // Use the persisted URL if available; fall back to constructing from the current request's owner/repo
+        githubIssueUrl: draft.githubIssueUrl ?? `https://github.com/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues/${draft.githubIssueNumber}`,
         alreadyCreated: true,
       });
       return;
@@ -1367,12 +1368,13 @@ app.post("/api/milestones/:milestoneId/issues/:issueId/push-to-github", async (r
       return;
     }
 
-    // Fetch ResearchItems for the Research Context section
-    const researchItems: import("./planning-types.js").ResearchItem[] = [];
-    for (const researchId of draft.researchLinks) {
-      const item = await planningStore.getResearchItem(researchId);
-      if (item) researchItems.push(item);
-    }
+    // Fetch ResearchItems for the Research Context section concurrently
+    const researchItemResults = await Promise.all(
+      draft.researchLinks.map((researchId) => planningStore.getResearchItem(researchId))
+    );
+    const researchItems: import("./planning-types.js").ResearchItem[] = researchItemResults.filter(
+      (item): item is import("./planning-types.js").ResearchItem => item != null
+    );
 
     const issueBody = buildIssueBody(draft, researchItems);
 
@@ -1405,6 +1407,7 @@ app.post("/api/milestones/:milestoneId/issues/:issueId/push-to-github", async (r
     const updatedDraft = await planningStore.updateIssueDraft(issueId, {
       status: "created",
       githubIssueNumber: created.number,
+      githubIssueUrl: created.html_url,
     });
     if (!updatedDraft) {
       res.status(404).json({ error: "Issue draft not found after update" });
