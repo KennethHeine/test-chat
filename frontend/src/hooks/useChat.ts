@@ -232,20 +232,15 @@ export function useChat() {
 
         // Save messages after streaming completes
         if (newSessionId) {
-          const finalMessages: Message[] = [];
-          // Rebuild the messages for persistence including the full content
+          const sid = newSessionId;
           setMessages((prev) => {
-            for (const m of prev) {
-              if (m.role !== "error") {
-                finalMessages.push(m);
-              }
+            const messagesToPersist = prev.filter((m) => m.role !== "error");
+            if (messagesToPersist.length > 0) {
+              saveSessionMessages(sid, messagesToPersist);
+              persistMessagesToBackend(sid, messagesToPersist);
             }
             return prev;
           });
-          if (finalMessages.length > 0) {
-            saveSessionMessages(newSessionId, finalMessages);
-            persistMessagesToBackend(newSessionId, finalMessages);
-          }
         }
       } catch (err) {
         const errorMessage =

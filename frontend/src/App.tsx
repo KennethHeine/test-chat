@@ -154,6 +154,7 @@ export function App() {
       <div id="app-body">
         <div
           id="sidebar-backdrop"
+          style={{ display: sidebarOpen ? undefined : "none" }}
           onClick={() => setSidebarOpen(false)}
         />
         <SessionSidebar

@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import type { MouseEvent as ReactMouseEvent } from "react";
 import { apiFetch } from "../../utils/api.ts";
 import type { PushMutation, Milestone, IssueDraft } from "../../types.ts";
 
@@ -131,7 +132,7 @@ export function PushModal({ goalId, onClose }: PushModalProps) {
   }, [mutations, owner, repo]);
 
   const handleBackdropClick = useCallback(
-    (e: React.MouseEvent) => {
+    (e: ReactMouseEvent) => {
       if (e.target === e.currentTarget) onClose();
     },
     [onClose],
@@ -155,7 +156,7 @@ export function PushModal({ goalId, onClose }: PushModalProps) {
       aria-labelledby="push-modal-title"
       onClick={handleBackdropClick}
     >
-      <div className="push-modal-content">
+      <div className="push-modal">
         <div className="push-modal-header">
           <h2 id="push-modal-title" className="push-modal-title">
             🚀 Push to GitHub
@@ -172,7 +173,7 @@ export function PushModal({ goalId, onClose }: PushModalProps) {
 
         {step === "review" && (
           <div id="push-modal-review" className="push-modal-step">
-            <div className="push-modal-fields">
+            <div className="push-modal-repo-config">
               <label>
                 Owner:
                 <input
@@ -215,7 +216,7 @@ export function PushModal({ goalId, onClose }: PushModalProps) {
                 </div>
               )}
             </div>
-            <div className="push-modal-actions">
+            <div className="push-modal-footer">
               <span id="push-mutation-count" className="push-mutation-count">
                 {mutations.length} item(s) to push
               </span>
@@ -250,7 +251,7 @@ export function PushModal({ goalId, onClose }: PushModalProps) {
                 {progressIndex + 1} / {mutations.length}
               </span>
             </div>
-            <div className="push-progress-bar-container">
+            <div className="push-progress-bar-wrap">
               <div
                 id="push-progress-bar"
                 className="push-progress-bar"
@@ -280,7 +281,7 @@ export function PushModal({ goalId, onClose }: PushModalProps) {
             </div>
             <div id="push-results-list" className="push-results-list">
               {results.map((r, i) => (
-                <div key={i} className={`push-result-item status-${r.status}`}>
+                <div key={i} className={`push-results-item status-${r.status}`}>
                   <span>{r.label}</span>
                   {r.status === "success" && r.githubUrl && (
                     <a
@@ -297,7 +298,7 @@ export function PushModal({ goalId, onClose }: PushModalProps) {
                 </div>
               ))}
             </div>
-            <div className="push-modal-actions">
+            <div className="push-modal-footer">
               <button
                 id="push-done-btn"
                 className="push-done-btn"

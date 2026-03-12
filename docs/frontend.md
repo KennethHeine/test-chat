@@ -72,7 +72,7 @@ frontend/
 └─────────────────────────────────────────────────────────┘
 ```
 
-**Theme:** GitHub dark mode (`#0d1117` background, `#e6edf3` text). Uses OKLCH color format for CSS custom properties.
+**Theme:** GitHub dark mode (`#0d1117` background, `#e6edf3` text) using hex colors for CSS custom properties.
 
 ### Key UI Components
 

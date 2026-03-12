@@ -1,4 +1,5 @@
 import { useRef, useEffect, useCallback, useState } from "react";
+import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import type { Message } from "../types.ts";
 import type { UserInputRequest } from "../hooks/useChat.ts";
 
@@ -46,7 +47,7 @@ export function ChatArea({
   }, [inputValue, isStreaming, onSendMessage]);
 
   const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent) => {
+    (e: ReactKeyboardEvent) => {
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
         handleSend();
@@ -147,10 +148,10 @@ function UserInputCard({ request, onSubmit }: UserInputCardProps) {
   const [freeformValue, setFreeformValue] = useState("");
 
   return (
-    <div className="user-input-card">
-      <div className="user-input-question">{request.question}</div>
+    <div className="user-input-request">
+      <div className="user-input-request-header">{request.question}</div>
       {request.choices && request.choices.length > 0 && (
-        <div className="user-input-choices">
+        <div className="user-input-request-body">
           {request.choices.map((choice, i) => (
             <button
               key={i}
@@ -168,7 +169,7 @@ function UserInputCard({ request, onSubmit }: UserInputCardProps) {
         <div className="user-input-freeform">
           <input
             type="text"
-            className="user-input-freeform-input"
+            className="user-input-freeform-text"
             placeholder="Type your answer..."
             value={freeformValue}
             onChange={(e) => setFreeformValue(e.target.value)}
@@ -179,7 +180,7 @@ function UserInputCard({ request, onSubmit }: UserInputCardProps) {
             }}
           />
           <button
-            className="user-input-freeform-submit"
+            className="user-input-submit-btn"
             onClick={() => {
               if (freeformValue.trim()) {
                 onSubmit(

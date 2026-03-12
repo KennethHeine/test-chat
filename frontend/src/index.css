@@ -2098,7 +2098,7 @@
       border: 1px solid var(--color-border);
       border-radius: 6px;
       margin-bottom: 4px;
-      background: var(--color-bg-primary);
+      background: var(--color-bg-secondary);
     }
 
     .push-mutation-icon {

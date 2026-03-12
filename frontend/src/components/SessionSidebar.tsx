@@ -40,7 +40,15 @@ export function SessionSidebar({
                 (s.id === currentSessionId ? " active" : "")
               }
               data-session-id={s.id}
+              role="button"
+              tabIndex={0}
               onClick={() => onSelectSession(s.id)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  onSelectSession(s.id);
+                }
+              }}
             >
               <div className="session-item-text">
                 {s.title || "New Chat"}
