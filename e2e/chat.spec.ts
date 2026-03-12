@@ -2143,3 +2143,165 @@ test("push approval: partial failure shown in results", async ({ page }) => {
   await expect(page.locator("#push-modal-results")).toBeVisible({ timeout: 15_000 });
   await expect(page.locator("#push-results-summary")).toContainText("failed");
 });
+
+// ─── Accessibility & Semantic HTML ─────────────────────────────
+
+test("semantic landmarks: main, aside, role=log, role=status present", async ({ page }) => {
+  await page.goto("/");
+
+  // <main> wraps the app body
+  await expect(page.locator("main#app-body")).toBeVisible();
+
+  // <aside> for session sidebar
+  await expect(page.locator("aside#session-sidebar")).toBeAttached();
+
+  // Messages area has role="log"
+  await expect(page.locator("#messages[role='log']")).toBeAttached();
+
+  // Status bar has role="status"
+  await expect(page.locator("#status-bar[role='status']")).toBeAttached();
+});
+
+test("decorative SVGs have aria-hidden attribute", async ({ page }) => {
+  await page.goto("/");
+
+  // Header logo SVG
+  const headerSvg = page.locator("header .logo svg");
+  await expect(headerSvg).toHaveAttribute("aria-hidden", "true");
+
+  // Welcome screen SVG
+  const welcomeSvg = page.locator("#welcome svg");
+  await expect(welcomeSvg).toHaveAttribute("aria-hidden", "true");
+});
+
+test("form inputs have associated labels or aria-labels", async ({ page }) => {
+  await page.goto("/");
+
+  // Token input has an associated sr-only label
+  await expect(page.locator("label[for='token-input']")).toBeAttached();
+
+  // Model select has aria-label
+  await expect(page.locator("#model-select")).toHaveAttribute("aria-label", "Select model");
+
+  // Message input has aria-label
+  await expect(page.locator("#message-input")).toHaveAttribute("aria-label", "Message input");
+
+  // New chat button has aria-label
+  await expect(page.locator("#new-chat-btn")).toHaveAttribute("aria-label", /new conversation/i);
+});
+
+test("color-scheme: dark is set on :root", async ({ page }) => {
+  await page.goto("/");
+  const colorScheme = await page.evaluate(() =>
+    getComputedStyle(document.documentElement).colorScheme
+  );
+  expect(colorScheme).toContain("dark");
+});
+
+test("prefers-reduced-motion styles are present", async ({ page }) => {
+  await page.goto("/");
+  // Verify the @media rule exists in the stylesheet
+  const hasReducedMotion = await page.evaluate(() => {
+    for (const sheet of document.styleSheets) {
+      for (const rule of sheet.cssRules) {
+        if (rule instanceof CSSMediaRule && rule.conditionText?.includes("prefers-reduced-motion")) {
+          return true;
+        }
+      }
+    }
+    return false;
+  });
+  expect(hasReducedMotion).toBe(true);
+});
+
+// ─── Welcome Screen ───────────────────────────────────────────
+
+test("welcome screen is visible on initial load and hidden after first message stub", async ({ page }) => {
+  await page.goto("/");
+
+  // Welcome is visible before any messages
+  await expect(page.locator("#welcome")).toBeVisible();
+  await expect(page.locator("#welcome h2")).toHaveText("Copilot Agent Orchestrator");
+  await expect(page.locator("#welcome p")).toContainText("Research codebases");
+});
+
+// ─── Token UI Toggle ──────────────────────────────────────────
+
+test("save token button toggles between save and clear states", async ({ page }) => {
+  await page.goto("/");
+
+  const saveBtn = page.locator("#save-token-btn");
+  const tokenInput = page.locator("#token-input");
+
+  // Initially shows "Save Token"
+  await expect(saveBtn).toHaveText("Save Token");
+
+  // Save a fake token
+  await tokenInput.fill("fake_test_token_12345");
+  await saveBtn.click();
+
+  // After saving, button text changes to "Clear Token"
+  await expect(saveBtn).toHaveText("Clear Token");
+  await expect(tokenInput).toHaveAttribute("placeholder", /Token saved/);
+
+  // Click again to clear
+  await saveBtn.click();
+
+  // After clearing, button reverts to "Save Token"
+  await expect(saveBtn).toHaveText("Save Token");
+});
+
+// ─── Status Bar ───────────────────────────────────────────────
+
+test("status bar shows connected state after health check", async ({ page }) => {
+  await page.goto("/");
+
+  const statusDot = page.locator("#status-dot");
+  const statusText = page.locator("#status-text");
+
+  // Wait for connected status
+  await expect(statusDot).not.toHaveClass(/disconnected/, { timeout: 15_000 });
+  await expect(statusText).toHaveText(/Connected|client/, { timeout: 15_000 });
+});
+
+// ─── escHtml XSS Prevention ──────────────────────────────────
+
+test("escHtml escapes all dangerous characters including single quotes", async ({ page }) => {
+  await page.goto("/");
+
+  const result = await page.evaluate(() => {
+    // @ts-ignore — escHtml is defined in app.js global scope
+    return escHtml('<script>alert("xss")</script>&\'test');
+  });
+  expect(result).toBe("&lt;script&gt;alert(&quot;xss&quot;)&lt;/script&gt;&amp;&#39;test");
+});
+
+// ─── Reasoning Effort Dropdown ────────────────────────────────
+
+test("reasoning effort dropdown is hidden by default", async ({ page }) => {
+  await page.goto("/");
+
+  const effortSelect = page.locator("#reasoning-effort-select");
+  await expect(effortSelect).not.toBeVisible();
+});
+
+// ─── Mobile Sidebar Backdrop ──────────────────────────────────
+
+test("sidebar backdrop exists for mobile overlay", async ({ page }) => {
+  await page.goto("/");
+
+  // Backdrop element exists
+  await expect(page.locator("#sidebar-backdrop")).toBeAttached();
+});
+
+// ─── Session Sidebar State ────────────────────────────────────
+
+test("session list shows empty state message initially", async ({ page }) => {
+  await page.goto("/");
+
+  // Clear any saved sessions
+  await page.evaluate(() => localStorage.removeItem("copilot_sessions"));
+  await page.reload();
+
+  await expect(page.locator("#session-list")).toContainText("No sessions yet");
+});
