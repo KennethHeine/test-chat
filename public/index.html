@@ -1946,6 +1946,434 @@
         padding: 12px;
       }
     }
+
+    /* Push to GitHub workflow */
+
+    .dashboard-page-header-row {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .push-to-github-btn {
+      background: rgba(35, 134, 54, 0.12);
+      border: 1px solid rgba(63, 185, 80, 0.4);
+      border-radius: 6px;
+      color: #3fb950;
+      font-size: 13px;
+      font-weight: 600;
+      padding: 7px 16px;
+      cursor: pointer;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+
+    .push-to-github-btn:hover {
+      background: rgba(35, 134, 54, 0.22);
+    }
+
+    .push-modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.65);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+    }
+
+    .push-modal {
+      background: var(--color-bg-secondary);
+      border: 1px solid var(--color-border);
+      border-radius: 10px;
+      width: min(680px, 96vw);
+      max-height: 85vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .push-modal-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px 20px 12px;
+      border-bottom: 1px solid var(--color-border);
+      flex-shrink: 0;
+    }
+
+    .push-modal-title {
+      font-size: 16px;
+      font-weight: 600;
+      color: var(--color-text);
+      margin: 0;
+    }
+
+    .push-modal-close {
+      background: none;
+      border: none;
+      color: var(--color-text-muted);
+      font-size: 16px;
+      cursor: pointer;
+      padding: 4px 8px;
+      border-radius: 4px;
+    }
+
+    .push-modal-close:hover {
+      background: var(--color-bg-tertiary);
+      color: var(--color-text);
+    }
+
+    .push-modal-step {
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      flex: 1;
+      min-height: 0;
+    }
+
+    .push-modal-repo-config {
+      display: flex;
+      gap: 12px;
+      padding: 16px 20px 12px;
+      flex-shrink: 0;
+    }
+
+    .push-modal-field {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+    }
+
+    .push-modal-label {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--color-text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .push-modal-input {
+      background: var(--color-bg-tertiary);
+      border: 1px solid var(--color-border);
+      border-radius: 6px;
+      color: var(--color-text);
+      font-size: 13px;
+      padding: 7px 10px;
+      width: 100%;
+      box-sizing: border-box;
+    }
+
+    .push-modal-input:focus {
+      outline: none;
+      border-color: var(--color-accent);
+    }
+
+    .push-mutation-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 0 20px 8px;
+      min-height: 0;
+    }
+
+    .push-loading {
+      color: var(--color-text-muted);
+      font-size: 13px;
+      padding: 16px 0;
+    }
+
+    .push-mutation-group {
+      margin-bottom: 14px;
+    }
+
+    .push-mutation-group-label {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--color-text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      margin-bottom: 6px;
+    }
+
+    .push-mutation-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 10px;
+      border: 1px solid var(--color-border);
+      border-radius: 6px;
+      margin-bottom: 4px;
+      background: var(--color-bg-primary);
+    }
+
+    .push-mutation-icon {
+      font-size: 15px;
+      flex-shrink: 0;
+    }
+
+    .push-mutation-info {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .push-mutation-name {
+      font-size: 13px;
+      color: var(--color-text);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .push-mutation-meta {
+      font-size: 11px;
+      color: var(--color-text-muted);
+      margin-top: 2px;
+    }
+
+    .push-mutation-badge {
+      font-size: 11px;
+      border-radius: 10px;
+      padding: 2px 8px;
+      font-weight: 600;
+      flex-shrink: 0;
+    }
+
+    .push-mutation-badge.new {
+      background: rgba(56, 139, 253, 0.15);
+      color: #58a6ff;
+      border: 1px solid rgba(56, 139, 253, 0.3);
+    }
+
+    .push-mutation-badge.exists {
+      background: rgba(110, 118, 129, 0.1);
+      color: var(--color-text-muted);
+      border: 1px solid var(--color-border);
+    }
+
+    .push-modal-footer {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 12px;
+      padding: 14px 20px;
+      border-top: 1px solid var(--color-border);
+      flex-shrink: 0;
+    }
+
+    .push-mutation-count {
+      font-size: 12px;
+      color: var(--color-text-muted);
+      margin-right: auto;
+    }
+
+    .push-confirm-btn {
+      background: rgba(35, 134, 54, 0.12);
+      border: 1px solid rgba(63, 185, 80, 0.4);
+      border-radius: 6px;
+      color: #3fb950;
+      font-size: 13px;
+      font-weight: 600;
+      padding: 8px 18px;
+      cursor: pointer;
+    }
+
+    .push-confirm-btn:hover:not(:disabled) {
+      background: rgba(35, 134, 54, 0.22);
+    }
+
+    .push-confirm-btn:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
+
+    .push-progress-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px 20px 10px;
+      flex-shrink: 0;
+    }
+
+    .push-progress-label {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--color-text);
+    }
+
+    .push-progress-count {
+      font-size: 12px;
+      color: var(--color-text-muted);
+    }
+
+    .push-progress-bar-wrap {
+      height: 6px;
+      background: var(--color-bg-tertiary);
+      border-radius: 3px;
+      margin: 0 20px 12px;
+      flex-shrink: 0;
+      overflow: hidden;
+    }
+
+    .push-progress-bar {
+      height: 100%;
+      background: #3fb950;
+      border-radius: 3px;
+      transition: width 0.3s ease;
+    }
+
+    .push-progress-items {
+      flex: 1;
+      overflow-y: auto;
+      padding: 0 20px 8px;
+      min-height: 0;
+    }
+
+    .push-progress-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 7px 0;
+      border-bottom: 1px solid var(--color-border);
+      font-size: 13px;
+    }
+
+    .push-progress-item:last-child {
+      border-bottom: none;
+    }
+
+    .push-progress-item-status {
+      width: 18px;
+      text-align: center;
+      flex-shrink: 0;
+    }
+
+    .push-progress-item-name {
+      flex: 1;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: var(--color-text);
+    }
+
+    .push-progress-item-link {
+      font-size: 12px;
+      color: var(--color-accent);
+      text-decoration: none;
+      flex-shrink: 0;
+    }
+
+    .push-progress-item-link:hover {
+      text-decoration: underline;
+    }
+
+    .push-progress-item-error {
+      font-size: 11px;
+      color: #f85149;
+      flex: 1;
+      min-width: 0;
+    }
+
+    .push-results-summary {
+      padding: 16px 20px 10px;
+      font-size: 14px;
+      font-weight: 600;
+      flex-shrink: 0;
+    }
+
+    .push-results-summary.all-success {
+      color: #3fb950;
+    }
+
+    .push-results-summary.partial-failure {
+      color: #f0883e;
+    }
+
+    .push-results-summary.all-failure {
+      color: #f85149;
+    }
+
+    .push-results-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 0 20px 8px;
+      min-height: 0;
+    }
+
+    .push-results-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      padding: 8px 0;
+      border-bottom: 1px solid var(--color-border);
+      font-size: 13px;
+    }
+
+    .push-results-item:last-child {
+      border-bottom: none;
+    }
+
+    .push-results-item-icon {
+      flex-shrink: 0;
+      margin-top: 1px;
+    }
+
+    .push-results-item-body {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .push-results-item-name {
+      color: var(--color-text);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .push-results-item-link {
+      font-size: 12px;
+      color: var(--color-accent);
+      text-decoration: none;
+      display: block;
+      margin-top: 3px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .push-results-item-link:hover {
+      text-decoration: underline;
+    }
+
+    .push-results-item-error {
+      font-size: 12px;
+      color: #f85149;
+      margin-top: 3px;
+    }
+
+    .push-done-btn {
+      background: var(--color-bg-tertiary);
+      border: 1px solid var(--color-border);
+      border-radius: 6px;
+      color: var(--color-text);
+      font-size: 13px;
+      font-weight: 600;
+      padding: 8px 18px;
+      cursor: pointer;
+    }
+
+    .push-done-btn:hover {
+      background: var(--color-bg-secondary);
+    }
+
+    .push-no-mutations {
+      color: var(--color-text-muted);
+      font-size: 13px;
+      padding: 20px 0 8px;
+      text-align: center;
+    }
   </style>
 </head>
 <body>
@@ -2077,8 +2505,15 @@
 
         <div class="dashboard-page" id="dashboard-page-issues">
           <div class="dashboard-page-header">
-            <h2>Issues</h2>
-            <p>GitHub issue drafts ready for review and push</p>
+            <div class="dashboard-page-header-row">
+              <div>
+                <h2>Issues</h2>
+                <p>GitHub issue drafts ready for review and push</p>
+              </div>
+              <button id="push-to-github-btn" class="push-to-github-btn" style="display:none" aria-label="Push ready issues to GitHub">
+                🚀 Push to GitHub
+              </button>
+            </div>
           </div>
           <div id="issue-goal-selector" style="display:none">
             <select id="issue-goal-select" class="issue-goal-select" aria-label="Select goal to view issues for"></select>
@@ -2112,6 +2547,58 @@
     <span id="quota-display" style="display: none; margin-left: 12px; color: var(--color-text-muted); font-size: 11px;">
       <span id="quota-text"></span>
     </span>
+  </div>
+
+  <!-- GitHub Push Approval Modal -->
+  <div id="push-modal" class="push-modal-overlay" style="display:none" role="dialog" aria-modal="true" aria-labelledby="push-modal-title">
+    <div class="push-modal">
+      <div class="push-modal-header">
+        <h2 id="push-modal-title" class="push-modal-title">🚀 Push to GitHub</h2>
+        <button id="push-modal-close" class="push-modal-close" aria-label="Close push modal">✕</button>
+      </div>
+
+      <!-- Step 1: Configure + Review -->
+      <div id="push-modal-review" class="push-modal-step">
+        <div class="push-modal-repo-config">
+          <div class="push-modal-field">
+            <label for="push-owner-input" class="push-modal-label">Repository Owner</label>
+            <input id="push-owner-input" type="text" class="push-modal-input" placeholder="e.g. octocat" autocomplete="off" spellcheck="false" />
+          </div>
+          <div class="push-modal-field">
+            <label for="push-repo-input" class="push-modal-label">Repository Name</label>
+            <input id="push-repo-input" type="text" class="push-modal-input" placeholder="e.g. my-project" autocomplete="off" spellcheck="false" />
+          </div>
+        </div>
+        <div id="push-mutation-list" class="push-mutation-list">
+          <div class="push-loading">⏳ Loading planned mutations…</div>
+        </div>
+        <div class="push-modal-footer">
+          <span id="push-mutation-count" class="push-mutation-count"></span>
+          <button id="push-confirm-btn" class="push-confirm-btn" disabled>Confirm &amp; Push</button>
+        </div>
+      </div>
+
+      <!-- Step 2: Progress -->
+      <div id="push-modal-progress" class="push-modal-step" style="display:none">
+        <div class="push-progress-header">
+          <span id="push-progress-label" class="push-progress-label">Pushing to GitHub…</span>
+          <span id="push-progress-count" class="push-progress-count">0 / 0</span>
+        </div>
+        <div class="push-progress-bar-wrap">
+          <div id="push-progress-bar" class="push-progress-bar" style="width:0%"></div>
+        </div>
+        <div id="push-progress-items" class="push-progress-items"></div>
+      </div>
+
+      <!-- Step 3: Results -->
+      <div id="push-modal-results" class="push-modal-step" style="display:none">
+        <div id="push-results-summary" class="push-results-summary"></div>
+        <div id="push-results-list" class="push-results-list"></div>
+        <div class="push-modal-footer">
+          <button id="push-done-btn" class="push-done-btn">Done</button>
+        </div>
+      </div>
+    </div>
   </div>
 
   <script src="app.js"></script>

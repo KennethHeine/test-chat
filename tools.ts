@@ -4,7 +4,7 @@ import type { IssueDraft, ResearchItem } from "./planning-types.js";
 
 // --- GitHub API helper ---
 
-async function githubFetch(token: string, path: string): Promise<unknown> {
+export async function githubFetch(token: string, path: string): Promise<unknown> {
   const res = await fetch(`https://api.github.com${path}`, {
     headers: {
       Authorization: `Bearer ${token}`,
@@ -25,7 +25,7 @@ async function githubFetch(token: string, path: string): Promise<unknown> {
  * Handles authentication, content-type, and rate-limit monitoring.
  * Throws on non-2xx responses. Returns null for 204 No Content.
  */
-async function githubWrite(
+export async function githubWrite(
   token: string,
   method: "POST" | "PATCH" | "PUT" | "DELETE",
   path: string,
@@ -100,7 +100,7 @@ const MAX_FILE_SIZE = 100 * 1024;
  * and a research context section. Internal planning fields (order, status, dependencies)
  * are intentionally omitted as they are not useful in the rendered issue body.
  */
-function buildIssueBody(draft: IssueDraft, researchItems: ResearchItem[]): string {
+export function buildIssueBody(draft: IssueDraft, researchItems: ResearchItem[]): string {
   const lines: string[] = [];
 
   /**

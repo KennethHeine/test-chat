@@ -1300,6 +1300,7 @@ async function loadIssuesDashboard() {
   if (!getToken()) {
     issueGoalSelector.style.display = "none";
     issueMilestoneSelector.style.display = "none";
+    pushToGithubBtn.style.display = "none";
     issuePageContent.innerHTML = "";
     const empty = document.createElement("div");
     empty.className = "dashboard-empty";
@@ -1311,6 +1312,7 @@ async function loadIssuesDashboard() {
 
   issueGoalSelector.style.display = "none";
   issueMilestoneSelector.style.display = "none";
+  pushToGithubBtn.style.display = "none";
   issuePageContent.innerHTML = '<div class="dashboard-empty"><span class="dashboard-empty-icon" style="font-size:24px">⏳</span><p>Loading…</p></div>';
 
   try {
@@ -1332,6 +1334,7 @@ async function loadIssuesDashboard() {
     if (goals.length === 0) {
       issueGoalSelector.style.display = "none";
       issueMilestoneSelector.style.display = "none";
+      pushToGithubBtn.style.display = "none";
       issuePageContent.innerHTML = "";
       const empty = document.createElement("div");
       empty.className = "dashboard-empty";
@@ -1357,6 +1360,9 @@ async function loadIssuesDashboard() {
     } else {
       issueGoalSelector.style.display = "none";
     }
+
+    // Show the push button when a goal is selected
+    pushToGithubBtn.style.display = "inline-block";
 
     // Load milestones for the first goal
     await loadMilestonesForIssues(goals[0].id);
@@ -2042,6 +2048,494 @@ function buildIssueDraftItem(draft, milestoneId, idToOrder) {
 
   return itemEl;
 }
+
+// --- GitHub Push Approval Workflow ---
+
+/** localStorage key for persisting the last-used GitHub owner/repo. */
+const PUSH_REPO_STORAGE_KEY = "copilot_push_repo";
+
+/** Max number of concurrent milestone-issue fetch requests in the push mutation loader. */
+const PUSH_MUTATION_FETCH_CONCURRENCY = 4;
+
+/** DOM refs for push modal */
+const pushModal = document.getElementById("push-modal");
+const pushModalClose = document.getElementById("push-modal-close");
+const pushOwnerInput = document.getElementById("push-owner-input");
+const pushRepoInput = document.getElementById("push-repo-input");
+const pushMutationList = document.getElementById("push-mutation-list");
+const pushMutationCount = document.getElementById("push-mutation-count");
+const pushConfirmBtn = document.getElementById("push-confirm-btn");
+const pushProgressLabel = document.getElementById("push-progress-label");
+const pushProgressCount = document.getElementById("push-progress-count");
+const pushProgressBar = document.getElementById("push-progress-bar");
+const pushProgressItems = document.getElementById("push-progress-items");
+const pushResultsSummary = document.getElementById("push-results-summary");
+const pushResultsList = document.getElementById("push-results-list");
+const pushDoneBtn = document.getElementById("push-done-btn");
+const pushModalReview = document.getElementById("push-modal-review");
+const pushModalProgress = document.getElementById("push-modal-progress");
+const pushModalResults = document.getElementById("push-modal-results");
+const pushToGithubBtn = document.getElementById("push-to-github-btn");
+
+/** The goalId for the current push workflow session. */
+let pushGoalId = null;
+/** Planned mutations: array of { type, id, milestoneId?, name, alreadyExists } */
+let pushMutations = [];
+
+/**
+ * Loads milestones (and their issues) for the goal, then shows the push approval modal.
+ * @param {string} goalId
+ */
+async function openPushApprovalModal(goalId) {
+  pushGoalId = goalId;
+  pushMutations = [];
+
+  // Reset modal to review step
+  pushModalReview.style.display = "";
+  pushModalProgress.style.display = "none";
+  pushModalResults.style.display = "none";
+  pushModal.style.display = "flex";
+
+  // Restore last-used owner/repo
+  const saved = localStorage.getItem(PUSH_REPO_STORAGE_KEY);
+  if (saved) {
+    try {
+      const { owner, repo } = JSON.parse(saved);
+      pushOwnerInput.value = typeof owner === "string" ? owner : "";
+      pushRepoInput.value = typeof repo === "string" ? repo : "";
+    } catch {
+      pushOwnerInput.value = "";
+      pushRepoInput.value = "";
+    }
+  }
+  pushConfirmBtn.disabled = true;
+  pushMutationList.innerHTML = '<div class="push-loading">⏳ Loading planned mutations…</div>';
+  pushMutationCount.textContent = "";
+
+  try {
+    // Fetch all milestones for the goal
+    const msRes = await fetch(`/api/goals/${encodeURIComponent(goalId)}/milestones`, { headers: authHeaders() });
+    if (!msRes.ok) {
+      const err = await msRes.json().catch(() => ({}));
+      pushMutationList.innerHTML = `<div class="push-loading" style="color:#f85149">Failed to load milestones: ${escHtml((err && err.error) ? err.error : "Unknown error")}</div>`;
+      return;
+    }
+    const msData = await msRes.json();
+    const milestones = Array.isArray(msData.milestones) ? msData.milestones : [];
+    milestones.sort((a, b) => (a.order || 0) - (b.order || 0));
+
+    // Fetch issues for each milestone concurrently
+    const CONCURRENCY = PUSH_MUTATION_FETCH_CONCURRENCY;
+    /** @type {Array<{ milestone: Object, issues: Array }>} */
+    const groups = [];
+    for (let i = 0; i < milestones.length; i += CONCURRENCY) {
+      const batch = milestones.slice(i, i + CONCURRENCY);
+      const batchResults = await Promise.all(
+        batch.map(async (ms) => {
+          try {
+            const r = await fetch(`/api/milestones/${encodeURIComponent(ms.id)}/issues`, { headers: authHeaders() });
+            const d = r.ok ? await r.json() : {};
+            return { milestone: ms, issues: Array.isArray(d.issues) ? d.issues : [] };
+          } catch {
+            return { milestone: ms, issues: [] };
+          }
+        })
+      );
+      groups.push(...batchResults);
+    }
+
+    // Build the mutations list: milestones without githubNumber + ready issues
+    pushMutations = [];
+    for (const { milestone, issues } of groups) {
+      if (milestone.githubNumber === undefined || milestone.githubNumber === null) {
+        pushMutations.push({ type: "milestone", id: milestone.id, name: typeof milestone.name === "string" ? milestone.name : "(untitled milestone)", alreadyExists: false });
+      } else {
+        pushMutations.push({ type: "milestone", id: milestone.id, name: typeof milestone.name === "string" ? milestone.name : "(untitled milestone)", alreadyExists: true, githubUrl: milestone.githubUrl });
+      }
+      const readyIssues = issues
+        .filter((iss) => iss.status === "ready" || iss.status === "created")
+        .sort((a, b) => (a.order || 0) - (b.order || 0));
+      for (const iss of readyIssues) {
+        pushMutations.push({
+          type: "issue",
+          id: iss.id,
+          milestoneId: milestone.id,
+          milestoneName: typeof milestone.name === "string" ? milestone.name : "",
+          name: typeof iss.title === "string" ? iss.title : "(untitled issue)",
+          alreadyExists: iss.status === "created",
+          githubIssueNumber: iss.githubIssueNumber,
+        });
+      }
+    }
+
+    renderPushMutationList();
+    updatePushConfirmState();
+  } catch (err) {
+    console.warn("Failed to load push mutations:", err);
+    pushMutationList.innerHTML = '<div class="push-loading" style="color:#f85149">Failed to load mutations. Please try again.</div>';
+  }
+}
+
+/**
+ * Renders the planned mutation list in the review step.
+ * All user-supplied content is inserted via textContent or escHtml to prevent XSS.
+ */
+function renderPushMutationList() {
+  pushMutationList.innerHTML = "";
+
+  if (pushMutations.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "push-no-mutations";
+    empty.textContent = "No ready issues or new milestones found. All issues must be in 'ready' status to be pushed.";
+    pushMutationList.appendChild(empty);
+    pushMutationCount.textContent = "";
+    return;
+  }
+
+  const newMilestones = pushMutations.filter((m) => m.type === "milestone" && !m.alreadyExists);
+  const existingMilestones = pushMutations.filter((m) => m.type === "milestone" && m.alreadyExists);
+  const newIssues = pushMutations.filter((m) => m.type === "issue" && !m.alreadyExists);
+  const existingIssues = pushMutations.filter((m) => m.type === "issue" && m.alreadyExists);
+
+  function buildGroup(label, items) {
+    if (items.length === 0) return;
+    const group = document.createElement("div");
+    group.className = "push-mutation-group";
+    const groupLabel = document.createElement("div");
+    groupLabel.className = "push-mutation-group-label";
+    groupLabel.textContent = label;
+    group.appendChild(groupLabel);
+    for (const mut of items) {
+      const item = document.createElement("div");
+      item.className = "push-mutation-item";
+      const icon = document.createElement("span");
+      icon.className = "push-mutation-icon";
+      icon.textContent = mut.type === "milestone" ? "🏁" : "📋";
+      item.appendChild(icon);
+      const info = document.createElement("div");
+      info.className = "push-mutation-info";
+      const name = document.createElement("div");
+      name.className = "push-mutation-name";
+      name.textContent = mut.name;
+      info.appendChild(name);
+      if (mut.type === "issue" && mut.milestoneName) {
+        const meta = document.createElement("div");
+        meta.className = "push-mutation-meta";
+        meta.textContent = `Milestone: ${mut.milestoneName}`;
+        info.appendChild(meta);
+      }
+      item.appendChild(info);
+      const badge = document.createElement("span");
+      badge.className = "push-mutation-badge " + (mut.alreadyExists ? "exists" : "new");
+      badge.textContent = mut.alreadyExists ? (mut.type === "milestone" ? "exists" : "created") : "new";
+      item.appendChild(badge);
+      group.appendChild(item);
+    }
+    pushMutationList.appendChild(group);
+  }
+
+  buildGroup("New Milestones to Create", newMilestones);
+  buildGroup("New Issues to Create", newIssues);
+  buildGroup("Already Exists (will be skipped)", [...existingMilestones, ...existingIssues]);
+
+  const totalNew = newMilestones.length + newIssues.length;
+  const totalSkip = existingMilestones.length + existingIssues.length;
+  const parts = [];
+  if (totalNew > 0) parts.push(`${totalNew} to create`);
+  if (totalSkip > 0) parts.push(`${totalSkip} to skip`);
+  pushMutationCount.textContent = parts.join(" · ");
+}
+
+/** Updates the Confirm button enabled state based on owner/repo validity and mutations. */
+function updatePushConfirmState() {
+  const owner = pushOwnerInput.value.trim();
+  const repo = pushRepoInput.value.trim();
+  const hasNewMutations = pushMutations.some((m) => !m.alreadyExists);
+  const ownerOk = /^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,37}[a-zA-Z0-9])?$/.test(owner);
+  const repoOk = /^[a-zA-Z0-9._-]{1,100}$/.test(repo);
+  pushConfirmBtn.disabled = !(hasNewMutations && ownerOk && repoOk);
+}
+
+/**
+ * Executes the push workflow: creates milestones and issues on GitHub in order.
+ * Updates the progress UI after each operation.
+ */
+async function executePushToGitHub() {
+  const owner = pushOwnerInput.value.trim();
+  const repo = pushRepoInput.value.trim();
+
+  // Save owner/repo for next time
+  localStorage.setItem(PUSH_REPO_STORAGE_KEY, JSON.stringify({ owner, repo }));
+
+  // Switch to progress step
+  pushModalReview.style.display = "none";
+  pushModalProgress.style.display = "";
+  pushProgressItems.innerHTML = "";
+
+  const toCreate = pushMutations.filter((m) => !m.alreadyExists);
+  const total = toCreate.length;
+  let completed = 0;
+  let successCount = 0;
+  let failCount = 0;
+
+  // Results: array of { mut, success, githubUrl?, githubNumber?, error? }
+  const results = [];
+
+  pushProgressLabel.textContent = "Pushing to GitHub…";
+  pushProgressCount.textContent = `0 / ${total}`;
+  pushProgressBar.style.width = "0%";
+
+  /**
+   * Appends a progress item row to the progress list.
+   * @param {Object} mut - The mutation being processed
+   * @param {"pending"|"success"|"error"} state
+   * @param {string} [url]
+   * @param {string} [errorMsg]
+   */
+  function upsertProgressItem(mut, state, url, errorMsg) {
+    let row = pushProgressItems.querySelector(`[data-mutation-id="${CSS.escape(mut.id)}"]`);
+    if (!row) {
+      row = document.createElement("div");
+      row.className = "push-progress-item";
+      row.setAttribute("data-mutation-id", mut.id);
+      pushProgressItems.appendChild(row);
+    }
+    row.innerHTML = "";
+
+    const statusEl = document.createElement("span");
+    statusEl.className = "push-progress-item-status";
+    if (state === "pending") statusEl.textContent = "⏳";
+    else if (state === "success") statusEl.textContent = "✅";
+    else statusEl.textContent = "❌";
+    row.appendChild(statusEl);
+
+    const nameEl = document.createElement("span");
+    nameEl.className = "push-progress-item-name";
+    nameEl.textContent = `${mut.type === "milestone" ? "🏁" : "📋"} ${mut.name}`;
+    row.appendChild(nameEl);
+
+    if (url && state === "success") {
+      const link = document.createElement("a");
+      link.className = "push-progress-item-link";
+      link.href = url;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      link.textContent = mut.type === "milestone" ? "View milestone" : "View issue";
+      row.appendChild(link);
+    } else if (errorMsg && state === "error") {
+      const errEl = document.createElement("span");
+      errEl.className = "push-progress-item-error";
+      errEl.textContent = errorMsg;
+      row.appendChild(errEl);
+    }
+  }
+
+  // Pre-render all items as pending
+  for (const mut of toCreate) {
+    upsertProgressItem(mut, "pending");
+  }
+
+  // Execute mutations sequentially (milestone before its issues)
+  // Process in order: milestones first (they may supply githubNumber to issues)
+  const milestoneResults = new Map(); // milestoneId -> { success, githubNumber }
+
+  for (const mut of toCreate) {
+    if (mut.type !== "milestone") continue;
+    upsertProgressItem(mut, "pending");
+    try {
+      const res = await fetch(`/api/milestones/${encodeURIComponent(mut.id)}/push-to-github`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...authHeaders() },
+        body: JSON.stringify({ owner, repo }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const errMsg = (data && data.error) ? data.error : `HTTP ${res.status}`;
+        upsertProgressItem(mut, "error", null, errMsg);
+        milestoneResults.set(mut.id, { success: false });
+        results.push({ mut, success: false, error: errMsg });
+        failCount++;
+      } else {
+        upsertProgressItem(mut, "success", data.githubUrl || null);
+        milestoneResults.set(mut.id, { success: true, githubNumber: data.githubNumber });
+        results.push({ mut, success: true, githubUrl: data.githubUrl, githubNumber: data.githubNumber });
+        successCount++;
+      }
+    } catch (err) {
+      const errMsg = (err && err.message) ? err.message : "Network error";
+      upsertProgressItem(mut, "error", null, errMsg);
+      milestoneResults.set(mut.id, { success: false });
+      results.push({ mut, success: false, error: errMsg });
+      failCount++;
+    }
+    completed++;
+    pushProgressCount.textContent = `${completed} / ${total}`;
+    pushProgressBar.style.width = `${Math.round((completed / total) * 100)}%`;
+  }
+
+  // Now process issues
+  for (const mut of toCreate) {
+    if (mut.type !== "issue") continue;
+    upsertProgressItem(mut, "pending");
+    try {
+      const res = await fetch(
+        `/api/milestones/${encodeURIComponent(mut.milestoneId)}/issues/${encodeURIComponent(mut.id)}/push-to-github`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...authHeaders() },
+          body: JSON.stringify({ owner, repo }),
+        }
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const errMsg = (data && data.error) ? data.error : `HTTP ${res.status}`;
+        upsertProgressItem(mut, "error", null, errMsg);
+        results.push({ mut, success: false, error: errMsg });
+        failCount++;
+      } else {
+        upsertProgressItem(mut, "success", data.githubIssueUrl || null);
+        results.push({ mut, success: true, githubIssueUrl: data.githubIssueUrl, githubIssueNumber: data.githubIssueNumber });
+        successCount++;
+      }
+    } catch (err) {
+      const errMsg = (err && err.message) ? err.message : "Network error";
+      upsertProgressItem(mut, "error", null, errMsg);
+      results.push({ mut, success: false, error: errMsg });
+      failCount++;
+    }
+    completed++;
+    pushProgressCount.textContent = `${completed} / ${total}`;
+    pushProgressBar.style.width = `${Math.round((completed / total) * 100)}%`;
+  }
+
+  pushProgressLabel.textContent = "Push complete";
+  pushProgressCount.textContent = `${completed} / ${total}`;
+  pushProgressBar.style.width = "100%";
+
+  // Short delay then switch to results step
+  await new Promise((r) => setTimeout(r, 600));
+  showPushResults(results, successCount, failCount);
+}
+
+/**
+ * Shows the results step in the push modal.
+ * All user-supplied content is inserted via textContent or validated URL attributes to prevent XSS.
+ * @param {Array} results
+ * @param {number} successCount
+ * @param {number} failCount
+ */
+function showPushResults(results, successCount, failCount) {
+  pushModalProgress.style.display = "none";
+  pushModalResults.style.display = "";
+
+  pushResultsSummary.className = "push-results-summary";
+  if (failCount === 0) {
+    pushResultsSummary.classList.add("all-success");
+    pushResultsSummary.textContent = `✅ All ${successCount} item${successCount !== 1 ? "s" : ""} pushed successfully!`;
+  } else if (successCount === 0) {
+    pushResultsSummary.classList.add("all-failure");
+    pushResultsSummary.textContent = `❌ Push failed — ${failCount} item${failCount !== 1 ? "s" : ""} could not be created.`;
+  } else {
+    pushResultsSummary.classList.add("partial-failure");
+    pushResultsSummary.textContent = `⚠️ ${successCount} succeeded, ${failCount} failed — see details below.`;
+  }
+
+  pushResultsList.innerHTML = "";
+  for (const { mut, success, githubUrl, githubIssueUrl, githubNumber, githubIssueNumber, error } of results) {
+    const item = document.createElement("div");
+    item.className = "push-results-item";
+
+    const icon = document.createElement("span");
+    icon.className = "push-results-item-icon";
+    icon.textContent = success ? "✅" : "❌";
+    item.appendChild(icon);
+
+    const body = document.createElement("div");
+    body.className = "push-results-item-body";
+
+    const name = document.createElement("div");
+    name.className = "push-results-item-name";
+    name.textContent = `${mut.type === "milestone" ? "🏁" : "📋"} ${mut.name}`;
+    body.appendChild(name);
+
+    if (success) {
+      const url = mut.type === "milestone" ? githubUrl : githubIssueUrl;
+      if (url && typeof url === "string" && url.startsWith("https://")) {
+        const link = document.createElement("a");
+        link.className = "push-results-item-link";
+        link.href = url;
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        link.textContent = url;
+        body.appendChild(link);
+      }
+    } else if (error) {
+      const errEl = document.createElement("div");
+      errEl.className = "push-results-item-error";
+      errEl.textContent = error;
+      body.appendChild(errEl);
+    }
+
+    item.appendChild(body);
+    pushResultsList.appendChild(item);
+  }
+
+  // Reload the issues dashboard to reflect updated statuses
+  if (successCount > 0) {
+    issuesLoadInFlight = false;
+    loadIssuesDashboard();
+  }
+}
+
+/** Escapes a string for safe insertion into HTML as text content of an element. */
+function escHtml(str) {
+  return String(str)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+/** Closes the push modal and resets state. */
+function closePushModal() {
+  pushModal.style.display = "none";
+  pushGoalId = null;
+  pushMutations = [];
+}
+
+// Push modal event listeners
+pushModalClose.addEventListener("click", closePushModal);
+pushDoneBtn.addEventListener("click", closePushModal);
+
+// Close on backdrop click
+pushModal.addEventListener("click", (e) => {
+  if (e.target === pushModal) closePushModal();
+});
+
+// Close on Escape key
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && pushModal.style.display !== "none") {
+    closePushModal();
+  }
+});
+
+// Update confirm button state when owner/repo change
+pushOwnerInput.addEventListener("input", updatePushConfirmState);
+pushRepoInput.addEventListener("input", updatePushConfirmState);
+
+// Confirm button: start the push
+pushConfirmBtn.addEventListener("click", () => {
+  if (pushConfirmBtn.disabled) return;
+  executePushToGitHub();
+});
+
+// Top-level "Push to GitHub" button on the issues page
+pushToGithubBtn.addEventListener("click", () => {
+  const goalId = issueGoalSelect.value;
+  if (goalId) {
+    openPushApprovalModal(goalId);
+  }
+});
 
 function restoreLastSession() {
   const lastId = localStorage.getItem("copilot_last_session");
