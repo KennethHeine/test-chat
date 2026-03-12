@@ -21,10 +21,13 @@ export default function Dashboard({ currentPage, onPageChange, visible, token, o
   const [goals, setGoals] = useState<GoalData[]>([]);
   const [selectedGoalId, setSelectedGoalId] = useState('');
 
+  // Resolve the effective token: prefer prop, fall back to localStorage (for tests that set it after load)
+  const effectiveToken = token || localStorage.getItem('copilot_github_token') || '';
+
   // Load goals when dashboard becomes visible or token changes
   useEffect(() => {
-    if (visible && token) {
-      apiFetch<{ goals: GoalData[] }>('/api/goals', token)
+    if (visible && effectiveToken) {
+      apiFetch<{ goals: GoalData[] }>('/api/goals', effectiveToken)
         .then(data => {
           setGoals(data.goals || []);
           if (data.goals?.length > 0 && !selectedGoalId) {
@@ -33,10 +36,10 @@ export default function Dashboard({ currentPage, onPageChange, visible, token, o
         })
         .catch(() => setGoals([]));
     }
-  }, [visible, token]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [visible, effectiveToken]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
-    <div id="dashboard-view" style={{ display: visible ? undefined : 'none' }}>
+    <div id="dashboard-view" className={visible ? 'active' : ''}>
       <nav id="dashboard-nav">
         <div id="dashboard-nav-header"><h3>Dashboard</h3></div>
         {PAGES.map(p => (
@@ -53,10 +56,10 @@ export default function Dashboard({ currentPage, onPageChange, visible, token, o
       </nav>
 
       <div id="dashboard-content">
-        <GoalsPage visible={currentPage === 'goals'} goals={goals} token={token} />
-        <ResearchPage visible={currentPage === 'research'} goals={goals} token={token} selectedGoalId={selectedGoalId} onGoalSelect={setSelectedGoalId} />
-        <MilestonesPage visible={currentPage === 'milestones'} goals={goals} token={token} selectedGoalId={selectedGoalId} onGoalSelect={setSelectedGoalId} />
-        <IssuesPage visible={currentPage === 'issues'} goals={goals} token={token} selectedGoalId={selectedGoalId} onGoalSelect={setSelectedGoalId} onOpenPushModal={onOpenPushModal} />
+        <GoalsPage visible={currentPage === 'goals'} goals={goals} token={effectiveToken} />
+        <ResearchPage visible={currentPage === 'research'} goals={goals} token={effectiveToken} selectedGoalId={selectedGoalId} onGoalSelect={setSelectedGoalId} />
+        <MilestonesPage visible={currentPage === 'milestones'} goals={goals} token={effectiveToken} selectedGoalId={selectedGoalId} onGoalSelect={setSelectedGoalId} />
+        <IssuesPage visible={currentPage === 'issues'} goals={goals} token={effectiveToken} selectedGoalId={selectedGoalId} onGoalSelect={setSelectedGoalId} onOpenPushModal={onOpenPushModal} />
       </div>
     </div>
   );
@@ -313,14 +316,13 @@ function ResearchPage({ visible, goals, token, selectedGoalId, onGoalSelect }: R
                     <div className="research-tracker-header">
                       <span className={`research-item-status status-${item.status}`}>{item.status}</span>
                       <span className="research-tracker-question">{item.question}</span>
-                      {editingId !== item.id && (
-                        <button
-                          className="research-tracker-edit-btn"
-                          onClick={() => { setEditingId(item.id); setEditText(item.findings || ''); }}
-                        >
-                          ✏️ Edit
-                        </button>
-                      )}
+                      <button
+                        className="research-tracker-edit-btn"
+                        style={{ display: editingId === item.id ? 'none' : undefined }}
+                        onClick={() => { setEditingId(item.id); setEditText(item.findings || ''); }}
+                      >
+                        ✏️ Edit
+                      </button>
                     </div>
                     {item.findings && editingId !== item.id && (
                       <div className="research-tracker-findings">{item.findings}</div>

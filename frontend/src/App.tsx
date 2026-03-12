@@ -274,27 +274,30 @@ export default function App() {
   }, [renderGoalCard]);
 
   // --- handleToolComplete: exposed globally ---
+  // Uses window.fetchAndRenderLatestGoal for the fallback path so E2E tests can override it
   const handleToolComplete = useCallback((event: ToolCompleteEvent) => {
     setToolActivityVisible(false);
 
     if (event.tool === 'save_goal') {
       if (event.result && 'id' in event.result && 'intent' in event.result) {
-        renderGoalCard(event.result as GoalData);
+        // Call through window to allow test overrides
+        window.renderGoalCard(event.result as GoalData);
       } else {
-        fetchAndRenderLatestGoal();
+        // Call through window to allow test overrides
+        window.fetchAndRenderLatestGoal();
       }
     } else if (event.tool === 'generate_research_checklist' || event.tool === 'get_research') {
       const result = event.result as { items?: ResearchItem[] } | undefined;
       if (result?.items) {
-        renderResearchChecklist(result.items);
+        window.renderResearchChecklist(result.items);
       }
     } else if (event.tool === 'create_milestone_plan' || event.tool === 'get_milestones') {
       const result = event.result as { milestones?: MilestoneData[] } | undefined;
       if (result?.milestones) {
-        renderMilestoneTimeline(result.milestones);
+        window.renderMilestoneTimeline(result.milestones);
       }
     }
-  }, [renderGoalCard, fetchAndRenderLatestGoal, renderResearchChecklist, renderMilestoneTimeline]);
+  }, []);
 
   // --- Expose global functions for E2E compatibility ---
   useEffect(() => {

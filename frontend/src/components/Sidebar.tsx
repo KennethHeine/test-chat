@@ -16,7 +16,7 @@ interface SidebarProps {
 
 export default function Sidebar({ sessions, currentSessionId, visible, onSessionSwitch, onSessionDelete }: SidebarProps) {
   return (
-    <div id="session-sidebar" style={{ display: visible ? undefined : 'none' }}>
+    <div id="session-sidebar" className={visible ? '' : 'collapsed'}>
       <div id="session-sidebar-header">
         <h3>Sessions</h3>
       </div>
