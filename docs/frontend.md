@@ -53,6 +53,54 @@ The frontend is vanilla HTML, CSS, and JavaScript — no frameworks, no build st
 | Token usage | Status bar | Displays per-message token count |
 | Quota display | Status bar | Shows remaining premium requests |
 
+## Accessibility
+
+The frontend follows WCAG 2.1 AA guidelines with the following accessibility features:
+
+### Semantic HTML & ARIA Landmarks
+
+| Element | Tag / Attribute | Purpose |
+|---------|----------------|---------|
+| App body | `<main id="app-body">` | Primary content landmark |
+| Session sidebar | `<aside aria-label="Chat sessions">` | Complementary sidebar landmark |
+| Messages area | `role="log" aria-live="polite"` | Announces new messages to screen readers |
+| Status bar | `role="status" aria-live="polite"` | Announces connection status changes |
+| Push modal | `role="dialog" aria-modal="true"` | Modal dialog with proper focus trapping |
+
+### Form Labels
+
+All interactive form elements have associated labels via `<label>` elements (using `.sr-only` for visual hiding) or `aria-label` attributes:
+
+- `#token-input` — sr-only `<label>` ("GitHub personal access token")
+- `#model-select` — `aria-label="Select model"`
+- `#reasoning-effort-select` — sr-only `<label>` + `aria-label="Reasoning effort"`
+- `#message-input` — sr-only `<label>` + `aria-label="Message input"`
+- All buttons — `aria-label` attributes for screen reader text
+
+### Decorative Elements
+
+- All decorative SVG icons have `aria-hidden="true"` to prevent screen reader announcement
+- Emoji icons in dashboard navigation are decorative and contained in `<span>` elements
+
+### Keyboard Navigation
+
+- Dashboard goal items support `tabindex="0"` and keyboard `Enter`/`Space` activation
+- Issue draft expand/collapse sections use `aria-expanded` state
+- Push modal supports `Escape` key to close
+
+### Visual Accessibility
+
+- **`color-scheme: dark`** on `:root` for native dark-mode form controls and scrollbars
+- **`:focus-visible`** global outline (`2px solid var(--color-accent)`) for keyboard focus indicators
+- **`prefers-reduced-motion`** media query disables animations and transitions for users who prefer reduced motion
+- **`.sr-only`** utility class for screen-reader-only content
+
+### XSS Prevention
+
+- User-supplied content is inserted via `textContent` (DOM API) wherever possible
+- The `escHtml()` function escapes `&`, `<`, `>`, `"`, and `'` for the few cases where HTML string building is required (e.g., markdown preview)
+- All dashboard rendering uses `textContent` for user data fields
+
 ## Application State
 
 The frontend manages view and conversation state across several variables:

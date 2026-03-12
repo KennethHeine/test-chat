@@ -62,6 +62,34 @@ These tests enter the token via the UI token input field, exactly like a real us
 | **send message and receive streamed response** | Saves the token, waits for models to load, sends `"Reply with exactly: PLAYWRIGHT_TEST_OK"`, verifies the user message bubble appears, waits for the assistant response to stream in, checks the response contains `PLAYWRIGHT_TEST_OK` |
 | **multi-turn conversation retains context** | Saves the token, sends a first message asking Copilot to remember `BETA_8832`, waits for the response, then sends a second message asking it to recall the code. Verifies the second response contains `BETA_8832` — proving session context is retained across turns |
 | **new chat button clears conversation** | Saves the token, sends a message, waits for the response, clicks "New Chat", then verifies all message bubbles are removed and the welcome screen reappears |
+| **session sidebar shows saved sessions** | Saves the token, sends a message, verifies the session appears in the sidebar list |
+| **toggle sidebar button hides and shows sidebar** | Clicks toggle button, verifies sidebar collapses and expands |
+
+### Accessibility & Standards (no token required)
+
+These tests verify semantic HTML, ARIA attributes, and accessibility best practices:
+
+| Test | What it verifies |
+|---|---|
+| **semantic landmarks present** | Checks that `<main>`, `<aside>`, `role="log"`, and `role="status"` landmarks exist |
+| **decorative SVGs have aria-hidden** | Verifies header and welcome SVGs have `aria-hidden="true"` |
+| **form inputs have labels/aria-labels** | Verifies `<label>` elements and `aria-label` attributes on token input, model select, message input, new chat button |
+| **color-scheme: dark is set** | Confirms `color-scheme: dark` CSS property on `:root` |
+| **prefers-reduced-motion styles present** | Confirms `@media (prefers-reduced-motion)` rule exists in stylesheet |
+| **escHtml escapes all dangerous characters** | Tests that `escHtml()` escapes `<`, `>`, `&`, `"`, and `'` (single quotes) |
+
+### UI State (no token required)
+
+These tests verify basic UI behavior without needing authentication:
+
+| Test | What it verifies |
+|---|---|
+| **welcome screen visible on load** | Welcome screen with heading and description is visible before any messages |
+| **save token button toggles states** | Tests the full save → clear → save cycle of the token button |
+| **status bar shows connected** | Verifies the status dot and text indicate a connected state |
+| **reasoning effort dropdown hidden** | Confirms the reasoning effort dropdown is hidden when no model is selected |
+| **sidebar backdrop exists** | Verifies the mobile overlay backdrop element is attached to the DOM |
+| **session list shows empty state** | Verifies the "No sessions yet" message appears for a fresh session |
 
 ## How Token Injection Works
 
@@ -76,12 +104,12 @@ The token is stored in the browser's `localStorage` by the frontend code, and se
 
 ## Test Behavior Without Token
 
-| Scenario | Health check test | Authenticated tests |
+| Scenario | Health + UI + accessibility tests | Authenticated tests |
 |---|---|---|
-| Token provided | ✅ Runs | ✅ Runs (enters token, tests chat) |
-| Token missing | ✅ Runs | ⏭️ Skipped (not fail) |
+| Token provided | ✅ Runs (63 tests) | ✅ Runs (7 tests — enters token, tests chat) |
+| Token missing | ✅ Runs (63 tests) | ⏭️ Skipped (not fail) |
 
-This ensures CI always gets a meaningful result: the health check validates the deployment is alive, and authenticated tests run when the secret is configured.
+This ensures CI always gets a meaningful result: health checks, accessibility, and UI state tests validate the deployment without a token. Authenticated tests run when the secret is configured.
 
 ## CI Workflow
 
