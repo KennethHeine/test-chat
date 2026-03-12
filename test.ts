@@ -3,13 +3,22 @@ import { execSync, spawn, ChildProcess } from "child_process";
 import { config } from "dotenv";
 import { InMemoryPlanningStore } from "./planning-store.js";
 import { createPlanningTools, PLANNING_TOOL_NAMES } from "./planning-tools.js";
-import { createGitHubTools, GITHUB_TOOL_NAMES } from "./tools.js";
+import { createGitHubTools, GITHUB_TOOL_NAMES, githubFetch, githubWrite } from "./tools.js";
 
 config(); // load .env
 
 const PORT = parseInt(process.env.TEST_PORT || "3099", 10);
 const BASE = `http://localhost:${PORT}`;
 const FREE_MODEL = "gpt-4.1"; // 0x premium requests on paid plans
+
+// ── Real GitHub API integration test config ──────────────────
+// Set TEST_GITHUB_REPO="owner/repo" to enable real-API tests.
+// Requires COPILOT_GITHUB_TOKEN with Issues (write) + Contents (write) scopes.
+const REAL_API_REPO = process.env.TEST_GITHUB_REPO ?? "";
+const REAL_API_TOKEN = process.env.COPILOT_GITHUB_TOKEN ?? "";
+const REAL_RUN_ID = `ci-${Date.now()}`;
+// Rate-limit delay between write operations (1 s, matching githubWrite's built-in guard)
+const REAL_RATE_LIMIT_DELAY = 1000;
 
 function buildClientOptions() {
   const token = process.env.COPILOT_GITHUB_TOKEN;
@@ -4563,6 +4572,493 @@ async function testPushIssueInvalidLabels(): Promise<void> {
 }
 
 // ============================================================
+// GitHub Write Tools — Real API Integration Tests
+// ============================================================
+// These tests create real resources in a configured test repository and verify
+// them with GET requests. They are skipped unless TEST_GITHUB_REPO (format:
+// "owner/repo") is provided in the environment. COPILOT_GITHUB_TOKEN must
+// have Issues (write) and Contents (write) scopes.
+//
+// Usage: TEST_GITHUB_REPO=KennethHeine/test-chat npm test
+
+/**
+ * Returns a human-readable reason why real GitHub API tests are skipped,
+ * or null if they should run.
+ */
+function realApiSkipReason(): string | null {
+  if (!REAL_API_REPO) {
+    return "TEST_GITHUB_REPO not set; skipping real GitHub API integration tests.";
+  }
+  if (!REAL_API_TOKEN) {
+    return "COPILOT_GITHUB_TOKEN not set; skipping real GitHub API integration tests.";
+  }
+  const parts = REAL_API_REPO.split("/");
+  if (parts.length !== 2 || !parts[0] || !parts[1]) {
+    return `TEST_GITHUB_REPO is malformed ("${REAL_API_REPO}"); expected "owner/repo". Skipping real GitHub API integration tests.`;
+  }
+  return null;
+}
+
+function skipRealApiTests(): boolean {
+  return realApiSkipReason() !== null;
+}
+
+function realOwner(): string {
+  return REAL_API_REPO.split("/")[0];
+}
+
+function realRepo(): string {
+  return REAL_API_REPO.split("/")[1];
+}
+
+/** Deletes a GitHub milestone by number. Used for post-test cleanup. */
+async function cleanupGithubMilestone(milestoneNumber: number): Promise<void> {
+  await githubWrite(
+    REAL_API_TOKEN,
+    "DELETE",
+    `/repos/${encodeURIComponent(realOwner())}/${encodeURIComponent(realRepo())}/milestones/${milestoneNumber}`
+  );
+}
+
+/** Closes a GitHub issue. Issues cannot be deleted via API; closing is the accepted cleanup. */
+async function closeGithubIssue(issueNumber: number): Promise<void> {
+  await githubWrite(
+    REAL_API_TOKEN,
+    "PATCH",
+    `/repos/${encodeURIComponent(realOwner())}/${encodeURIComponent(realRepo())}/issues/${issueNumber}`,
+    { state: "closed" }
+  );
+}
+
+/** Deletes a Git branch ref. Used for post-test cleanup. */
+async function cleanupGithubBranch(branchName: string): Promise<void> {
+  await githubWrite(
+    REAL_API_TOKEN,
+    "DELETE",
+    `/repos/${encodeURIComponent(realOwner())}/${encodeURIComponent(realRepo())}/git/refs/heads/${encodeURIComponent(branchName)}`
+  );
+}
+
+/** Deletes a GitHub label by name. Used for post-test cleanup. */
+async function cleanupGithubLabel(labelName: string): Promise<void> {
+  await githubWrite(
+    REAL_API_TOKEN,
+    "DELETE",
+    `/repos/${encodeURIComponent(realOwner())}/${encodeURIComponent(realRepo())}/labels/${encodeURIComponent(labelName)}`
+  );
+}
+
+// ─── create_github_milestone — real API ──────────────────────
+
+async function testRealApiCreateGithubMilestoneCreatesAndDeletes(): Promise<void> {
+  const skipReason = realApiSkipReason();
+  if (skipReason) {
+    log("  ", skipReason);
+    return;
+  }
+  const store = new InMemoryPlanningStore();
+  const { goalId, milestoneId, sessionId } = await seedGoalAndMilestone(store);
+  // Use a unique name to avoid collisions with real milestones
+  const msName = `ci-ms-${REAL_RUN_ID}`;
+  await store.updateMilestone(milestoneId, { name: msName });
+
+  const tools = createGitHubTools(REAL_API_TOKEN, store);
+  const tool = tools.find((t) => t.name === "create_github_milestone")!;
+
+  let createdNumber: number | undefined;
+  try {
+    const result: any = await tool.handler(
+      { milestoneId, goalId, sessionId, owner: realOwner(), repo: realRepo() },
+      STUB_INVOCATION
+    );
+    if (typeof result.githubNumber !== "number") {
+      throw new Error(`Expected numeric githubNumber, got: ${JSON.stringify(result)}`);
+    }
+    createdNumber = result.githubNumber;
+    if (!result.githubUrl?.includes("milestone")) {
+      throw new Error(`Unexpected githubUrl: ${result.githubUrl}`);
+    }
+    // Verify the planning store was updated
+    const updated = await store.getMilestone(milestoneId);
+    if (updated?.githubNumber !== createdNumber) {
+      throw new Error(`Store githubNumber mismatch: expected ${createdNumber}, got ${updated?.githubNumber}`);
+    }
+    log("  ", `Created GitHub milestone #${createdNumber}: '${msName}'`);
+    // Verify the milestone actually exists via GET
+    const fetched: any = await githubFetch(
+      REAL_API_TOKEN,
+      `/repos/${encodeURIComponent(realOwner())}/${encodeURIComponent(realRepo())}/milestones/${createdNumber}`
+    );
+    if (fetched.title !== msName) {
+      throw new Error(`Milestone title mismatch: expected '${msName}', got '${fetched.title}'`);
+    }
+  } finally {
+    if (createdNumber !== undefined) {
+      await new Promise<void>((r) => setTimeout(r, REAL_RATE_LIMIT_DELAY));
+      await cleanupGithubMilestone(createdNumber).catch((e) =>
+        log("  ", `Warning: milestone cleanup failed (#${createdNumber}): ${e.message}`)
+      );
+    }
+  }
+}
+
+async function testRealApiCreateGithubMilestoneIdempotentWhenExists(): Promise<void> {
+  const skipReason = realApiSkipReason();
+  if (skipReason) {
+    log("  ", skipReason);
+    return;
+  }
+  const store = new InMemoryPlanningStore();
+  const { goalId, milestoneId, sessionId } = await seedGoalAndMilestone(store);
+  const msName = `ci-ms-idem-${REAL_RUN_ID}`;
+  await store.updateMilestone(milestoneId, { name: msName });
+
+  const tools = createGitHubTools(REAL_API_TOKEN, store);
+  const tool = tools.find((t) => t.name === "create_github_milestone")!;
+
+  let createdNumber: number | undefined;
+  try {
+    // First call — creates the milestone
+    const first: any = await tool.handler(
+      { milestoneId, goalId, sessionId, owner: realOwner(), repo: realRepo() },
+      STUB_INVOCATION
+    );
+    createdNumber = first.githubNumber;
+    log("  ", `First call: created milestone #${createdNumber}`);
+    await new Promise<void>((r) => setTimeout(r, REAL_RATE_LIMIT_DELAY));
+
+    // Second call — must return the same milestone number (idempotent)
+    const second: any = await tool.handler(
+      { milestoneId, goalId, sessionId, owner: realOwner(), repo: realRepo() },
+      STUB_INVOCATION
+    );
+    if (second.githubNumber !== createdNumber) {
+      throw new Error(`Idempotency failed: second call returned #${second.githubNumber}, expected #${createdNumber}`);
+    }
+    log("  ", `Second call: idempotently returned milestone #${second.githubNumber}`);
+  } finally {
+    if (createdNumber !== undefined) {
+      await new Promise<void>((r) => setTimeout(r, REAL_RATE_LIMIT_DELAY));
+      await cleanupGithubMilestone(createdNumber).catch((e) =>
+        log("  ", `Warning: milestone cleanup failed (#${createdNumber}): ${e.message}`)
+      );
+    }
+  }
+}
+
+// ─── create_github_issue — real API ──────────────────────────
+
+async function testRealApiCreateGithubIssueCreatesAndCloses(): Promise<void> {
+  const skipReason = realApiSkipReason();
+  if (skipReason) {
+    log("  ", skipReason);
+    return;
+  }
+  const store = new InMemoryPlanningStore();
+  const { goalId, draftId, sessionId } = await seedGoalMilestoneAndDraft(store);
+  // Use a unique title so the test issue is clearly identifiable
+  await store.updateIssueDraft(draftId, { title: `[ci-test] Issue ${REAL_RUN_ID}` });
+
+  const tools = createGitHubTools(REAL_API_TOKEN, store);
+  const tool = tools.find((t) => t.name === "create_github_issue")!;
+
+  let createdNumber: number | undefined;
+  try {
+    const result: any = await tool.handler(
+      { draftId, goalId, sessionId, owner: realOwner(), repo: realRepo() },
+      STUB_INVOCATION
+    );
+    if (typeof result.githubIssueNumber !== "number") {
+      throw new Error(`Expected numeric githubIssueNumber, got: ${JSON.stringify(result)}`);
+    }
+    createdNumber = result.githubIssueNumber;
+    if (!result.githubIssueUrl?.includes("issues")) {
+      throw new Error(`Unexpected githubIssueUrl: ${result.githubIssueUrl}`);
+    }
+    // Verify draft status was updated to 'created'
+    const updatedDraft = await store.getIssueDraft(draftId);
+    if (updatedDraft?.status !== "created") {
+      throw new Error(`Expected draft status 'created', got '${updatedDraft?.status}'`);
+    }
+    if (updatedDraft?.githubIssueNumber !== createdNumber) {
+      throw new Error(`Draft githubIssueNumber mismatch: expected ${createdNumber}, got ${updatedDraft?.githubIssueNumber}`);
+    }
+    log("  ", `Created GitHub issue #${createdNumber}: ${result.githubIssueUrl}`);
+    // Verify the issue actually exists via GET
+    const fetched: any = await githubFetch(
+      REAL_API_TOKEN,
+      `/repos/${encodeURIComponent(realOwner())}/${encodeURIComponent(realRepo())}/issues/${createdNumber}`
+    );
+    if (fetched.number !== createdNumber) {
+      throw new Error(`Issue number mismatch in fetched response: expected ${createdNumber}, got ${fetched.number}`);
+    }
+    if (fetched.state !== "open") {
+      throw new Error(`Expected issue state 'open', got '${fetched.state}'`);
+    }
+  } finally {
+    if (createdNumber !== undefined) {
+      await new Promise<void>((r) => setTimeout(r, REAL_RATE_LIMIT_DELAY));
+      await closeGithubIssue(createdNumber).catch((e) =>
+        log("  ", `Warning: issue cleanup failed (#${createdNumber}): ${e.message}`)
+      );
+    }
+  }
+}
+
+async function testRealApiCreateGithubIssueIdempotentWhenAlreadyCreated(): Promise<void> {
+  const skipReason = realApiSkipReason();
+  if (skipReason) {
+    log("  ", skipReason);
+    return;
+  }
+  const store = new InMemoryPlanningStore();
+  const { goalId, draftId, sessionId } = await seedGoalMilestoneAndDraft(store);
+  await store.updateIssueDraft(draftId, { title: `[ci-test] Idempotency ${REAL_RUN_ID}` });
+
+  const tools = createGitHubTools(REAL_API_TOKEN, store);
+  const tool = tools.find((t) => t.name === "create_github_issue")!;
+
+  let createdNumber: number | undefined;
+  try {
+    // First call — creates the issue
+    const first: any = await tool.handler(
+      { draftId, goalId, sessionId, owner: realOwner(), repo: realRepo() },
+      STUB_INVOCATION
+    );
+    createdNumber = first.githubIssueNumber;
+    log("  ", `First call: created issue #${createdNumber}`);
+    await new Promise<void>((r) => setTimeout(r, REAL_RATE_LIMIT_DELAY));
+
+    // Second call — draft is already 'created', must return early with alreadyCreated flag
+    const second: any = await tool.handler(
+      { draftId, goalId, sessionId, owner: realOwner(), repo: realRepo() },
+      STUB_INVOCATION
+    );
+    if (second.githubIssueNumber !== createdNumber) {
+      throw new Error(`Idempotency failed: second call returned #${second.githubIssueNumber}, expected #${createdNumber}`);
+    }
+    if (second.alreadyCreated !== true) {
+      throw new Error("Expected alreadyCreated:true on second call");
+    }
+    log("  ", `Second call: idempotently returned issue #${second.githubIssueNumber}`);
+  } finally {
+    if (createdNumber !== undefined) {
+      await new Promise<void>((r) => setTimeout(r, REAL_RATE_LIMIT_DELAY));
+      await closeGithubIssue(createdNumber).catch((e) =>
+        log("  ", `Warning: issue cleanup failed (#${createdNumber}): ${e.message}`)
+      );
+    }
+  }
+}
+
+// ─── create_github_branch — real API ─────────────────────────
+
+async function testRealApiCreateGithubBranchCreatesAndDeletes(): Promise<void> {
+  const skipReason = realApiSkipReason();
+  if (skipReason) {
+    log("  ", skipReason);
+    return;
+  }
+  const tools = createGitHubTools(REAL_API_TOKEN);
+  const tool = tools.find((t) => t.name === "create_github_branch")!;
+  const branchName = `ci-test-branch-${REAL_RUN_ID}`;
+
+  // Resolve the default branch's HEAD SHA to use as base
+  const repoData: any = await githubFetch(
+    REAL_API_TOKEN,
+    `/repos/${encodeURIComponent(realOwner())}/${encodeURIComponent(realRepo())}`
+  );
+  const defaultBranch: string = repoData.default_branch ?? "main";
+  const refData: any = await githubFetch(
+    REAL_API_TOKEN,
+    `/repos/${encodeURIComponent(realOwner())}/${encodeURIComponent(realRepo())}/git/ref/heads/${encodeURIComponent(defaultBranch)}`
+  );
+  const baseSha: string = refData.object.sha;
+
+  let createdBranchName: string | undefined;
+  try {
+    const result: any = await tool.handler(
+      { owner: realOwner(), repo: realRepo(), branchName, baseSha },
+      STUB_INVOCATION
+    );
+    if (result.branchName !== branchName) {
+      throw new Error(`Expected branchName '${branchName}', got '${result.branchName}'`);
+    }
+    if (result.alreadyExists !== false) {
+      throw new Error("Expected alreadyExists false for a new branch");
+    }
+    createdBranchName = result.branchName;
+    log("  ", `Created branch '${result.ref}' at ${result.sha?.slice(0, 8)}`);
+    // Verify the branch actually exists via GET
+    const fetched: any = await githubFetch(
+      REAL_API_TOKEN,
+      `/repos/${encodeURIComponent(realOwner())}/${encodeURIComponent(realRepo())}/git/ref/heads/${encodeURIComponent(branchName)}`
+    );
+    if (!fetched.ref?.includes(branchName)) {
+      throw new Error(`Branch ref not found after creation: ${fetched.ref}`);
+    }
+    if (fetched.object?.sha !== baseSha) {
+      throw new Error(`Branch SHA mismatch: expected ${baseSha}, got ${fetched.object?.sha}`);
+    }
+  } finally {
+    if (createdBranchName !== undefined) {
+      await new Promise<void>((r) => setTimeout(r, REAL_RATE_LIMIT_DELAY));
+      await cleanupGithubBranch(createdBranchName).catch((e) =>
+        log("  ", `Warning: branch cleanup failed ('${createdBranchName}'): ${e.message}`)
+      );
+    }
+  }
+}
+
+async function testRealApiCreateGithubBranchIdempotentWhenExists(): Promise<void> {
+  const skipReason = realApiSkipReason();
+  if (skipReason) {
+    log("  ", skipReason);
+    return;
+  }
+  const tools = createGitHubTools(REAL_API_TOKEN);
+  const tool = tools.find((t) => t.name === "create_github_branch")!;
+  const branchName = `ci-test-branch-idem-${REAL_RUN_ID}`;
+
+  const repoData: any = await githubFetch(
+    REAL_API_TOKEN,
+    `/repos/${encodeURIComponent(realOwner())}/${encodeURIComponent(realRepo())}`
+  );
+  const defaultBranch: string = repoData.default_branch ?? "main";
+  const refData: any = await githubFetch(
+    REAL_API_TOKEN,
+    `/repos/${encodeURIComponent(realOwner())}/${encodeURIComponent(realRepo())}/git/ref/heads/${encodeURIComponent(defaultBranch)}`
+  );
+  const baseSha: string = refData.object.sha;
+
+  let createdBranchName: string | undefined;
+  try {
+    // First call — creates the branch
+    const first: any = await tool.handler(
+      { owner: realOwner(), repo: realRepo(), branchName, baseSha },
+      STUB_INVOCATION
+    );
+    createdBranchName = first.branchName;
+    log("  ", `First call: created branch '${first.branchName}'`);
+    await new Promise<void>((r) => setTimeout(r, REAL_RATE_LIMIT_DELAY));
+
+    // Second call — branch already exists; must return alreadyExists: true
+    const second: any = await tool.handler(
+      { owner: realOwner(), repo: realRepo(), branchName, baseSha },
+      STUB_INVOCATION
+    );
+    if (second.alreadyExists !== true) {
+      throw new Error(`Expected alreadyExists true on second call, got: ${JSON.stringify(second)}`);
+    }
+    if (second.branchName !== branchName) {
+      throw new Error(`Expected branchName '${branchName}' on second call, got '${second.branchName}'`);
+    }
+    log("  ", `Second call: idempotently returned branch '${second.branchName}' (alreadyExists: true)`);
+  } finally {
+    if (createdBranchName !== undefined) {
+      await new Promise<void>((r) => setTimeout(r, REAL_RATE_LIMIT_DELAY));
+      await cleanupGithubBranch(createdBranchName).catch((e) =>
+        log("  ", `Warning: branch cleanup failed ('${createdBranchName}'): ${e.message}`)
+      );
+    }
+  }
+}
+
+// ─── manage_github_labels — real API ─────────────────────────
+
+async function testRealApiManageGithubLabelsCreatesAndDeletes(): Promise<void> {
+  const skipReason = realApiSkipReason();
+  if (skipReason) {
+    log("  ", skipReason);
+    return;
+  }
+  const tools = createGitHubTools(REAL_API_TOKEN);
+  const tool = tools.find((t) => t.name === "manage_github_labels")!;
+  const labelName = `ci-test-label-${REAL_RUN_ID}`;
+
+  let labelCreated = false;
+  try {
+    const result: any = await tool.handler(
+      {
+        owner: realOwner(),
+        repo: realRepo(),
+        labels: [{ name: labelName, color: "d93f0b", description: "CI integration test label" }],
+      },
+      STUB_INVOCATION
+    );
+    if (!Array.isArray(result.labels) || result.labels.length !== 1) {
+      throw new Error(`Expected 1 label in result, got: ${JSON.stringify(result)}`);
+    }
+    if (result.labels[0].alreadyExists !== false) {
+      throw new Error(`Expected alreadyExists false for new label, got: ${JSON.stringify(result.labels[0])}`);
+    }
+    labelCreated = true;
+    log("  ", `Created GitHub label: '${labelName}'`);
+    // Verify the label actually exists via GET
+    const fetched: any = await githubFetch(
+      REAL_API_TOKEN,
+      `/repos/${encodeURIComponent(realOwner())}/${encodeURIComponent(realRepo())}/labels/${encodeURIComponent(labelName)}`
+    );
+    if (fetched.name !== labelName) {
+      throw new Error(`Label name mismatch: expected '${labelName}', got '${fetched.name}'`);
+    }
+    if (fetched.color !== "d93f0b") {
+      throw new Error(`Label color mismatch: expected 'd93f0b', got '${fetched.color}'`);
+    }
+  } finally {
+    if (labelCreated) {
+      await new Promise<void>((r) => setTimeout(r, REAL_RATE_LIMIT_DELAY));
+      await cleanupGithubLabel(labelName).catch((e) =>
+        log("  ", `Warning: label cleanup failed ('${labelName}'): ${e.message}`)
+      );
+    }
+  }
+}
+
+async function testRealApiManageGithubLabelsIdempotentWhenExists(): Promise<void> {
+  const skipReason = realApiSkipReason();
+  if (skipReason) {
+    log("  ", skipReason);
+    return;
+  }
+  const tools = createGitHubTools(REAL_API_TOKEN);
+  const tool = tools.find((t) => t.name === "manage_github_labels")!;
+  const labelName = `ci-test-label-idem-${REAL_RUN_ID}`;
+
+  let labelCreated = false;
+  try {
+    // First call — creates the label
+    const first: any = await tool.handler(
+      { owner: realOwner(), repo: realRepo(), labels: [{ name: labelName, color: "0075ca" }] },
+      STUB_INVOCATION
+    );
+    if (first.labels[0].alreadyExists !== false) {
+      throw new Error("Expected alreadyExists false on first call");
+    }
+    labelCreated = true;
+    log("  ", `First call: created label '${labelName}'`);
+    await new Promise<void>((r) => setTimeout(r, REAL_RATE_LIMIT_DELAY));
+
+    // Second call — label already exists; must return alreadyExists: true
+    const second: any = await tool.handler(
+      { owner: realOwner(), repo: realRepo(), labels: [{ name: labelName, color: "0075ca" }] },
+      STUB_INVOCATION
+    );
+    if (second.labels[0].alreadyExists !== true) {
+      throw new Error(`Expected alreadyExists true on second call, got: ${JSON.stringify(second.labels[0])}`);
+    }
+    log("  ", `Second call: idempotently returned label '${labelName}' (alreadyExists: true)`);
+  } finally {
+    if (labelCreated) {
+      await new Promise<void>((r) => setTimeout(r, REAL_RATE_LIMIT_DELAY));
+      await cleanupGithubLabel(labelName).catch((e) =>
+        log("  ", `Warning: label cleanup failed ('${labelName}'): ${e.message}`)
+      );
+    }
+  }
+}
+
+// ============================================================
 // Main
 // ============================================================
 
@@ -4839,6 +5335,22 @@ async function main() {
   await run("manage_github_labels: description over 100 chars throws", testManageGithubLabelsDescriptionTooLongThrows);
   await run("manage_github_labels: empty owner throws", testManageGithubLabelsMissingOwnerThrows);
   await run("manage_github_labels: empty labels array throws", testManageGithubLabelsEmptyArrayThrows);
+
+  // --- GitHub Write Tools — Real API integration tests ---
+  console.log("\n── GitHub Write Tools — Real API Integration Tests ──\n");
+  const realApiBannerReason = realApiSkipReason();
+  if (realApiBannerReason) {
+    console.log(`  (${realApiBannerReason})\n`);
+  }
+
+  await run("create_github_milestone (real API): creates milestone and verifies via GET", testRealApiCreateGithubMilestoneCreatesAndDeletes);
+  await run("create_github_milestone (real API): idempotent when milestone already exists", testRealApiCreateGithubMilestoneIdempotentWhenExists);
+  await run("create_github_issue (real API): creates issue and verifies via GET", testRealApiCreateGithubIssueCreatesAndCloses);
+  await run("create_github_issue (real API): idempotent when draft already created", testRealApiCreateGithubIssueIdempotentWhenAlreadyCreated);
+  await run("create_github_branch (real API): creates branch and verifies via GET", testRealApiCreateGithubBranchCreatesAndDeletes);
+  await run("create_github_branch (real API): idempotent when branch already exists (422)", testRealApiCreateGithubBranchIdempotentWhenExists);
+  await run("manage_github_labels (real API): creates label and verifies via GET", testRealApiManageGithubLabelsCreatesAndDeletes);
+  await run("manage_github_labels (real API): idempotent when label already exists (422)", testRealApiManageGithubLabelsIdempotentWhenExists);
 
   // --- Summary ---
   console.log("\n═══════════════════════════════════════════════");
