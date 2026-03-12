@@ -1340,7 +1340,6 @@ The SDK uses "Infinite Sessions" (enabled by default) to manage context windows:
 
 **This project's usage:** Infinite sessions are enabled by default (we don't override the setting), so compaction runs automatically. However, we don't:
 - Configure custom compaction thresholds
-- Listen to compaction events
 - Use the workspace path
 - Resume sessions after restart
 
@@ -1352,7 +1351,7 @@ The SDK uses "Infinite Sessions" (enabled by default) to manage context windows:
 | **No context replay** | When a new SDK session is created for an existing conversation, old messages are not replayed into it. | Model starts fresh even though messages are displayed. | Replay persisted messages into new sessions via `session.send()` calls, or use `resumeSession()` |
 | **Frontend-backend message divergence** | localStorage and sessionStore can hold different messages if the fire-and-forget `PUT` fails. | Messages visible in one browser tab may not appear in another. | Add retry logic or confirmation for message persistence |
 | **SDK context ≠ displayed messages** | The SDK's internal context (via `getMessages()`) returns `SessionEvent[]` which includes tool calls, reasoning, etc. Our storage only saves `ChatMessage[]` (role + text). | Tool call details and reasoning are lost in persistence. | Store full SDK events instead of simplified messages |
-| **No compaction visibility** | The SDK compacts context silently. Users don't know when older context is being summarized. | Long conversations may have subtly degraded recall of earlier topics. | Listen to `session.compaction_start/complete` events and show UI indicators |
+| **Compaction visibility** | The SDK compacts context silently. Users receive a `compaction` SSE event when compaction starts or completes, but no UI indicator is shown yet. | Long conversations may have subtly degraded recall of earlier topics with no visual feedback. | Show a "Optimizing context..." badge in the UI on `compaction` SSE events |
 | **No cross-device context** | SDK sessions are per-server-instance. A user on device A has a different SDK context than on device B, even for the same session ID. | Inconsistent model behavior across devices. | Would require a shared CLI server or session replay from storage |
 
 ---
@@ -1365,7 +1364,7 @@ This section catalogs every SDK feature that this project does **not** currently
 
 | Feature | SDK Method | What It Does | Used? |
 |---------|-----------|--------------|-------|
-| Resume sessions | `client.resumeSession(id, config)` | Reconnects to an existing CLI-side session, preserving full conversation context | ✅ |
+| Resume sessions | `client.resumeSession(id, config)` | Would reconnect to an existing CLI-side session, preserving full conversation context after restart | ❌ |
 | List SDK sessions | `client.listSessions(filter?)` | Lists sessions managed by the CLI (not our storage layer) | ❌ |
 | Delete SDK sessions | `client.deleteSession(id)` | Deletes a session and its data from the CLI's disk storage | ❌ |
 | Ping | `client.ping(message?)` | Health check — verifies RPC connection is alive | ❌ |
@@ -1665,7 +1664,7 @@ These session events are not currently listened to:
 | `tool.execution_progress` | Tool progress | Could show progress bars |
 | `permission.requested` | Permission needed | Could show permission prompts |
 
-> **Note on removed entries:** Earlier versions of this table listed many events that are now handled. The following events have been removed from this table because they are actively listened to and forwarded via SSE: `assistant.usage` → SSE `usage`, `tool.execution_start/complete` → SSE `tool_start`/`tool_end`, `session.title_changed` → SSE `title`, `session.compaction_start/complete` → SSE `compaction`, `subagent.started/completed/failed` → SSE `subagent_start`/`subagent_end`, `session.mode_changed` → SSE `planning_start`, and `assistant.intent` → SSE `intent`. Additionally, `planning.started` and `planning.end` were removed because they **do not exist** in the SDK — the real planning events are `session.mode_changed` and `exit_plan_mode.requested`.
+> **Note on removed entries:** Earlier versions of this table listed many events that are now handled. The following events have been removed from this table because they are actively listened to and forwarded via SSE: `assistant.usage` → SSE `usage`, `tool.execution_start/complete` → SSE `tool_start`/`tool_complete`, `session.title_changed` → SSE `title`, `session.compaction_start/complete` → SSE `compaction`, `subagent.started/completed/failed` → SSE `subagent_start`/`subagent_end`, `session.mode_changed` → SSE `planning_start`/`plan_ready`, and `assistant.intent` → SSE `intent`. Additionally, `planning.started` and `planning.end` were removed because they **do not exist** in the SDK — the real planning events are `session.mode_changed` and `exit_plan_mode.requested`.
 
 ### 8.14 RPC Methods
 
@@ -1704,6 +1703,7 @@ These low-level RPC methods are accessible via `session.rpc` and `client.rpc`:
 
 | Feature | Why | Effort |
 |---------|-----|--------|
+| **`client.resumeSession()`** | After a server restart or container recycle, sessions lose their SDK conversation context. Storing the SDK session ID (already in `sessionStore`) and calling `resumeSession()` on reconnect would preserve full conversation history. | Medium |
 | **Message replay fallback** | When `resumeSession` fails (e.g., after a container restart that wipes CLI state), new sessions have no conversation history. Replaying persisted messages into the fresh session would rebuild context. | Medium |
 | **`session.disconnect()` idle timeout** | Add a 30-minute idle timeout that calls `session.disconnect()` and removes the session from the in-memory Map while preserving `sdkSessionId` for future resumption. | Medium |
 
