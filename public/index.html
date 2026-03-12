@@ -122,8 +122,8 @@
       color: #fff;
     }
 
-    .btn-primary:hover { background: oklch(0.58 0.18 255); transform: translateY(-1px); }
-    .btn-primary:disabled { opacity: 0.5; cursor: default; transform: none; }
+    .btn-primary:hover:not(:disabled) { background: oklch(0.58 0.18 255); transform: translateY(-1px); }
+    .btn-primary:disabled { opacity: 0.5; cursor: default; }
 
     .btn-danger {
       background: var(--color-danger);
@@ -133,7 +133,7 @@
       font-weight: 500;
     }
 
-    .btn-danger:hover { background: oklch(0.58 0.22 25); transform: translateY(-1px); }
+    .btn-danger:hover:not(:disabled) { background: oklch(0.58 0.22 25); transform: translateY(-1px); }
 
     /* Messages area */
     #messages {
