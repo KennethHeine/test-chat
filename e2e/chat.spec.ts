@@ -1181,3 +1181,312 @@ test("research tracker: summary shows open/researching/resolved counts", async (
   await expect(page.locator(".research-tracker-summary")).toContainText("Researching: 1");
   await expect(page.locator(".research-tracker-summary")).toContainText("Resolved: 1");
 });
+
+// ─── Milestone Timeline Dashboard Page ────────────────────────
+
+const STUB_MILESTONES = [
+  {
+    id: "ms-a",
+    goalId: STUB_GOAL_ID,
+    name: "Foundation",
+    goal: "Set up core infrastructure",
+    scope: "Auth and data layer only",
+    order: 1,
+    dependencies: [],
+    acceptanceCriteria: ["Login works"],
+    exitCriteria: [],
+    status: "complete",
+  },
+  {
+    id: "ms-b",
+    goalId: STUB_GOAL_ID,
+    name: "API Layer",
+    goal: "Expose REST endpoints",
+    scope: "CRUD endpoints, no UI",
+    order: 2,
+    dependencies: ["ms-a"],
+    acceptanceCriteria: ["All endpoints return 200"],
+    exitCriteria: [],
+    status: "in-progress",
+  },
+  {
+    id: "ms-c",
+    goalId: STUB_GOAL_ID,
+    name: "Frontend",
+    goal: "Build the user interface",
+    scope: "Dashboard only",
+    order: 3,
+    dependencies: ["ms-b"],
+    acceptanceCriteria: ["UI renders on mobile"],
+    exitCriteria: [],
+    status: "draft",
+  },
+];
+
+/** Stubs milestone API routes for dashboard tests. */
+async function stubMilestoneRoutes(page: Page) {
+  await page.route("**/api/goals", (route) => {
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        goals: [
+          {
+            id: STUB_GOAL_ID,
+            sessionId: "session-1",
+            intent: "I want to build a feature-rich dashboard.",
+            goal: "Deliver a planning dashboard with goal, research, and milestone views",
+            problemStatement: "Users lack visibility into planning state.",
+            businessValue: "Increases planning throughput.",
+            targetOutcome: "Dashboard shows all planning data.",
+            successCriteria: [],
+            assumptions: [],
+            constraints: [],
+            risks: [],
+            createdAt: "2024-01-01T10:00:00.000Z",
+            updatedAt: "2024-01-02T10:00:00.000Z",
+          },
+        ],
+      }),
+    });
+  });
+
+  await page.route(`**/api/goals/${STUB_GOAL_ID}/milestones`, (route) => {
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ milestones: STUB_MILESTONES }),
+    });
+  });
+
+  await page.route(`**/api/goals/${STUB_GOAL_ID}/research`, (route) => {
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ research: [] }),
+    });
+  });
+
+  await page.route(`**/api/milestones/ms-a/issues`, (route) => {
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        issues: [
+          { id: "i1", milestoneId: "ms-a", goalId: STUB_GOAL_ID, title: "Setup auth", body: "", labels: [], sequence: 1 },
+          { id: "i2", milestoneId: "ms-a", goalId: STUB_GOAL_ID, title: "Setup DB", body: "", labels: [], sequence: 2 },
+        ],
+      }),
+    });
+  });
+
+  await page.route(`**/api/milestones/ms-b/issues`, (route) => {
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        issues: [
+          { id: "i3", milestoneId: "ms-b", goalId: STUB_GOAL_ID, title: "GET /goals", body: "", labels: [], sequence: 1 },
+        ],
+      }),
+    });
+  });
+
+  await page.route(`**/api/milestones/ms-c/issues`, (route) => {
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ issues: [] }),
+    });
+  });
+
+  await page.route("**/api/health", (route) => {
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ status: "ok", storage: "memory" }),
+    });
+  });
+}
+
+test("milestone timeline page: milestones rendered in correct order", async ({ page }) => {
+  await stubMilestoneRoutes(page);
+  await page.goto("/");
+  await page.evaluate(() => localStorage.setItem("copilot_github_token", "fake-test-token"));
+
+  // Switch to dashboard and navigate to milestones page
+  await page.locator("#view-toggle-btn").click();
+  await page.locator(".dashboard-nav-item[data-page='milestones']").click();
+  await expect(page.locator("#dashboard-page-milestones")).toBeVisible();
+
+  // Wait for milestone items to load
+  await expect(page.locator(".milestone-timeline-item").first()).toBeVisible({ timeout: 10_000 });
+
+  // Should have 3 milestones
+  await expect(page.locator(".milestone-timeline-item")).toHaveCount(3);
+
+  // Check order numbers are correct
+  const items = page.locator(".milestone-timeline-item");
+  await expect(items.nth(0).locator(".milestone-timeline-order")).toHaveText("#1");
+  await expect(items.nth(1).locator(".milestone-timeline-order")).toHaveText("#2");
+  await expect(items.nth(2).locator(".milestone-timeline-order")).toHaveText("#3");
+});
+
+test("milestone timeline page: milestone names displayed correctly", async ({ page }) => {
+  await stubMilestoneRoutes(page);
+  await page.goto("/");
+  await page.evaluate(() => localStorage.setItem("copilot_github_token", "fake-test-token"));
+
+  await page.locator("#view-toggle-btn").click();
+  await page.locator(".dashboard-nav-item[data-page='milestones']").click();
+  await expect(page.locator(".milestone-timeline-item").first()).toBeVisible({ timeout: 10_000 });
+
+  const items = page.locator(".milestone-timeline-item");
+  await expect(items.nth(0).locator(".milestone-timeline-name")).toHaveText("Foundation");
+  await expect(items.nth(1).locator(".milestone-timeline-name")).toHaveText("API Layer");
+  await expect(items.nth(2).locator(".milestone-timeline-name")).toHaveText("Frontend");
+});
+
+test("milestone timeline page: status badges displayed correctly", async ({ page }) => {
+  await stubMilestoneRoutes(page);
+  await page.goto("/");
+  await page.evaluate(() => localStorage.setItem("copilot_github_token", "fake-test-token"));
+
+  await page.locator("#view-toggle-btn").click();
+  await page.locator(".dashboard-nav-item[data-page='milestones']").click();
+  await expect(page.locator(".milestone-timeline-item").first()).toBeVisible({ timeout: 10_000 });
+
+  const items = page.locator(".milestone-timeline-item");
+  await expect(items.nth(0).locator(".milestone-timeline-status")).toHaveClass(/status-complete/);
+  await expect(items.nth(0).locator(".milestone-timeline-status")).toHaveText("complete");
+  await expect(items.nth(1).locator(".milestone-timeline-status")).toHaveClass(/status-in-progress/);
+  await expect(items.nth(2).locator(".milestone-timeline-status")).toHaveClass(/status-draft/);
+});
+
+test("milestone timeline page: issue counts accurate per milestone", async ({ page }) => {
+  await stubMilestoneRoutes(page);
+  await page.goto("/");
+  await page.evaluate(() => localStorage.setItem("copilot_github_token", "fake-test-token"));
+
+  await page.locator("#view-toggle-btn").click();
+  await page.locator(".dashboard-nav-item[data-page='milestones']").click();
+  await expect(page.locator(".milestone-timeline-item").first()).toBeVisible({ timeout: 10_000 });
+
+  const items = page.locator(".milestone-timeline-item");
+  await expect(items.nth(0).locator(".milestone-timeline-issue-count")).toHaveText("2 issues");
+  await expect(items.nth(1).locator(".milestone-timeline-issue-count")).toHaveText("1 issue");
+  await expect(items.nth(2).locator(".milestone-timeline-issue-count")).toHaveText("0 issues");
+});
+
+test("milestone timeline page: dependencies visually indicated", async ({ page }) => {
+  await stubMilestoneRoutes(page);
+  await page.goto("/");
+  await page.evaluate(() => localStorage.setItem("copilot_github_token", "fake-test-token"));
+
+  await page.locator("#view-toggle-btn").click();
+  await page.locator(".dashboard-nav-item[data-page='milestones']").click();
+  await expect(page.locator(".milestone-timeline-item").first()).toBeVisible({ timeout: 10_000 });
+
+  const items = page.locator(".milestone-timeline-item");
+
+  // First milestone has no dependencies
+  await expect(items.nth(0).locator(".milestone-timeline-deps")).toHaveCount(0);
+
+  // Second milestone depends on first (#1)
+  await expect(items.nth(1).locator(".milestone-timeline-deps")).toBeVisible();
+  await expect(items.nth(1).locator(".milestone-timeline-dep-tag")).toHaveText("#1");
+
+  // Third milestone depends on second (#2)
+  await expect(items.nth(2).locator(".milestone-timeline-deps")).toBeVisible();
+  await expect(items.nth(2).locator(".milestone-timeline-dep-tag")).toHaveText("#2");
+});
+
+test("milestone timeline page: summary line shows status counts", async ({ page }) => {
+  await stubMilestoneRoutes(page);
+  await page.goto("/");
+  await page.evaluate(() => localStorage.setItem("copilot_github_token", "fake-test-token"));
+
+  await page.locator("#view-toggle-btn").click();
+  await page.locator(".dashboard-nav-item[data-page='milestones']").click();
+  await expect(page.locator(".milestone-timeline-summary")).toBeVisible({ timeout: 10_000 });
+
+  // 1 draft, 0 ready, 1 in-progress, 1 complete
+  await expect(page.locator(".milestone-timeline-summary")).toContainText("Draft: 1");
+  await expect(page.locator(".milestone-timeline-summary")).toContainText("In Progress: 1");
+  await expect(page.locator(".milestone-timeline-summary")).toContainText("Complete: 1");
+});
+
+test("milestone timeline page: XSS prevention in milestone name and goal", async ({ page }) => {
+  await page.route("**/api/goals", (route) => {
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        goals: [
+          {
+            id: STUB_GOAL_ID,
+            sessionId: "session-1",
+            intent: "test",
+            goal: "test goal",
+            problemStatement: "",
+            businessValue: "",
+            targetOutcome: "",
+            successCriteria: [],
+            assumptions: [],
+            constraints: [],
+            risks: [],
+            createdAt: "2024-01-01T10:00:00.000Z",
+            updatedAt: "2024-01-02T10:00:00.000Z",
+          },
+        ],
+      }),
+    });
+  });
+
+  await page.route(`**/api/goals/${STUB_GOAL_ID}/milestones`, (route) => {
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        milestones: [
+          {
+            id: "ms-xss",
+            goalId: STUB_GOAL_ID,
+            name: '<script>alert("xss")</script>Malicious name',
+            goal: '<img src=x onerror=alert(1)>Malicious goal',
+            scope: "",
+            order: 1,
+            dependencies: [],
+            acceptanceCriteria: [],
+            exitCriteria: [],
+            status: "draft",
+          },
+        ],
+      }),
+    });
+  });
+
+  await page.route(`**/api/milestones/ms-xss/issues`, (route) => {
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ issues: [] }) });
+  });
+
+  await page.route("**/api/health", (route) => {
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ status: "ok", storage: "memory" }) });
+  });
+
+  await page.goto("/");
+  await page.evaluate(() => localStorage.setItem("copilot_github_token", "fake-test-token"));
+
+  await page.locator("#view-toggle-btn").click();
+  await page.locator(".dashboard-nav-item[data-page='milestones']").click();
+  await expect(page.locator(".milestone-timeline-item").first()).toBeVisible({ timeout: 10_000 });
+
+  // The raw text should appear escaped (not executed) in the DOM
+  const item = page.locator(".milestone-timeline-item").first();
+  await expect(item.locator(".milestone-timeline-name")).toContainText("Malicious name");
+  await expect(item.locator(".milestone-timeline-goal")).toContainText("Malicious goal");
+
+  // The injected script tag text should appear as text, not as an executable script element
+  await expect(item.locator(".milestone-timeline-name")).toContainText('<script>');
+  await expect(item.locator(".milestone-timeline-goal")).toContainText('<img');
+});
