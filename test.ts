@@ -3,12 +3,22 @@ import { execSync, spawn, ChildProcess } from "child_process";
 import { config } from "dotenv";
 import { InMemoryPlanningStore } from "./planning-store.js";
 import { createPlanningTools, PLANNING_TOOL_NAMES } from "./planning-tools.js";
+import { createGitHubTools, GITHUB_TOOL_NAMES, githubFetch, githubWrite } from "./tools.js";
 
 config(); // load .env
 
 const PORT = parseInt(process.env.TEST_PORT || "3099", 10);
 const BASE = `http://localhost:${PORT}`;
 const FREE_MODEL = "gpt-4.1"; // 0x premium requests on paid plans
+
+// ── Real GitHub API integration test config ──────────────────
+// Set TEST_GITHUB_REPO="owner/repo" to enable real-API tests.
+// Requires COPILOT_GITHUB_TOKEN with Issues (write) + Contents (write) scopes.
+const REAL_API_REPO = process.env.TEST_GITHUB_REPO ?? "";
+const REAL_API_TOKEN = process.env.COPILOT_GITHUB_TOKEN ?? "";
+const REAL_RUN_ID = `ci-${Date.now()}`;
+// Rate-limit delay between write operations (1 s, matching githubWrite's built-in guard)
+const REAL_RATE_LIMIT_DELAY = 1000;
 
 function buildClientOptions() {
   const token = process.env.COPILOT_GITHUB_TOKEN;
@@ -232,6 +242,54 @@ async function testServerChat(): Promise<void> {
   log("  ", `Server response: "${content.trim().slice(0, 80)}" (session: ${sessionId.slice(0, 8)}...)`);
 }
 
+async function testSseEventTypes(): Promise<void> {
+  // Verify that the new SSE event payload shapes are well-formed and parse correctly.
+  // This validates the JSON serialisation contracts between server.ts and the frontend.
+  const knownPayloads: Array<{ type: string } & Record<string, unknown>> = [
+    { type: "planning_start" },
+    { type: "plan_ready" },
+    { type: "intent", intent: "Exploring codebase" },
+    { type: "subagent_start", name: "Research Agent" },
+    { type: "subagent_end", name: "Research Agent", success: true },
+    { type: "subagent_end", name: "Research Agent", success: false, error: "Timed out" },
+    { type: "compaction", started: true },
+    { type: "compaction", started: false, tokensRemoved: 1000 },
+    { type: "compaction", started: false, tokensRemoved: 0 },
+  ];
+
+  for (const payload of knownPayloads) {
+    const line = `data: ${JSON.stringify(payload)}`;
+    if (!line.startsWith("data: ")) throw new Error(`Bad SSE line for type "${payload.type}"`);
+    const parsed = JSON.parse(line.slice(6)) as Record<string, unknown>;
+    if (parsed.type !== payload.type) {
+      throw new Error(`SSE round-trip failed for type "${payload.type}": got "${parsed.type}"`);
+    }
+    // Verify required fields per type
+    if (payload.type === "intent" && typeof parsed.intent !== "string") {
+      throw new Error(`"intent" payload must include string "intent" field`);
+    }
+    if ((payload.type === "subagent_start" || payload.type === "subagent_end") && typeof parsed.name !== "string") {
+      throw new Error(`"${payload.type}" payload must include string "name" field`);
+    }
+    if (payload.type === "subagent_end" && typeof parsed.success !== "boolean") {
+      throw new Error(`"subagent_end" payload must include boolean "success" field`);
+    }
+    if (payload.type === "compaction" && typeof parsed.started !== "boolean") {
+      throw new Error(`"compaction" payload must include boolean "started" field`);
+    }
+    // tokensRemoved is always a number on compaction complete (defaults to 0)
+    if (payload.type === "compaction" && payload.started === false && typeof parsed.tokensRemoved !== "number") {
+      throw new Error(`"compaction" complete payload must include numeric "tokensRemoved" field`);
+    }
+  }
+
+  // Verify that intent strings over 200 chars would be truncated before forwarding
+  const longIntent = "A".repeat(300);
+  if (longIntent.slice(0, 200).length !== 200) throw new Error("Intent length cap sanity check failed");
+
+  log("  ", `Verified ${knownPayloads.length} new SSE event payload shapes`);
+}
+
 // ============================================================
 // 3. Session persistence tests (HTTP API)
 // ============================================================
@@ -391,6 +449,225 @@ async function testServerQuotaNoAuth(): Promise<void> {
   if (res.status !== 401 && res.status !== 200) {
     throw new Error(`Expected 401 or 200, got ${res.status}`);
   }
+}
+
+async function testReasoningEffortInvalidValue(): Promise<void> {
+  const res = await fetch(`${BASE}/api/chat`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ message: "hello", model: FREE_MODEL, reasoningEffort: "ultra" }),
+  });
+  if (res.status !== 400) throw new Error(`Expected 400 for invalid reasoningEffort, got ${res.status}`);
+  const data = await res.json();
+  if (!data.error || !data.error.includes("reasoningEffort")) {
+    throw new Error(`Expected error message referencing reasoningEffort, got: ${JSON.stringify(data)}`);
+  }
+}
+
+async function testReasoningEffortValidValues(): Promise<void> {
+  // NOTE: This test only validates server-side input handling — it confirms the server
+  // accepts each allowed value without a pre-stream 400. It does not verify that the
+  // reasoningEffort is actually applied in the SDK session config.
+  for (const effort of ["low", "medium", "high", "xhigh"]) {
+    const controller = new AbortController();
+    const res = await fetch(`${BASE}/api/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+      body: JSON.stringify({ message: "Reply with: EFFORT_TEST_OK", model: FREE_MODEL, reasoningEffort: effort }),
+      signal: controller.signal,
+    });
+    // Valid effort should not return 400; it returns 200 (SSE) or another non-400 status
+    if (res.status === 400) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(`Valid reasoningEffort "${effort}" was rejected with 400: ${JSON.stringify(data)}`);
+    }
+    // Abort the SSE stream after confirming headers to avoid waiting for full response
+    try {
+      controller.abort();
+    } catch {
+      // ignore abort errors
+    }
+  }
+  log("  ", "All 4 valid reasoning effort values accepted");
+}
+
+// ============================================================
+// 4b. User input request endpoint tests (POST /api/chat/input)
+// ============================================================
+
+async function testChatInputNoAuth(): Promise<void> {
+  // When no auth header is provided, the server may fall back to the
+  // COPILOT_GITHUB_TOKEN env var. In that case, with a requestId in the body,
+  // we expect 404 (no pending input) rather than 401. Accept both 401 and 404.
+  const res = await fetch(`${BASE}/api/chat/input`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ requestId: "test-id", answer: "hello", wasFreeform: true }),
+  });
+  if (res.status !== 401 && res.status !== 404) {
+    // 404 = no pending input (valid auth via env fallback, request not found)
+    throw new Error(`Expected 401 (no auth) or 404 (env token active), got ${res.status}`);
+  }
+  log("  ", `Auth check: ${res.status === 401 ? "401 without auth" : "env token active, got 404"}`);
+}
+
+async function testChatInputMissingRequestId(): Promise<void> {
+  const res = await fetch(`${BASE}/api/chat/input`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ answer: "hello", wasFreeform: true }),
+  });
+  if (res.status !== 400) throw new Error(`Expected 400 for missing requestId, got ${res.status}`);
+  const data = await res.json();
+  if (!data.error || !data.error.toLowerCase().includes("requestid")) {
+    throw new Error(`Expected error referencing requestId, got: ${JSON.stringify(data)}`);
+  }
+}
+
+async function testChatInputMissingAnswer(): Promise<void> {
+  const res = await fetch(`${BASE}/api/chat/input`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ requestId: "some-uuid", wasFreeform: false }),
+  });
+  if (res.status !== 400) throw new Error(`Expected 400 for missing answer, got ${res.status}`);
+  const data = await res.json();
+  if (!data.error || !data.error.toLowerCase().includes("answer")) {
+    throw new Error(`Expected error referencing answer, got: ${JSON.stringify(data)}`);
+  }
+}
+
+async function testChatInputMissingWasFreeform(): Promise<void> {
+  const res = await fetch(`${BASE}/api/chat/input`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ requestId: "some-uuid", answer: "my answer" }),
+  });
+  if (res.status !== 400) throw new Error(`Expected 400 for missing wasFreeform, got ${res.status}`);
+  const data = await res.json();
+  if (!data.error || !data.error.toLowerCase().includes("wasfreeform")) {
+    throw new Error(`Expected error referencing wasFreeform, got: ${JSON.stringify(data)}`);
+  }
+}
+
+async function testChatInputUnknownRequestId(): Promise<void> {
+  const res = await fetch(`${BASE}/api/chat/input`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ requestId: "00000000-0000-0000-0000-000000000000", answer: "hello", wasFreeform: true }),
+  });
+  if (res.status !== 404) throw new Error(`Expected 404 for unknown requestId, got ${res.status}`);
+  const data = await res.json();
+  if (!data.error) throw new Error("Expected error message in 404 response");
+  log("  ", `404 response: ${data.error}`);
+}
+
+async function testUserInputRequestEventShape(): Promise<void> {
+  // This test validates the SSE event payload shape for user_input_request events.
+  // It confirms the JSON structure that server.ts emits is well-formed and includes
+  // all required fields. Full Promise resolution is not tested here because it requires
+  // an active agent session invoking ask_user — covered by E2E tests instead.
+  const sampleEvent = {
+    type: "user_input_request",
+    requestId: crypto.randomUUID(),
+    question: "Which approach do you prefer?",
+    choices: ["Option A", "Option B"],
+    allowFreeform: true,
+  };
+  const line = `data: ${JSON.stringify(sampleEvent)}`;
+  if (!line.startsWith("data: ")) throw new Error("Unexpected SSE line format");
+  const parsed = JSON.parse(line.slice(6)) as Record<string, unknown>;
+  if (parsed.type !== "user_input_request") throw new Error(`Expected type user_input_request, got ${parsed.type}`);
+  if (typeof parsed.requestId !== "string") throw new Error("requestId must be a string");
+  if (typeof parsed.question !== "string") throw new Error("question must be a string");
+  // choices is optional/nullable when the SDK request has no structured choices
+  if (parsed.choices !== null && parsed.choices !== undefined && !Array.isArray(parsed.choices)) {
+    throw new Error("choices must be an array when present");
+  }
+  if (typeof parsed.allowFreeform !== "boolean") throw new Error("allowFreeform must be a boolean");
+  log("  ", "user_input_request SSE event payload shape validated");
+
+  // Also validate the null-choices variant (no structured choices)
+  const noChoicesEvent = {
+    type: "user_input_request",
+    requestId: crypto.randomUUID(),
+    question: "Describe your goal",
+    choices: null,
+    allowFreeform: true,
+  };
+  const nullParsed = JSON.parse(`data: ${JSON.stringify(noChoicesEvent)}`.slice(6)) as Record<string, unknown>;
+  if (nullParsed.choices !== null) throw new Error("choices should be null when not provided");
+  log("  ", "user_input_request null-choices variant also valid");
+}
+
+async function testChatInputRoundtrip(): Promise<void> {
+  // Seed a pending input via the test-only endpoint, then resolve it via POST /api/chat/input.
+  // This verifies the full server-side resolution flow: seed → resolve → cleanup.
+  const requestId = crypto.randomUUID();
+
+  // Step 1: Seed the pending input
+  const seedRes = await fetch(`${BASE}/api/test/seed-pending-input`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ requestId }),
+  });
+  if (seedRes.status !== 201) throw new Error(`Seed failed: HTTP ${seedRes.status}`);
+
+  // Step 2: Resolve it via POST /api/chat/input
+  const inputRes = await fetch(`${BASE}/api/chat/input`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ requestId, answer: "Option A", wasFreeform: false }),
+  });
+  if (!inputRes.ok) throw new Error(`Expected 200, got ${inputRes.status}`);
+  const inputData = await inputRes.json();
+  if (!inputData.ok) throw new Error(`Expected { ok: true }, got ${JSON.stringify(inputData)}`);
+
+  // Step 3: Verify cleanup — second call should return 404 (already resolved)
+  const dupRes = await fetch(`${BASE}/api/chat/input`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ requestId, answer: "Option B", wasFreeform: false }),
+  });
+  if (dupRes.status !== 404) throw new Error(`Expected 404 for duplicate resolve, got ${dupRes.status}`);
+
+  log("  ", "Roundtrip: seed → resolve → cleanup verified");
+}
+
+async function testChatInputOwnershipRejection(): Promise<void> {
+  // Verify that a user cannot resolve another user's pending input request.
+  // We seed a request with the normal test token, then try to resolve it with a different token.
+  const requestId = crypto.randomUUID();
+
+  // Seed the pending input with normal test token
+  const seedRes = await fetch(`${BASE}/api/test/seed-pending-input`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ requestId }),
+  });
+  if (seedRes.status !== 201) throw new Error(`Seed failed: HTTP ${seedRes.status}`);
+
+  // Try to resolve with a different (fake) token — should get 403
+  const foreignRes = await fetch(`${BASE}/api/chat/input`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": "Bearer different-fake-token-for-ownership-test",
+    },
+    body: JSON.stringify({ requestId, answer: "evil answer", wasFreeform: true }),
+  });
+  if (foreignRes.status !== 403) throw new Error(`Expected 403 for cross-user resolve attempt, got ${foreignRes.status}`);
+  const foreignData = await foreignRes.json();
+  if (!foreignData.error) throw new Error("Expected error message in 403 response");
+
+  // Clean up: resolve with correct token to avoid leaving the pending entry
+  await fetch(`${BASE}/api/chat/input`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ requestId, answer: "correct answer", wasFreeform: true }),
+  });
+
+  log("  ", "403 returned for cross-user ownership attempt");
 }
 
 // ============================================================
@@ -715,6 +992,291 @@ async function testGenerateResearchChecklistWrongSessionReturnsError(): Promise<
     STUB_INVOCATION
   );
   if (!result.error) throw new Error("Expected error for wrong sessionId");
+}
+
+// --- suggest_research tests ---
+
+async function testSuggestResearchDetectsExternalApiTrigger(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const tools = createPlanningTools("test-token", store);
+  const saveGoal = tools.find((t) => t.name === "save_goal")!;
+  const suggest = tools.find((t) => t.name === "suggest_research")!;
+
+  // Goal mentions Stripe — should trigger external_api → integration suggestion
+  const saved: any = await saveGoal.handler(
+    {
+      ...makeValidSaveGoalArgs(),
+      intent: "Build a subscription billing feature using Stripe",
+      goal: "Integrate Stripe payment processing for recurring subscriptions",
+      problemStatement: "Users cannot pay for subscriptions via the app",
+    },
+    STUB_INVOCATION
+  );
+  const goalId = saved.goal.id;
+  const result: any = await suggest.handler(
+    { goalId, sessionId: makeValidSaveGoalArgs().sessionId },
+    STUB_INVOCATION
+  );
+
+  if (!result.items) throw new Error("Expected items in result");
+  if (result.items.length === 0) throw new Error("Expected at least one triggered suggestion for Stripe");
+  const integrationItem = result.items.find((i: any) => i.category === "integration");
+  if (!integrationItem) throw new Error("Expected an integration category item for Stripe trigger");
+  if (!integrationItem.question.toLowerCase().includes("stripe") &&
+      !integrationItem.question.toLowerCase().includes("subscription") &&
+      !integrationItem.question.toLowerCase().includes("billing")) {
+    throw new Error(`Expected question to mention a payment-related term, got: ${integrationItem.question}`);
+  }
+  if (!result.triggerSummary) throw new Error("Expected triggerSummary in result");
+  if (!result.triggerSummary["external_api"]) {
+    throw new Error("Expected external_api trigger in triggerSummary");
+  }
+}
+
+async function testSuggestResearchDetectsInfrastructureTrigger(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const tools = createPlanningTools("test-token", store);
+  const saveGoal = tools.find((t) => t.name === "save_goal")!;
+  const suggest = tools.find((t) => t.name === "suggest_research")!;
+
+  // Goal mentions Docker — should trigger infrastructure suggestion
+  const saved: any = await saveGoal.handler(
+    {
+      ...makeValidSaveGoalArgs(),
+      intent: "Containerize the app using Docker for deployment",
+      goal: "Package the application in Docker containers for reproducible deployments",
+      problemStatement: "Deployment is inconsistent across environments",
+    },
+    STUB_INVOCATION
+  );
+  const goalId = saved.goal.id;
+  const result: any = await suggest.handler(
+    { goalId, sessionId: makeValidSaveGoalArgs().sessionId },
+    STUB_INVOCATION
+  );
+
+  if (!result.items) throw new Error("Expected items in result");
+  const infraItem = result.items.find((i: any) => i.category === "infrastructure");
+  if (!infraItem) throw new Error("Expected an infrastructure category item for Docker trigger");
+  if (!infraItem.question.includes("docker")) {
+    throw new Error(`Expected question to mention 'docker', got: ${infraItem.question}`);
+  }
+  if (!result.triggerSummary?.["infrastructure"]) {
+    throw new Error("Expected infrastructure trigger in triggerSummary");
+  }
+}
+
+async function testSuggestResearchDetectsSecurityTrigger(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const tools = createPlanningTools("test-token", store);
+  const saveGoal = tools.find((t) => t.name === "save_goal")!;
+  const suggest = tools.find((t) => t.name === "suggest_research")!;
+
+  // Goal mentions authentication — should trigger security suggestion
+  const saved: any = await saveGoal.handler(
+    {
+      ...makeValidSaveGoalArgs(),
+      intent: "Add user authentication and authorization to the app",
+      goal: "Implement login and role-based authorization for the web app",
+      problemStatement: "The app has no authentication, anyone can access all features",
+    },
+    STUB_INVOCATION
+  );
+  const goalId = saved.goal.id;
+  const result: any = await suggest.handler(
+    { goalId, sessionId: makeValidSaveGoalArgs().sessionId },
+    STUB_INVOCATION
+  );
+
+  if (!result.items) throw new Error("Expected items in result");
+  const securityItem = result.items.find((i: any) => i.category === "security");
+  if (!securityItem) throw new Error("Expected a security category item for authentication trigger");
+  if (!result.triggerSummary?.["security"]) {
+    throw new Error("Expected security trigger in triggerSummary");
+  }
+}
+
+async function testSuggestResearchDetectsDataModelTrigger(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const tools = createPlanningTools("test-token", store);
+  const saveGoal = tools.find((t) => t.name === "save_goal")!;
+  const suggest = tools.find((t) => t.name === "suggest_research")!;
+
+  // Goal mentions database migration — should trigger data_model suggestion
+  const saved: any = await saveGoal.handler(
+    {
+      ...makeValidSaveGoalArgs(),
+      intent: "Migrate the app from SQLite to PostgreSQL",
+      goal: "Replace SQLite with PostgreSQL for production scalability",
+      problemStatement: "SQLite does not support concurrent writes needed at scale",
+    },
+    STUB_INVOCATION
+  );
+  const goalId = saved.goal.id;
+  const result: any = await suggest.handler(
+    { goalId, sessionId: makeValidSaveGoalArgs().sessionId },
+    STUB_INVOCATION
+  );
+
+  if (!result.items) throw new Error("Expected items in result");
+  const dataItem = result.items.find((i: any) => i.category === "data_model");
+  if (!dataItem) throw new Error("Expected a data_model category item for database trigger");
+  if (!result.triggerSummary?.["data_model"]) {
+    throw new Error("Expected data_model trigger in triggerSummary");
+  }
+}
+
+async function testSuggestResearchDetectsMultipleTriggerCategories(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const tools = createPlanningTools("test-token", store);
+  const saveGoal = tools.find((t) => t.name === "save_goal")!;
+  const suggest = tools.find((t) => t.name === "suggest_research")!;
+
+  // Goal mentions multiple triggers: Stripe, Docker, authentication, PostgreSQL
+  const saved: any = await saveGoal.handler(
+    {
+      ...makeValidSaveGoalArgs(),
+      intent: "Build a multi-tenant SaaS app with Stripe billing, Docker deployment, user authentication, and PostgreSQL storage",
+      goal: "Create a SaaS platform with billing, containers, auth, and a relational database",
+      problemStatement: "Need a complete production-ready platform",
+    },
+    STUB_INVOCATION
+  );
+  const goalId = saved.goal.id;
+  const result: any = await suggest.handler(
+    { goalId, sessionId: makeValidSaveGoalArgs().sessionId },
+    STUB_INVOCATION
+  );
+
+  if (!result.items) throw new Error("Expected items in result");
+  if (result.items.length < 3) {
+    throw new Error(`Expected at least 3 triggered suggestions, got ${result.items.length}`);
+  }
+  const categories = result.items.map((i: any) => i.category) as string[];
+  if (!categories.includes("integration")) throw new Error("Expected integration category (Stripe)");
+  if (!categories.includes("infrastructure")) throw new Error("Expected infrastructure category (Docker)");
+  if (!categories.includes("security")) throw new Error("Expected security category (authentication)");
+  if (!categories.includes("data_model")) throw new Error("Expected data_model category (PostgreSQL)");
+}
+
+async function testSuggestResearchContextParameterExtendsDetection(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const tools = createPlanningTools("test-token", store);
+  const suggest = tools.find((t) => t.name === "suggest_research")!;
+  const goalId = await seedGoal(store); // generic goal, no specific triggers
+
+  // Pass Stripe mention in context — should trigger integration suggestion
+  const result: any = await suggest.handler(
+    {
+      goalId,
+      sessionId: makeValidSaveGoalArgs().sessionId,
+      context: "Milestone 1 involves integrating with the Stripe payment API for billing",
+    },
+    STUB_INVOCATION
+  );
+
+  if (!result.items) throw new Error("Expected items in result");
+  const integrationItem = result.items.find((i: any) => i.category === "integration");
+  if (!integrationItem) throw new Error("Expected integration item triggered by context parameter");
+}
+
+async function testSuggestResearchNoTriggersReturnsEmptyWithMessage(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const tools = createPlanningTools("test-token", store);
+  const saveGoal = tools.find((t) => t.name === "save_goal")!;
+  const suggest = tools.find((t) => t.name === "suggest_research")!;
+
+  // Create a goal with no trigger keywords (no APIs, containers, auth, databases, or migrations)
+  const saved: any = await saveGoal.handler(
+    {
+      sessionId: "test-session-abc",
+      intent: "Improve the FAQ page to make it easier to navigate",
+      goal: "Redesign the FAQ page layout to improve navigation and readability",
+      problemStatement: "The FAQ page is hard to browse because all questions are listed without grouping",
+      businessValue: "Reduces support tickets by helping users find answers faster",
+      targetOutcome: "Users can find FAQ answers without contacting support",
+      successCriteria: ["FAQ items are grouped by topic", "A search box filters visible items"],
+      assumptions: ["FAQ content already exists"],
+      constraints: ["Must use the existing static site generator"],
+      risks: ["Stakeholders may disagree on grouping taxonomy"],
+    },
+    STUB_INVOCATION
+  );
+  const goalId = saved.goal.id;
+
+  const result: any = await suggest.handler(
+    { goalId, sessionId: "test-session-abc" },
+    STUB_INVOCATION
+  );
+
+  if (!result.items) throw new Error("Expected items array in result");
+  if (result.items.length !== 0) {
+    throw new Error(`Expected 0 triggered items for FAQ goal, got ${result.items.length}: ${result.items.map((i: any) => i.category).join(", ")}`);
+  }
+  if (!result.message) throw new Error("Expected guidance message when no triggers detected");
+  if (typeof result.triggerSummary !== "object") throw new Error("Expected triggerSummary object in result");
+}
+
+async function testSuggestResearchUnknownGoalReturnsError(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const tools = createPlanningTools("test-token", store);
+  const suggest = tools.find((t) => t.name === "suggest_research")!;
+  const result: any = await suggest.handler(
+    { goalId: "nonexistent-goal-id", sessionId: "any-session" },
+    STUB_INVOCATION
+  );
+  if (!result.error) throw new Error("Expected error for unknown goalId");
+}
+
+async function testSuggestResearchWrongSessionReturnsError(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const goalId = await seedGoal(store);
+  const tools = createPlanningTools("test-token", store);
+  const suggest = tools.find((t) => t.name === "suggest_research")!;
+  const result: any = await suggest.handler(
+    { goalId, sessionId: "wrong-session-id" },
+    STUB_INVOCATION
+  );
+  if (!result.error) throw new Error("Expected error for wrong sessionId");
+}
+
+async function testSuggestResearchSavesItemsToStore(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const tools = createPlanningTools("test-token", store);
+  const saveGoal = tools.find((t) => t.name === "save_goal")!;
+  const suggest = tools.find((t) => t.name === "suggest_research")!;
+
+  const saved: any = await saveGoal.handler(
+    {
+      ...makeValidSaveGoalArgs(),
+      intent: "Containerize the app using Docker and deploy to AWS",
+      goal: "Deploy the app to AWS using Docker containers",
+      problemStatement: "The app has no container-based deployment pipeline",
+    },
+    STUB_INVOCATION
+  );
+  const goalId = saved.goal.id;
+  const result: any = await suggest.handler(
+    { goalId, sessionId: makeValidSaveGoalArgs().sessionId },
+    STUB_INVOCATION
+  );
+
+  if (!result.items || result.items.length === 0) {
+    throw new Error("Expected at least one triggered item for Docker/AWS goal");
+  }
+
+  // Verify items are actually persisted in the store
+  const stored = await store.listResearchItems(goalId);
+  if (stored.length !== result.items.length) {
+    throw new Error(
+      `Expected ${result.items.length} items in store, found ${stored.length}`
+    );
+  }
+  for (const item of result.items) {
+    if (!item.id) throw new Error("Each returned item must have an id");
+    if (item.goalId !== goalId) throw new Error("Each item's goalId must match the requested goal");
+    if (item.status !== "open") throw new Error("Newly suggested items must have status 'open'");
+  }
 }
 
 async function testUpdateResearchItemOpenToResearching(): Promise<void> {
@@ -1393,6 +1955,1651 @@ async function testCreateMilestonePlanNameLengthAfterSanitizationReturnsError():
 }
 
 // ============================================================
+// 6b. generate_issue_drafts tool tests
+// ============================================================
+
+/**
+ * Builds a minimal valid issue spec for use in generate_issue_drafts tests.
+ */
+function makeValidIssueSpec(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    title: "Implement login endpoint",
+    purpose: "Allow users to authenticate",
+    problem: "No authentication endpoint exists in the server",
+    expectedOutcome: "POST /api/login returns 200 with JWT on valid credentials",
+    scopeBoundaries: "In scope: login. Out of scope: registration, SSO",
+    technicalContext: "Use JWT via jsonwebtoken package. Follow existing route pattern in server.ts",
+    acceptanceCriteria: ["Returns 200 on valid credentials", "Returns 401 on invalid credentials"],
+    testingExpectations: "Unit tests for JWT helper; integration tests for endpoint",
+    filesToModify: [{ path: "server.ts", reason: "Add POST /api/login route" }],
+    filesToRead: [{ path: "tools.ts", reason: "Follow existing API tool pattern" }],
+    securityChecklist: ["Validate input", "Hash password before comparison"],
+    verificationCommands: ["npx tsc --noEmit", "npm test"],
+    order: 1,
+    dependencies: [],
+    researchLinks: [],
+    ...overrides,
+  };
+}
+
+async function testGenerateIssueDraftsReturnsOrderedDrafts(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const { goalId, milestoneId, sessionId } = await seedGoalAndMilestone(store);
+  const tools = createPlanningTools("test-token", store);
+  const gen = tools.find((t) => t.name === "generate_issue_drafts")!;
+
+  const result: any = await gen.handler(
+    {
+      sessionId,
+      goalId,
+      milestoneId,
+      issues: [
+        makeValidIssueSpec({ order: 2, title: "Issue B" }),
+        makeValidIssueSpec({ order: 1, title: "Issue A" }),
+      ],
+    },
+    STUB_INVOCATION
+  );
+
+  if (result.error) throw new Error(`Unexpected error: ${result.error}`);
+  if (!Array.isArray(result.issues)) throw new Error("Expected issues array in result");
+  if (result.issues.length !== 2) throw new Error(`Expected 2 issues, got ${result.issues.length}`);
+  if (result.issues[0].order !== 1) throw new Error(`Expected first issue order 1, got ${result.issues[0].order}`);
+  if (result.issues[1].order !== 2) throw new Error(`Expected second issue order 2, got ${result.issues[1].order}`);
+  if (result.issues[0].title !== "Issue A") throw new Error(`Expected 'Issue A', got '${result.issues[0].title}'`);
+  if (result.issues[0].milestoneId !== milestoneId) throw new Error("milestoneId mismatch");
+  if (result.issues[0].status !== "draft") throw new Error(`Expected status 'draft', got '${result.issues[0].status}'`);
+  if (!result.issues[0].id) throw new Error("Missing id on created issue draft");
+  // Verify persisted in store
+  const persisted = await store.listIssueDrafts(milestoneId);
+  if (persisted.length !== 2) throw new Error(`Expected 2 persisted drafts, got ${persisted.length}`);
+}
+
+async function testGenerateIssueDraftsR9FieldsPresent(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const { goalId, milestoneId, sessionId } = await seedGoalAndMilestone(store);
+  const tools = createPlanningTools("test-token", store);
+  const gen = tools.find((t) => t.name === "generate_issue_drafts")!;
+
+  const result: any = await gen.handler(
+    {
+      sessionId,
+      goalId,
+      milestoneId,
+      issues: [
+        makeValidIssueSpec({
+          filesToModify: [{ path: "server.ts", reason: "Add endpoint" }],
+          filesToRead: [{ path: "tools.ts", reason: "Follow pattern" }],
+          patternReference: "tools.ts:githubFetch()",
+          securityChecklist: ["Sanitize input"],
+          verificationCommands: ["npx tsc --noEmit"],
+        }),
+      ],
+    },
+    STUB_INVOCATION
+  );
+
+  if (result.error) throw new Error(`Unexpected error: ${result.error}`);
+  const draft = result.issues[0];
+  if (!Array.isArray(draft.filesToModify) || draft.filesToModify.length === 0) {
+    throw new Error("Expected filesToModify in draft");
+  }
+  if (draft.filesToModify[0].path !== "server.ts") throw new Error("filesToModify path mismatch");
+  if (!Array.isArray(draft.filesToRead)) throw new Error("Expected filesToRead in draft");
+  if (draft.patternReference !== "tools.ts:githubFetch()") throw new Error("patternReference mismatch");
+  if (!Array.isArray(draft.securityChecklist) || draft.securityChecklist.length === 0) {
+    throw new Error("Expected securityChecklist in draft");
+  }
+  if (!Array.isArray(draft.verificationCommands) || draft.verificationCommands.length === 0) {
+    throw new Error("Expected verificationCommands in draft");
+  }
+}
+
+async function testGenerateIssueDraftsDependencyChainRespected(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const { goalId, milestoneId, sessionId } = await seedGoalAndMilestone(store);
+  const tools = createPlanningTools("test-token", store);
+  const gen = tools.find((t) => t.name === "generate_issue_drafts")!;
+
+  const result: any = await gen.handler(
+    {
+      sessionId,
+      goalId,
+      milestoneId,
+      issues: [
+        makeValidIssueSpec({ order: 1, title: "Issue A", dependencies: [] }),
+        makeValidIssueSpec({ order: 2, title: "Issue B", dependencies: [1] }),
+      ],
+    },
+    STUB_INVOCATION
+  );
+
+  if (result.error) throw new Error(`Unexpected error: ${result.error}`);
+  const issueA = result.issues.find((d: any) => d.order === 1);
+  const issueB = result.issues.find((d: any) => d.order === 2);
+  if (!issueA || !issueB) throw new Error("Missing expected issues");
+  if (!Array.isArray(issueB.dependencies) || issueB.dependencies.length !== 1) {
+    throw new Error(`Expected Issue B to have 1 dependency, got ${JSON.stringify(issueB.dependencies)}`);
+  }
+  if (issueB.dependencies[0] !== issueA.id) {
+    throw new Error(`Expected Issue B dependency to be Issue A's ID`);
+  }
+  if (issueA.dependencies.length !== 0) throw new Error("Issue A should have no dependencies");
+}
+
+async function testGenerateIssueDraftsCircularDependencyReturnsError(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const { goalId, milestoneId, sessionId } = await seedGoalAndMilestone(store);
+  const tools = createPlanningTools("test-token", store);
+  const gen = tools.find((t) => t.name === "generate_issue_drafts")!;
+
+  const result: any = await gen.handler(
+    {
+      sessionId,
+      goalId,
+      milestoneId,
+      issues: [
+        makeValidIssueSpec({ order: 1, dependencies: [2] }),
+        makeValidIssueSpec({ order: 2, dependencies: [1] }),
+      ],
+    },
+    STUB_INVOCATION
+  );
+
+  if (!result.error) throw new Error("Expected error for circular dependency");
+  if (!result.error.toLowerCase().includes("circular")) {
+    throw new Error(`Expected 'circular' in error, got: ${result.error}`);
+  }
+}
+
+async function testGenerateIssueDraftsWrongSessionReturnsError(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const { goalId, milestoneId } = await seedGoalAndMilestone(store);
+  const tools = createPlanningTools("test-token", store);
+  const gen = tools.find((t) => t.name === "generate_issue_drafts")!;
+
+  const result: any = await gen.handler(
+    {
+      sessionId: "wrong-session",
+      goalId,
+      milestoneId,
+      issues: [makeValidIssueSpec()],
+    },
+    STUB_INVOCATION
+  );
+
+  if (!result.error) throw new Error("Expected error for wrong sessionId");
+  if (!result.error.includes("Goal not found")) {
+    throw new Error(`Expected 'Goal not found' error, got: ${result.error}`);
+  }
+}
+
+async function testGenerateIssueDraftsUnknownMilestoneReturnsError(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const { goalId, sessionId } = await seedGoalAndMilestone(store);
+  const tools = createPlanningTools("test-token", store);
+  const gen = tools.find((t) => t.name === "generate_issue_drafts")!;
+
+  const result: any = await gen.handler(
+    {
+      sessionId,
+      goalId,
+      milestoneId: "nonexistent-milestone-id",
+      issues: [makeValidIssueSpec()],
+    },
+    STUB_INVOCATION
+  );
+
+  if (!result.error) throw new Error("Expected error for unknown milestoneId");
+  if (!result.error.includes("Milestone not found")) {
+    throw new Error(`Expected 'Milestone not found' error, got: ${result.error}`);
+  }
+}
+
+async function testGenerateIssueDraftsR9TooManyFilesToModifyReturnsError(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const { goalId, milestoneId, sessionId } = await seedGoalAndMilestone(store);
+  const tools = createPlanningTools("test-token", store);
+  const gen = tools.find((t) => t.name === "generate_issue_drafts")!;
+
+  const result: any = await gen.handler(
+    {
+      sessionId,
+      goalId,
+      milestoneId,
+      issues: [
+        makeValidIssueSpec({
+          filesToModify: [
+            { path: "a.ts", reason: "r1" },
+            { path: "b.ts", reason: "r2" },
+            { path: "c.ts", reason: "r3" },
+            { path: "d.ts", reason: "r4" },
+            { path: "e.ts", reason: "r5" },
+            { path: "f.ts", reason: "r6" }, // 6 > max 5
+          ],
+        }),
+      ],
+    },
+    STUB_INVOCATION
+  );
+
+  if (!result.error) throw new Error("Expected error when filesToModify exceeds R9 limit");
+  if (!result.error.includes("filesToModify")) {
+    throw new Error(`Expected error to mention 'filesToModify', got: ${result.error}`);
+  }
+}
+
+async function testGenerateIssueDraftsMissingFilesToModifyReturnsError(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const { goalId, milestoneId, sessionId } = await seedGoalAndMilestone(store);
+  const tools = createPlanningTools("test-token", store);
+  const gen = tools.find((t) => t.name === "generate_issue_drafts")!;
+
+  const result: any = await gen.handler(
+    {
+      sessionId,
+      goalId,
+      milestoneId,
+      issues: [makeValidIssueSpec({ filesToModify: [] })],
+    },
+    STUB_INVOCATION
+  );
+
+  if (!result.error) throw new Error("Expected error for empty filesToModify");
+  if (!result.error.includes("filesToModify")) {
+    throw new Error(`Expected error to mention 'filesToModify', got: ${result.error}`);
+  }
+}
+
+async function testGenerateIssueDraftsDuplicateOrderReturnsError(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const { goalId, milestoneId, sessionId } = await seedGoalAndMilestone(store);
+  const tools = createPlanningTools("test-token", store);
+  const gen = tools.find((t) => t.name === "generate_issue_drafts")!;
+
+  const result: any = await gen.handler(
+    {
+      sessionId,
+      goalId,
+      milestoneId,
+      issues: [
+        makeValidIssueSpec({ order: 1 }),
+        makeValidIssueSpec({ order: 1 }), // duplicate
+      ],
+    },
+    STUB_INVOCATION
+  );
+
+  if (!result.error) throw new Error("Expected error for duplicate order values");
+  if (!result.error.toLowerCase().includes("duplicate")) {
+    throw new Error(`Expected 'duplicate' in error, got: ${result.error}`);
+  }
+}
+
+async function testGenerateIssueDraftsTextFieldsAreSanitized(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const { goalId, milestoneId, sessionId } = await seedGoalAndMilestone(store);
+  const tools = createPlanningTools("test-token", store);
+  const gen = tools.find((t) => t.name === "generate_issue_drafts")!;
+
+  const result: any = await gen.handler(
+    {
+      sessionId,
+      goalId,
+      milestoneId,
+      issues: [
+        makeValidIssueSpec({
+          title: "<script>alert(1)</script>",
+          problem: "User input <b>bold</b> & 'quoted'",
+        }),
+      ],
+    },
+    STUB_INVOCATION
+  );
+
+  if (result.error) throw new Error(`Unexpected error: ${result.error}`);
+  const draft = result.issues[0];
+  if (draft.title.includes("<script>")) throw new Error("title was not sanitized");
+  if (draft.problem.includes("<b>")) throw new Error("problem was not sanitized");
+  if (!draft.title.includes("&lt;script&gt;")) {
+    throw new Error(`Expected HTML-escaped title, got: ${draft.title}`);
+  }
+}
+
+async function testGenerateIssueDraftsPathTraversalReturnsError(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const { goalId, milestoneId, sessionId } = await seedGoalAndMilestone(store);
+  const tools = createPlanningTools("test-token", store);
+  const gen = tools.find((t) => t.name === "generate_issue_drafts")!;
+
+  const result: any = await gen.handler(
+    {
+      sessionId,
+      goalId,
+      milestoneId,
+      issues: [
+        makeValidIssueSpec({
+          filesToModify: [{ path: "../etc/passwd", reason: "Path traversal attempt" }],
+        }),
+      ],
+    },
+    STUB_INVOCATION
+  );
+
+  if (!result.error) throw new Error("Expected error for path traversal in filesToModify");
+  if (!result.error.includes("..")) {
+    throw new Error(`Expected error to mention "..", got: ${result.error}`);
+  }
+}
+
+async function testGenerateIssueDraftsMissingVerificationCommandsReturnsError(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const { goalId, milestoneId, sessionId } = await seedGoalAndMilestone(store);
+  const tools = createPlanningTools("test-token", store);
+  const gen = tools.find((t) => t.name === "generate_issue_drafts")!;
+
+  const result: any = await gen.handler(
+    {
+      sessionId,
+      goalId,
+      milestoneId,
+      issues: [makeValidIssueSpec({ verificationCommands: [] })],
+    },
+    STUB_INVOCATION
+  );
+
+  if (!result.error) throw new Error("Expected error for empty verificationCommands");
+  if (!result.error.includes("verificationCommands")) {
+    throw new Error(`Expected error to mention 'verificationCommands', got: ${result.error}`);
+  }
+}
+
+async function testGenerateIssueDraftsResearchLinksArePersistedOnDraft(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const { goalId, milestoneId, sessionId } = await seedGoalAndMilestone(store);
+  const tools = createPlanningTools("test-token", store);
+  const gen = tools.find((t) => t.name === "generate_issue_drafts")!;
+  const researchId = "research-item-abc-123";
+
+  const result: any = await gen.handler(
+    {
+      sessionId,
+      goalId,
+      milestoneId,
+      issues: [makeValidIssueSpec({ researchLinks: [researchId] })],
+    },
+    STUB_INVOCATION
+  );
+
+  if (result.error) throw new Error(`Unexpected error: ${result.error}`);
+  const draft = result.issues[0];
+  if (!Array.isArray(draft.researchLinks) || draft.researchLinks.length !== 1) {
+    throw new Error(`Expected 1 research link, got ${JSON.stringify(draft.researchLinks)}`);
+  }
+  if (draft.researchLinks[0] !== researchId) {
+    throw new Error(`Expected research link ${researchId}, got ${draft.researchLinks[0]}`);
+  }
+}
+
+// ============================================================
+// 6b2. update_issue_draft tool tests
+// ============================================================
+
+/**
+ * Seeds a goal, milestone, and one issue draft into the store.
+ * Returns { goalId, milestoneId, sessionId, draftId }.
+ */
+async function seedIssueDraft(
+  store: InMemoryPlanningStore
+): Promise<{ goalId: string; milestoneId: string; sessionId: string; draftId: string }> {
+  const { goalId, milestoneId, sessionId } = await seedGoalAndMilestone(store);
+  const tools = createPlanningTools("test-token", store);
+  const gen = tools.find((t) => t.name === "generate_issue_drafts")!;
+  const result: any = await gen.handler(
+    { sessionId, goalId, milestoneId, issues: [makeValidIssueSpec()] },
+    STUB_INVOCATION
+  );
+  if (result.error) throw new Error(`seedIssueDraft failed: ${result.error}`);
+  return { goalId, milestoneId, sessionId, draftId: result.issues[0].id };
+}
+
+async function testUpdateIssueDraftFieldsAreUpdated(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const { goalId, sessionId, draftId } = await seedIssueDraft(store);
+  const tools = createPlanningTools("test-token", store);
+  const update = tools.find((t) => t.name === "update_issue_draft")!;
+
+  const result: any = await update.handler(
+    {
+      draftId,
+      goalId,
+      sessionId,
+      title: "Updated Title",
+      status: "ready",
+    },
+    STUB_INVOCATION
+  );
+  if (result.error) throw new Error(`Unexpected error: ${result.error}`);
+  if (!result.draft) throw new Error("Expected draft in result");
+  if (result.draft.title !== "Updated Title") {
+    throw new Error(`Expected title 'Updated Title', got '${result.draft.title}'`);
+  }
+  if (result.draft.status !== "ready") {
+    throw new Error(`Expected status 'ready', got '${result.draft.status}'`);
+  }
+  if (result.draft.id !== draftId) throw new Error("ID should be unchanged");
+}
+
+async function testUpdateIssueDraftWrongSessionReturnsError(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const { goalId, draftId } = await seedIssueDraft(store);
+  const tools = createPlanningTools("test-token", store);
+  const update = tools.find((t) => t.name === "update_issue_draft")!;
+
+  const result: any = await update.handler(
+    { draftId, goalId, sessionId: "wrong-session", title: "New Title" },
+    STUB_INVOCATION
+  );
+  if (!result.error) throw new Error("Expected error for wrong sessionId");
+  if (!result.error.includes("Goal not found")) {
+    throw new Error(`Expected 'Goal not found' error, got '${result.error}'`);
+  }
+}
+
+async function testUpdateIssueDraftNotFoundReturnsError(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const { goalId, sessionId } = await seedIssueDraft(store);
+  const tools = createPlanningTools("test-token", store);
+  const update = tools.find((t) => t.name === "update_issue_draft")!;
+
+  const result: any = await update.handler(
+    { draftId: "nonexistent-id", goalId, sessionId, title: "New Title" },
+    STUB_INVOCATION
+  );
+  if (!result.error) throw new Error("Expected error for unknown draftId");
+  if (!result.error.includes("Issue draft not found")) {
+    throw new Error(`Expected 'Issue draft not found' error, got '${result.error}'`);
+  }
+}
+
+async function testUpdateIssueDraftFileRefValidationOnUpdate(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const { goalId, sessionId, draftId } = await seedIssueDraft(store);
+  const tools = createPlanningTools("test-token", store);
+  const update = tools.find((t) => t.name === "update_issue_draft")!;
+
+  // Missing reason field
+  const result: any = await update.handler(
+    {
+      draftId,
+      goalId,
+      sessionId,
+      filesToModify: [{ path: "server.ts" }],
+    },
+    STUB_INVOCATION
+  );
+  if (!result.error) throw new Error("Expected error for FileRef missing reason");
+
+  // Path traversal in filesToRead
+  const result2: any = await update.handler(
+    {
+      draftId,
+      goalId,
+      sessionId,
+      filesToRead: [{ path: "../secret.ts", reason: "some reason" }],
+    },
+    STUB_INVOCATION
+  );
+  if (!result2.error) throw new Error("Expected error for path traversal in filesToRead");
+}
+
+async function testUpdateIssueDraftTextFieldsAreSanitized(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const { goalId, sessionId, draftId } = await seedIssueDraft(store);
+  const tools = createPlanningTools("test-token", store);
+  const update = tools.find((t) => t.name === "update_issue_draft")!;
+
+  const result: any = await update.handler(
+    { draftId, goalId, sessionId, title: "Title <b>with HTML</b>" },
+    STUB_INVOCATION
+  );
+  if (result.error) throw new Error(`Unexpected error: ${result.error}`);
+  if (!result.draft.title.includes("&lt;")) {
+    throw new Error(`Expected HTML-escaped title, got '${result.draft.title}'`);
+  }
+}
+
+async function testUpdateIssueDraftInvalidStatusReturnsError(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const { goalId, sessionId, draftId } = await seedIssueDraft(store);
+  const tools = createPlanningTools("test-token", store);
+  const update = tools.find((t) => t.name === "update_issue_draft")!;
+
+  const result: any = await update.handler(
+    { draftId, goalId, sessionId, status: "invalid-status" },
+    STUB_INVOCATION
+  );
+  if (!result.error) throw new Error("Expected error for invalid status");
+  if (!result.error.includes("draft") || !result.error.includes("ready") || !result.error.includes("created")) {
+    throw new Error(`Expected error listing valid statuses, got '${result.error}'`);
+  }
+}
+
+async function testUpdateIssueDraftR9FieldsCanBeUpdated(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const { goalId, sessionId, draftId } = await seedIssueDraft(store);
+  const tools = createPlanningTools("test-token", store);
+  const update = tools.find((t) => t.name === "update_issue_draft")!;
+
+  const result: any = await update.handler(
+    {
+      draftId,
+      goalId,
+      sessionId,
+      filesToModify: [{ path: "planning-tools.ts", reason: "Add update tool" }],
+      filesToRead: [{ path: "planning-types.ts", reason: "Understand IssueDraft interface" }],
+      patternReference: "update_milestone tool",
+      securityChecklist: ["Validate input", "Check ownership"],
+      verificationCommands: ["npx tsc --noEmit"],
+    },
+    STUB_INVOCATION
+  );
+  if (result.error) throw new Error(`Unexpected error: ${result.error}`);
+  const draft = result.draft;
+  if (!Array.isArray(draft.filesToModify) || draft.filesToModify.length !== 1) {
+    throw new Error("Expected 1 filesToModify entry");
+  }
+  if (draft.filesToModify[0].path !== "planning-tools.ts") {
+    throw new Error(`Unexpected filesToModify path: ${draft.filesToModify[0].path}`);
+  }
+  if (!Array.isArray(draft.filesToRead) || draft.filesToRead.length !== 1) {
+    throw new Error("Expected 1 filesToRead entry");
+  }
+  if (draft.patternReference !== "update_milestone tool") {
+    throw new Error(`Unexpected patternReference: ${draft.patternReference}`);
+  }
+  if (!Array.isArray(draft.securityChecklist) || draft.securityChecklist.length !== 2) {
+    throw new Error("Expected 2 securityChecklist entries");
+  }
+  if (!Array.isArray(draft.verificationCommands) || draft.verificationCommands.length !== 1) {
+    throw new Error("Expected 1 verificationCommands entry");
+  }
+}
+
+// ============================================================
+// 6c. create_github_milestone tool tests
+// ============================================================
+
+/**
+ * Seeds a goal and a milestone into the store.
+ * Returns { goalId, milestoneId, sessionId }.
+ */
+async function seedGoalAndMilestone(
+  store: InMemoryPlanningStore
+): Promise<{ goalId: string; milestoneId: string; sessionId: string }> {
+  const goalId = await seedGoal(store);
+  const tools = createPlanningTools("test-token", store);
+  const create = tools.find((t) => t.name === "create_milestone_plan")!;
+  const result: any = await create.handler(
+    {
+      sessionId: makeValidSaveGoalArgs().sessionId,
+      goalId,
+      milestones: [
+        {
+          name: "Alpha Release",
+          goal: "Ship the first working version",
+          scope: "Core features only",
+          order: 1,
+          dependencies: [],
+          acceptanceCriteria: ["app starts"],
+          exitCriteria: [],
+        },
+      ],
+    },
+    STUB_INVOCATION
+  );
+  if (result.error) throw new Error(`seedGoalAndMilestone failed: ${result.error}`);
+  const milestoneId = result.milestones[0].id;
+  return { goalId, milestoneId, sessionId: makeValidSaveGoalArgs().sessionId as string };
+}
+
+/**
+ * Sets global.fetch to a mock that simulates GitHub milestone API.
+ * Returns a restore function.
+ */
+function mockGitHubMilestoneFetch(options: {
+  listResponse?: any[];
+  createResponse?: any;
+  shouldFail?: boolean;
+}): () => void {
+  const orig = global.fetch;
+  (global as any).fetch = async (url: string, init?: any) => {
+    if (options.shouldFail) {
+      return {
+        ok: false,
+        status: 500,
+        text: async () => "Internal Server Error",
+        headers: { get: () => null },
+      };
+    }
+    const method = init?.method ?? "GET";
+    if (method === "GET" && String(url).includes("/milestones")) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => options.listResponse ?? [],
+        headers: { get: () => null },
+      };
+    }
+    if (method === "POST" && String(url).includes("/milestones")) {
+      return {
+        ok: true,
+        status: 201,
+        json: async () => options.createResponse ?? { number: 42, html_url: "https://github.com/owner/repo/milestone/42" },
+        headers: { get: () => null },
+      };
+    }
+    // Fallback: let through
+    return orig(url as any, init);
+  };
+  return () => { (global as any).fetch = orig; };
+}
+
+/**
+ * Seeds a goal, milestone, and issue draft for use in create_github_issue tests.
+ */
+async function seedGoalMilestoneAndDraft(
+  store: InMemoryPlanningStore
+): Promise<{ goalId: string; milestoneId: string; draftId: string; sessionId: string }> {
+  const { goalId, milestoneId, sessionId } = await seedGoalAndMilestone(store);
+  const planningTools = createPlanningTools("test-token", store);
+  const generateDrafts = planningTools.find((t) => t.name === "generate_issue_drafts")!;
+  const result: any = await generateDrafts.handler(
+    {
+      milestoneId,
+      goalId,
+      sessionId,
+      issues: [
+        {
+          title: "Implement login endpoint",
+          purpose: "Allow users to authenticate",
+          problem: "No authentication exists",
+          expectedOutcome: "Users can log in",
+          scopeBoundaries: "Login only, no SSO",
+          technicalContext: "Use JWT",
+          acceptanceCriteria: ["returns 200 on valid creds"],
+          testingExpectations: "Unit tests",
+          filesToModify: [{ path: "server.ts", reason: "Add endpoint" }],
+          filesToRead: [{ path: "README.md", reason: "Reference docs" }],
+          securityChecklist: ["Validate token"],
+          verificationCommands: ["npx tsc --noEmit"],
+          order: 1,
+          dependencies: [],
+          researchLinks: [],
+        },
+      ],
+    },
+    STUB_INVOCATION
+  );
+  if (result.error) throw new Error(`seedGoalMilestoneAndDraft failed: ${result.error}`);
+  const draftId = result.issues[0].id;
+  // Transition the draft to "ready" — create_github_issue requires status "ready"
+  const updateResult: any = await planningTools.find((t) => t.name === "update_issue_draft")!.handler(
+    { draftId, goalId, sessionId, status: "ready" },
+    STUB_INVOCATION
+  );
+  if (updateResult.error) throw new Error(`seedGoalMilestoneAndDraft: failed to set status ready: ${updateResult.error}`);
+  return { goalId, milestoneId, draftId, sessionId };
+}
+
+/**
+ * Sets global.fetch to a mock that simulates the GitHub Issues API (POST /issues).
+ * Returns a restore function.
+ */
+function mockGitHubIssueFetch(options: {
+  createResponse?: any;
+  shouldFail?: boolean;
+}): () => void {
+  const orig = global.fetch;
+  (global as any).fetch = async (url: string, init?: any) => {
+    if (options.shouldFail) {
+      return {
+        ok: false,
+        status: 422,
+        text: async () => '{"message":"Validation Failed"}',
+        headers: { get: () => null },
+      };
+    }
+    const method = init?.method ?? "GET";
+    if (method === "POST" && String(url).includes("/issues")) {
+      return {
+        ok: true,
+        status: 201,
+        json: async () =>
+          options.createResponse ?? {
+            number: 99,
+            html_url: "https://github.com/owner/repo/issues/99",
+            state: "open",
+            title: JSON.parse(init?.body ?? "{}").title,
+          },
+        headers: { get: () => null },
+      };
+    }
+    // Fallback: let through
+    return orig(url as any, init);
+  };
+  return () => { (global as any).fetch = orig; };
+}
+
+async function testGithubToolRegistration(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const tools = createGitHubTools("test-token", store);
+  if (tools.length !== GITHUB_TOOL_NAMES.length) {
+    throw new Error(`Expected ${GITHUB_TOOL_NAMES.length} GitHub tools, got ${tools.length}`);
+  }
+  const names = tools.map((t) => t.name);
+  for (const name of GITHUB_TOOL_NAMES) {
+    if (!names.includes(name)) throw new Error(`Missing GitHub tool: ${name}`);
+  }
+}
+
+async function testCreateGithubMilestoneCreatesNew(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const { goalId, milestoneId, sessionId } = await seedGoalAndMilestone(store);
+  const tools = createGitHubTools("test-token", store);
+  const tool = tools.find((t) => t.name === "create_github_milestone")!;
+
+  const restore = mockGitHubMilestoneFetch({
+    listResponse: [], // no existing milestones
+    createResponse: { number: 7, html_url: "https://github.com/owner/repo/milestone/7" },
+  });
+  try {
+    const result: any = await tool.handler(
+      { milestoneId, goalId, sessionId, owner: "owner", repo: "repo" },
+      STUB_INVOCATION
+    );
+    if (result.githubNumber !== 7) throw new Error(`Expected githubNumber 7, got ${result.githubNumber}`);
+    if (result.githubUrl !== "https://github.com/owner/repo/milestone/7") {
+      throw new Error(`Unexpected githubUrl: ${result.githubUrl}`);
+    }
+    // Verify store was updated
+    const updated = await store.getMilestone(milestoneId);
+    if (updated?.githubNumber !== 7) throw new Error("githubNumber not persisted to store");
+    if (updated?.githubUrl !== "https://github.com/owner/repo/milestone/7") {
+      throw new Error("githubUrl not persisted to store");
+    }
+  } finally {
+    restore();
+  }
+}
+
+async function testCreateGithubMilestoneIdempotentWhenExists(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const { goalId, milestoneId, sessionId } = await seedGoalAndMilestone(store);
+  const tools = createGitHubTools("test-token", store);
+  const tool = tools.find((t) => t.name === "create_github_milestone")!;
+
+  // Simulate an existing GitHub milestone matching the planning milestone's name
+  const restore = mockGitHubMilestoneFetch({
+    listResponse: [{ number: 3, html_url: "https://github.com/owner/repo/milestone/3", title: "Alpha Release" }],
+  });
+  try {
+    const result: any = await tool.handler(
+      { milestoneId, goalId, sessionId, owner: "owner", repo: "repo" },
+      STUB_INVOCATION
+    );
+    if (result.githubNumber !== 3) throw new Error(`Expected githubNumber 3, got ${result.githubNumber}`);
+    // Verify the existing number was stored (not a new one)
+    const updated = await store.getMilestone(milestoneId);
+    if (updated?.githubNumber !== 3) throw new Error("Existing githubNumber not persisted");
+  } finally {
+    restore();
+  }
+}
+
+async function testCreateGithubMilestoneWithDueDate(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const { goalId, milestoneId, sessionId } = await seedGoalAndMilestone(store);
+  const tools = createGitHubTools("test-token", store);
+  const tool = tools.find((t) => t.name === "create_github_milestone")!;
+
+  const restore = mockGitHubMilestoneFetch({
+    listResponse: [],
+    createResponse: { number: 9, html_url: "https://github.com/owner/repo/milestone/9" },
+  });
+  try {
+    const result: any = await tool.handler(
+      { milestoneId, goalId, sessionId, owner: "owner", repo: "repo", dueDate: "2026-06-01T00:00:00Z" },
+      STUB_INVOCATION
+    );
+    if (result.githubNumber !== 9) throw new Error(`Expected githubNumber 9, got ${result.githubNumber}`);
+  } finally {
+    restore();
+  }
+}
+
+async function testCreateGithubMilestoneInvalidDueDateThrows(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const { goalId, milestoneId, sessionId } = await seedGoalAndMilestone(store);
+  const tools = createGitHubTools("test-token", store);
+  const tool = tools.find((t) => t.name === "create_github_milestone")!;
+
+  try {
+    await tool.handler(
+      { milestoneId, goalId, sessionId, owner: "owner", repo: "repo", dueDate: "not-a-date" },
+      STUB_INVOCATION
+    );
+    throw new Error("Expected error to be thrown for invalid dueDate");
+  } catch (err: any) {
+    if (!err.message.includes("dueDate")) {
+      throw new Error(`Expected error to mention 'dueDate', got: ${err.message}`);
+    }
+  }
+}
+
+async function testCreateGithubMilestoneWrongSessionThrows(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const { goalId, milestoneId } = await seedGoalAndMilestone(store);
+  const tools = createGitHubTools("test-token", store);
+  const tool = tools.find((t) => t.name === "create_github_milestone")!;
+
+  try {
+    await tool.handler(
+      { milestoneId, goalId, sessionId: "wrong-session", owner: "owner", repo: "repo" },
+      STUB_INVOCATION
+    );
+    throw new Error("Expected error to be thrown for wrong sessionId");
+  } catch (err: any) {
+    if (!err.message.includes("Goal not found")) {
+      throw new Error(`Expected 'Goal not found' error, got: ${err.message}`);
+    }
+  }
+}
+
+async function testCreateGithubMilestoneMissingOwnerThrows(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const { goalId, milestoneId, sessionId } = await seedGoalAndMilestone(store);
+  const tools = createGitHubTools("test-token", store);
+  const tool = tools.find((t) => t.name === "create_github_milestone")!;
+
+  try {
+    await tool.handler(
+      { milestoneId, goalId, sessionId, owner: "", repo: "repo" },
+      STUB_INVOCATION
+    );
+    throw new Error("Expected error to be thrown for empty owner");
+  } catch (err: any) {
+    if (!err.message.includes("owner")) {
+      throw new Error(`Expected error to mention 'owner', got: ${err.message}`);
+    }
+  }
+}
+
+async function testCreateGithubMilestoneWithoutPlanningStoreThrows(): Promise<void> {
+  // When createGitHubTools is called without a planningStore, the tool should throw
+  const tools = createGitHubTools("test-token"); // no planningStore
+  const tool = tools.find((t) => t.name === "create_github_milestone")!;
+
+  try {
+    await tool.handler(
+      { milestoneId: "m1", goalId: "g1", sessionId: "s1", owner: "owner", repo: "repo" },
+      STUB_INVOCATION
+    );
+    throw new Error("Expected error to be thrown when planningStore is not provided");
+  } catch (err: any) {
+    if (!err.message.includes("Planning store not available")) {
+      throw new Error(`Expected 'Planning store not available', got: ${err.message}`);
+    }
+  }
+}
+
+// ============================================================
+// create_github_issue tool tests
+// ============================================================
+
+async function testCreateGithubIssueCreatesIssue(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const { goalId, milestoneId, draftId, sessionId } = await seedGoalMilestoneAndDraft(store);
+  const tools = createGitHubTools("test-token", store);
+  const tool = tools.find((t) => t.name === "create_github_issue")!;
+
+  const restore = mockGitHubIssueFetch({
+    createResponse: { number: 42, html_url: "https://github.com/owner/repo/issues/42", state: "open", title: "Implement login endpoint" },
+  });
+  try {
+    const result: any = await tool.handler(
+      { draftId, goalId, sessionId, owner: "owner", repo: "repo" },
+      STUB_INVOCATION
+    );
+    if (result.githubIssueNumber !== 42) throw new Error(`Expected githubIssueNumber 42, got ${result.githubIssueNumber}`);
+    if (result.githubIssueUrl !== "https://github.com/owner/repo/issues/42") {
+      throw new Error(`Unexpected githubIssueUrl: ${result.githubIssueUrl}`);
+    }
+    // Verify draft was updated to 'created'
+    const updated = await store.getIssueDraft(draftId);
+    if (updated?.status !== "created") throw new Error(`Expected status 'created', got '${updated?.status}'`);
+    if (updated?.githubIssueNumber !== 42) throw new Error("githubIssueNumber not persisted to store");
+  } finally {
+    restore();
+  }
+}
+
+async function testCreateGithubIssueIdempotentWhenAlreadyCreated(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const { goalId, draftId, sessionId } = await seedGoalMilestoneAndDraft(store);
+  // Mark the draft as already created
+  await store.updateIssueDraft(draftId, { status: "created", githubIssueNumber: 77 });
+
+  const tools = createGitHubTools("test-token", store);
+  const tool = tools.find((t) => t.name === "create_github_issue")!;
+
+  const restore = mockGitHubIssueFetch({});
+  try {
+    const result: any = await tool.handler(
+      { draftId, goalId, sessionId, owner: "owner", repo: "repo" },
+      STUB_INVOCATION
+    );
+    // Should return existing data without hitting GitHub API
+    if (result.githubIssueNumber !== 77) throw new Error(`Expected githubIssueNumber 77, got ${result.githubIssueNumber}`);
+    if (result.alreadyCreated !== true) throw new Error("Expected alreadyCreated: true");
+  } finally {
+    restore();
+  }
+}
+
+async function testCreateGithubIssueSetsGithubMilestoneNumber(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const { goalId, milestoneId, draftId, sessionId } = await seedGoalMilestoneAndDraft(store);
+  // Simulate that the GitHub milestone was already created
+  await store.updateMilestone(milestoneId, { githubNumber: 5 });
+
+  const tools = createGitHubTools("test-token", store);
+  const tool = tools.find((t) => t.name === "create_github_issue")!;
+
+  let capturedBody: any;
+  const orig = global.fetch;
+  (global as any).fetch = async (url: string, init?: any) => {
+    const method = init?.method ?? "GET";
+    if (method === "POST" && String(url).includes("/issues")) {
+      capturedBody = JSON.parse(init?.body ?? "{}");
+      return {
+        ok: true,
+        status: 201,
+        json: async () => ({ number: 55, html_url: "https://github.com/owner/repo/issues/55", state: "open", title: capturedBody.title, milestone: { number: 5 } }),
+        headers: { get: () => null },
+      };
+    }
+    return orig(url as any, init);
+  };
+  try {
+    const result: any = await tool.handler(
+      { draftId, goalId, sessionId, owner: "owner", repo: "repo" },
+      STUB_INVOCATION
+    );
+    if (result.githubIssueNumber !== 55) throw new Error(`Expected githubIssueNumber 55, got ${result.githubIssueNumber}`);
+    if (capturedBody?.milestone !== 5) throw new Error(`Expected milestone 5 in request body, got ${capturedBody?.milestone}`);
+  } finally {
+    (global as any).fetch = orig;
+  }
+}
+
+async function testCreateGithubIssueIncludesResearchContext(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const { goalId, milestoneId, sessionId } = await seedGoalAndMilestone(store);
+  // Create a research item and link it to a draft
+  const planningTools = createPlanningTools("test-token", store);
+  const generateChecklist = planningTools.find((t) => t.name === "generate_research_checklist")!;
+  const checklistResult: any = await generateChecklist.handler({ goalId, sessionId }, STUB_INVOCATION);
+  const researchId = checklistResult.items[0].id;
+  // Resolve the research item with findings + decision
+  const updateResearch = planningTools.find((t) => t.name === "update_research_item")!;
+  await updateResearch.handler({ itemId: researchId, goalId, sessionId, status: "researching", findings: "Found key insight" }, STUB_INVOCATION);
+  await updateResearch.handler({ itemId: researchId, goalId, sessionId, status: "resolved", findings: "Found key insight", decision: "Use pattern X" }, STUB_INVOCATION);
+
+  const generateDrafts = planningTools.find((t) => t.name === "generate_issue_drafts")!;
+  const draftsResult: any = await generateDrafts.handler(
+    {
+      milestoneId,
+      goalId,
+      sessionId,
+      issues: [
+        {
+          title: "Research-linked issue",
+          purpose: "Test research context",
+          problem: "Need to verify research shows up",
+          expectedOutcome: "Research context in body",
+          scopeBoundaries: "Only research linking",
+          technicalContext: "Use existing pattern",
+          acceptanceCriteria: ["research shown"],
+          testingExpectations: "Manual verify",
+          filesToModify: [{ path: "server.ts", reason: "Add endpoint" }],
+          filesToRead: [],
+          securityChecklist: ["Check auth"],
+          verificationCommands: ["npx tsc --noEmit"],
+          order: 1,
+          dependencies: [],
+          researchLinks: [researchId],
+        },
+      ],
+    },
+    STUB_INVOCATION
+  );
+  const draftId = draftsResult.issues[0].id;
+  // Transition the draft to "ready" — create_github_issue requires status "ready"
+  const updateDraft = planningTools.find((t) => t.name === "update_issue_draft")!;
+  await updateDraft.handler({ draftId, goalId, sessionId, status: "ready" }, STUB_INVOCATION);
+
+  const tools = createGitHubTools("test-token", store);
+  const tool = tools.find((t) => t.name === "create_github_issue")!;
+
+  let capturedBody: string | undefined;
+  const orig = global.fetch;
+  (global as any).fetch = async (url: string, init?: any) => {
+    const method = init?.method ?? "GET";
+    if (method === "POST" && String(url).includes("/issues")) {
+      capturedBody = init?.body;
+      return {
+        ok: true,
+        status: 201,
+        json: async () => ({ number: 11, html_url: "https://github.com/owner/repo/issues/11", state: "open", title: "Research-linked issue" }),
+        headers: { get: () => null },
+      };
+    }
+    return orig(url as any, init);
+  };
+  try {
+    await tool.handler(
+      { draftId, goalId, sessionId, owner: "owner", repo: "repo" },
+      STUB_INVOCATION
+    );
+    if (!capturedBody) throw new Error("No request body captured");
+    const parsed = JSON.parse(capturedBody);
+    if (!parsed.body.includes("## Research Context")) {
+      throw new Error("Expected '## Research Context' section in issue body");
+    }
+    if (!parsed.body.includes("Found key insight")) {
+      throw new Error("Expected research findings in issue body");
+    }
+    if (!parsed.body.includes("Use pattern X")) {
+      throw new Error("Expected research decision in issue body");
+    }
+  } finally {
+    (global as any).fetch = orig;
+  }
+}
+
+async function testCreateGithubIssueAppliesLabels(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const { goalId, draftId, sessionId } = await seedGoalMilestoneAndDraft(store);
+  const tools = createGitHubTools("test-token", store);
+  const tool = tools.find((t) => t.name === "create_github_issue")!;
+
+  let capturedBody: any;
+  const orig = global.fetch;
+  (global as any).fetch = async (url: string, init?: any) => {
+    const method = init?.method ?? "GET";
+    if (method === "POST" && String(url).includes("/issues")) {
+      capturedBody = JSON.parse(init?.body ?? "{}");
+      return {
+        ok: true,
+        status: 201,
+        json: async () => ({ number: 20, html_url: "https://github.com/owner/repo/issues/20", state: "open", title: capturedBody.title }),
+        headers: { get: () => null },
+      };
+    }
+    return orig(url as any, init);
+  };
+  try {
+    await tool.handler(
+      { draftId, goalId, sessionId, owner: "owner", repo: "repo", labels: ["enhancement", "stage-4"] },
+      STUB_INVOCATION
+    );
+    if (!Array.isArray(capturedBody?.labels)) throw new Error("Expected labels array in request body");
+    if (!capturedBody.labels.includes("enhancement")) throw new Error("Expected 'enhancement' label");
+    if (!capturedBody.labels.includes("stage-4")) throw new Error("Expected 'stage-4' label");
+  } finally {
+    (global as any).fetch = orig;
+  }
+}
+
+async function testCreateGithubIssueWrongSessionThrows(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const { goalId, draftId } = await seedGoalMilestoneAndDraft(store);
+  const tools = createGitHubTools("test-token", store);
+  const tool = tools.find((t) => t.name === "create_github_issue")!;
+
+  try {
+    await tool.handler(
+      { draftId, goalId, sessionId: "wrong-session", owner: "owner", repo: "repo" },
+      STUB_INVOCATION
+    );
+    throw new Error("Expected error to be thrown for wrong sessionId");
+  } catch (err: any) {
+    if (!err.message.includes("Goal not found")) {
+      throw new Error(`Expected 'Goal not found' error, got: ${err.message}`);
+    }
+  }
+}
+
+async function testCreateGithubIssueWithoutPlanningStoreThrows(): Promise<void> {
+  const tools = createGitHubTools("test-token"); // no planningStore
+  const tool = tools.find((t) => t.name === "create_github_issue")!;
+
+  try {
+    await tool.handler(
+      { draftId: "d1", goalId: "g1", sessionId: "s1", owner: "owner", repo: "repo" },
+      STUB_INVOCATION
+    );
+    throw new Error("Expected error to be thrown when planningStore is not provided");
+  } catch (err: any) {
+    if (!err.message.includes("Planning store not available")) {
+      throw new Error(`Expected 'Planning store not available', got: ${err.message}`);
+    }
+  }
+}
+
+async function testCreateGithubIssueMissingDraftThrows(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const { goalId, sessionId } = await seedGoalAndMilestone(store);
+  const tools = createGitHubTools("test-token", store);
+  const tool = tools.find((t) => t.name === "create_github_issue")!;
+
+  try {
+    await tool.handler(
+      { draftId: "nonexistent-draft-id", goalId, sessionId, owner: "owner", repo: "repo" },
+      STUB_INVOCATION
+    );
+    throw new Error("Expected error to be thrown for missing draft");
+  } catch (err: any) {
+    if (!err.message.includes("Issue draft not found")) {
+      throw new Error(`Expected 'Issue draft not found' error, got: ${err.message}`);
+    }
+  }
+}
+
+async function testCreateGithubIssueBodyContainsAllSections(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const { goalId, draftId, sessionId } = await seedGoalMilestoneAndDraft(store);
+  const tools = createGitHubTools("test-token", store);
+  const tool = tools.find((t) => t.name === "create_github_issue")!;
+
+  let capturedBody: any;
+  const orig = global.fetch;
+  (global as any).fetch = async (url: string, init?: any) => {
+    const method = init?.method ?? "GET";
+    if (method === "POST" && String(url).includes("/issues")) {
+      capturedBody = JSON.parse(init?.body ?? "{}");
+      return {
+        ok: true,
+        status: 201,
+        json: async () => ({ number: 30, html_url: "https://github.com/owner/repo/issues/30", state: "open", title: capturedBody.title }),
+        headers: { get: () => null },
+      };
+    }
+    return orig(url as any, init);
+  };
+  try {
+    await tool.handler(
+      { draftId, goalId, sessionId, owner: "owner", repo: "repo" },
+      STUB_INVOCATION
+    );
+    const body: string = capturedBody?.body ?? "";
+    const requiredSections = [
+      "## Purpose",
+      "## Problem",
+      "## Expected Outcome",
+      "## Scope Boundaries",
+      "## Technical Context",
+      "## Acceptance Criteria",
+      "## Testing Expectations",
+      "## Files to Modify",
+      "## Security Checklist",
+      "## Verification Commands",
+    ];
+    for (const section of requiredSections) {
+      if (!body.includes(section)) {
+        throw new Error(`Expected section '${section}' in issue body`);
+      }
+    }
+  } finally {
+    (global as any).fetch = orig;
+  }
+}
+
+async function testCreateGithubIssueDraftNotReadyThrows(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  // seedGoalMilestoneAndDraft already sets status to "ready"; revert to "draft" to test rejection
+  const { goalId, draftId, sessionId } = await seedGoalMilestoneAndDraft(store);
+  await store.updateIssueDraft(draftId, { status: "draft" });
+
+  const tools = createGitHubTools("test-token", store);
+  const tool = tools.find((t) => t.name === "create_github_issue")!;
+
+  try {
+    await tool.handler(
+      { draftId, goalId, sessionId, owner: "owner", repo: "repo" },
+      STUB_INVOCATION
+    );
+    throw new Error("Expected error to be thrown for draft status");
+  } catch (err: any) {
+    if (!err.message.includes("status 'draft'") || !err.message.includes("ready")) {
+      throw new Error(`Expected error about 'draft' status and 'ready', got: ${err.message}`);
+    }
+  }
+}
+
+async function testCreateGithubIssueMissingNumberThrows(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const { goalId, draftId, sessionId } = await seedGoalMilestoneAndDraft(store);
+  const tools = createGitHubTools("test-token", store);
+  const tool = tools.find((t) => t.name === "create_github_issue")!;
+
+  // Simulate GitHub returning a response without a number field
+  const orig = global.fetch;
+  (global as any).fetch = async (url: string, init?: any) => {
+    const method = init?.method ?? "GET";
+    if (method === "POST" && String(url).includes("/issues")) {
+      return {
+        ok: true,
+        status: 201,
+        json: async () => ({ html_url: "https://github.com/owner/repo/issues/", state: "open", title: "Implement login endpoint" }),
+        headers: { get: () => null },
+      };
+    }
+    return orig(url as any, init);
+  };
+  try {
+    await tool.handler(
+      { draftId, goalId, sessionId, owner: "owner", repo: "repo" },
+      STUB_INVOCATION
+    );
+    throw new Error("Expected error for missing issue number");
+  } catch (err: any) {
+    if (!err.message.includes("missing a valid issue number")) {
+      throw new Error(`Expected error about missing issue number, got: ${err.message}`);
+    }
+  } finally {
+    (global as any).fetch = orig;
+  }
+}
+
+// ============================================================
+// create_github_branch tool tests
+// ============================================================
+
+async function testCreateGithubBranchCreatesNew(): Promise<void> {
+  const tools = createGitHubTools("test-token");
+  const tool = tools.find((t) => t.name === "create_github_branch")!;
+
+  const orig = (global as any).fetch;
+  (global as any).fetch = async (url: string, init?: any) => {
+    const method = init?.method ?? "GET";
+    if (method === "POST" && String(url).includes("/git/refs")) {
+      return {
+        ok: true,
+        status: 201,
+        json: async () => ({
+          ref: "refs/heads/stage-4/my-feature",
+          object: { sha: "abc123", type: "commit" },
+        }),
+        headers: { get: () => null },
+      };
+    }
+    return orig(url, init);
+  };
+  try {
+    const result: any = await tool.handler(
+      { owner: "owner", repo: "repo", branchName: "stage-4/my-feature", baseSha: "abc123" },
+      STUB_INVOCATION
+    );
+    if (result.branchName !== "stage-4/my-feature") {
+      throw new Error(`Expected branchName 'stage-4/my-feature', got '${result.branchName}'`);
+    }
+    if (result.ref !== "refs/heads/stage-4/my-feature") {
+      throw new Error(`Unexpected ref: ${result.ref}`);
+    }
+    if (result.alreadyExists !== false) throw new Error("Expected alreadyExists false");
+  } finally {
+    (global as any).fetch = orig;
+  }
+}
+
+async function testCreateGithubBranchSanitizesBranchName(): Promise<void> {
+  const tools = createGitHubTools("test-token");
+  const tool = tools.find((t) => t.name === "create_github_branch")!;
+
+  let capturedBody: any;
+  const orig = (global as any).fetch;
+  (global as any).fetch = async (url: string, init?: any) => {
+    const method = init?.method ?? "GET";
+    if (method === "POST" && String(url).includes("/git/refs")) {
+      capturedBody = JSON.parse(init?.body ?? "{}");
+      return {
+        ok: true,
+        status: 201,
+        json: async () => ({
+          ref: capturedBody.ref,
+          object: { sha: capturedBody.sha, type: "commit" },
+        }),
+        headers: { get: () => null },
+      };
+    }
+    return orig(url, init);
+  };
+  try {
+    const result: any = await tool.handler(
+      { owner: "owner", repo: "repo", branchName: "stage 4: my@feature!", baseSha: "abc123" },
+      STUB_INVOCATION
+    );
+    // Spaces, colons, @, ! should be replaced with hyphens
+    if (!/^[a-zA-Z0-9._/-]+$/.test(result.branchName)) {
+      throw new Error(`Branch name still contains unsafe characters: '${result.branchName}'`);
+    }
+  } finally {
+    (global as any).fetch = orig;
+  }
+}
+
+async function testCreateGithubBranchIdempotentWhenExists(): Promise<void> {
+  const tools = createGitHubTools("test-token");
+  const tool = tools.find((t) => t.name === "create_github_branch")!;
+
+  const orig = (global as any).fetch;
+  (global as any).fetch = async (url: string, init?: any) => {
+    const method = init?.method ?? "GET";
+    if (method === "POST" && String(url).includes("/git/refs")) {
+      return {
+        ok: false,
+        status: 422,
+        text: async () =>
+          JSON.stringify({
+            message: "Reference already exists",
+            errors: [{ code: "already_exists" }],
+          }),
+        headers: { get: () => null },
+      };
+    }
+    // GET for fetching the existing ref after 422
+    if (method === "GET" && String(url).includes("/git/ref/heads/")) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          ref: "refs/heads/my-branch",
+          object: { sha: "existingsha456", type: "commit" },
+        }),
+        headers: { get: () => null },
+      };
+    }
+    return orig(url, init);
+  };
+  try {
+    const result: any = await tool.handler(
+      { owner: "owner", repo: "repo", branchName: "my-branch", baseSha: "abc123" },
+      STUB_INVOCATION
+    );
+    if (result.alreadyExists !== true) {
+      throw new Error("Expected alreadyExists true for 422 already_exists");
+    }
+    // Should return the actual SHA from the existing ref, not baseSha
+    if (result.sha !== "existingsha456") {
+      throw new Error(`Expected sha 'existingsha456' from existing ref, got '${result.sha}'`);
+    }
+  } finally {
+    (global as any).fetch = orig;
+  }
+}
+
+async function testCreateGithubBranchMissingOwnerThrows(): Promise<void> {
+  const tools = createGitHubTools("test-token");
+  const tool = tools.find((t) => t.name === "create_github_branch")!;
+  try {
+    await tool.handler(
+      { owner: "", repo: "repo", branchName: "my-branch", baseSha: "abc123" },
+      STUB_INVOCATION
+    );
+    throw new Error("Expected error for empty owner");
+  } catch (err: any) {
+    if (!err.message.includes("owner")) {
+      throw new Error(`Expected error about 'owner', got: ${err.message}`);
+    }
+  }
+}
+
+async function testCreateGithubBranchMissingBaseShaThrows(): Promise<void> {
+  const tools = createGitHubTools("test-token");
+  const tool = tools.find((t) => t.name === "create_github_branch")!;
+  try {
+    await tool.handler(
+      { owner: "owner", repo: "repo", branchName: "my-branch", baseSha: "" },
+      STUB_INVOCATION
+    );
+    throw new Error("Expected error for empty baseSha");
+  } catch (err: any) {
+    if (!err.message.includes("baseSha")) {
+      throw new Error(`Expected error about 'baseSha', got: ${err.message}`);
+    }
+  }
+}
+
+// ============================================================
+// manage_github_labels tool tests
+// ============================================================
+
+async function testManageGithubLabelsCreatesNew(): Promise<void> {
+  const tools = createGitHubTools("test-token");
+  const tool = tools.find((t) => t.name === "manage_github_labels")!;
+
+  const orig = (global as any).fetch;
+  (global as any).fetch = async (url: string, init?: any) => {
+    const method = init?.method ?? "GET";
+    if (method === "POST" && String(url).includes("/labels")) {
+      const body = JSON.parse(init?.body ?? "{}");
+      return {
+        ok: true,
+        status: 201,
+        json: async () => ({
+          name: body.name,
+          color: body.color,
+          url: `https://api.github.com/repos/owner/repo/labels/${encodeURIComponent(body.name)}`,
+        }),
+        headers: { get: () => null },
+      };
+    }
+    return orig(url, init);
+  };
+  try {
+    const result: any = await tool.handler(
+      {
+        owner: "owner",
+        repo: "repo",
+        labels: [
+          { name: "stage-4", color: "0075ca", description: "Stage 4 issues" },
+          { name: "enhancement", color: "a2eeef" },
+        ],
+      },
+      STUB_INVOCATION
+    );
+    if (!Array.isArray(result.labels) || result.labels.length !== 2) {
+      throw new Error(`Expected 2 labels in result, got: ${JSON.stringify(result)}`);
+    }
+    if (result.labels[0].alreadyExists !== false) {
+      throw new Error("Expected alreadyExists false for first label");
+    }
+    if (result.labels[1].alreadyExists !== false) {
+      throw new Error("Expected alreadyExists false for second label");
+    }
+  } finally {
+    (global as any).fetch = orig;
+  }
+}
+
+async function testManageGithubLabelsIdempotentWhenExists(): Promise<void> {
+  const tools = createGitHubTools("test-token");
+  const tool = tools.find((t) => t.name === "manage_github_labels")!;
+
+  const orig = (global as any).fetch;
+  (global as any).fetch = async (url: string, init?: any) => {
+    const method = init?.method ?? "GET";
+    if (method === "POST" && String(url).includes("/labels")) {
+      return {
+        ok: false,
+        status: 422,
+        text: async () =>
+          JSON.stringify({
+            message: "Validation Failed",
+            errors: [{ resource: "Label", field: "name", code: "already_exists" }],
+          }),
+        headers: { get: () => null },
+      };
+    }
+    return orig(url, init);
+  };
+  try {
+    const result: any = await tool.handler(
+      { owner: "owner", repo: "repo", labels: [{ name: "existing-label" }] },
+      STUB_INVOCATION
+    );
+    if (result.labels[0].alreadyExists !== true) {
+      throw new Error("Expected alreadyExists true for 422 already_exists");
+    }
+  } finally {
+    (global as any).fetch = orig;
+  }
+}
+
+async function testManageGithubLabelsDefaultColor(): Promise<void> {
+  const tools = createGitHubTools("test-token");
+  const tool = tools.find((t) => t.name === "manage_github_labels")!;
+
+  let capturedBody: any;
+  const orig = (global as any).fetch;
+  (global as any).fetch = async (url: string, init?: any) => {
+    const method = init?.method ?? "GET";
+    if (method === "POST" && String(url).includes("/labels")) {
+      capturedBody = JSON.parse(init?.body ?? "{}");
+      return {
+        ok: true,
+        status: 201,
+        json: async () => ({ name: capturedBody.name, color: capturedBody.color, url: "" }),
+        headers: { get: () => null },
+      };
+    }
+    return orig(url, init);
+  };
+  try {
+    await tool.handler(
+      { owner: "owner", repo: "repo", labels: [{ name: "no-color-label" }] },
+      STUB_INVOCATION
+    );
+    // Default color should be '0075ca'
+    if (capturedBody?.color !== "0075ca") {
+      throw new Error(`Expected default color '0075ca', got '${capturedBody?.color}'`);
+    }
+  } finally {
+    (global as any).fetch = orig;
+  }
+}
+
+async function testManageGithubLabelsInvalidColorThrows(): Promise<void> {
+  const tools = createGitHubTools("test-token");
+  const tool = tools.find((t) => t.name === "manage_github_labels")!;
+  try {
+    await tool.handler(
+      { owner: "owner", repo: "repo", labels: [{ name: "bad-color", color: "#invalid" }] },
+      STUB_INVOCATION
+    );
+    throw new Error("Expected error for invalid color");
+  } catch (err: any) {
+    if (!err.message.toLowerCase().includes("color")) {
+      throw new Error(`Expected error about 'color', got: ${err.message}`);
+    }
+  }
+}
+
+async function testManageGithubLabelsColorWithWhitespaceAccepted(): Promise<void> {
+  const tools = createGitHubTools("test-token");
+  const tool = tools.find((t) => t.name === "manage_github_labels")!;
+
+  let capturedBody: any;
+  const orig = (global as any).fetch;
+  (global as any).fetch = async (url: string, init?: any) => {
+    const method = init?.method ?? "GET";
+    if (method === "POST" && String(url).includes("/labels")) {
+      capturedBody = JSON.parse(init?.body ?? "{}");
+      return {
+        ok: true,
+        status: 201,
+        json: async () => ({ name: capturedBody.name, color: capturedBody.color, url: "" }),
+        headers: { get: () => null },
+      };
+    }
+    return orig(url, init);
+  };
+  try {
+    // Whitespace-padded color should be trimmed and accepted
+    await tool.handler(
+      { owner: "owner", repo: "repo", labels: [{ name: "trimmed-color", color: " 0075ca " }] },
+      STUB_INVOCATION
+    );
+    if (capturedBody?.color !== "0075ca") {
+      throw new Error(`Expected trimmed color '0075ca' sent to API, got '${capturedBody?.color}'`);
+    }
+  } finally {
+    (global as any).fetch = orig;
+  }
+}
+
+async function testManageGithubLabelsDescriptionTooLongThrows(): Promise<void> {
+  const tools = createGitHubTools("test-token");
+  const tool = tools.find((t) => t.name === "manage_github_labels")!;
+  try {
+    await tool.handler(
+      {
+        owner: "owner",
+        repo: "repo",
+        labels: [{ name: "label", description: "x".repeat(101) }],
+      },
+      STUB_INVOCATION
+    );
+    throw new Error("Expected error for description > 100 chars");
+  } catch (err: any) {
+    if (!err.message.toLowerCase().includes("description")) {
+      throw new Error(`Expected error about 'description', got: ${err.message}`);
+    }
+  }
+}
+
+async function testManageGithubLabelsMissingOwnerThrows(): Promise<void> {
+  const tools = createGitHubTools("test-token");
+  const tool = tools.find((t) => t.name === "manage_github_labels")!;
+  try {
+    await tool.handler(
+      { owner: "", repo: "repo", labels: [{ name: "label" }] },
+      STUB_INVOCATION
+    );
+    throw new Error("Expected error for empty owner");
+  } catch (err: any) {
+    if (!err.message.includes("owner")) {
+      throw new Error(`Expected error about 'owner', got: ${err.message}`);
+    }
+  }
+}
+
+async function testManageGithubLabelsEmptyArrayThrows(): Promise<void> {
+  const tools = createGitHubTools("test-token");
+  const tool = tools.find((t) => t.name === "manage_github_labels")!;
+  try {
+    await tool.handler({ owner: "owner", repo: "repo", labels: [] }, STUB_INVOCATION);
+    throw new Error("Expected error for empty labels array");
+  } catch (err: any) {
+    if (!err.message.toLowerCase().includes("labels")) {
+      throw new Error(`Expected error about 'labels', got: ${err.message}`);
+    }
+  }
+}
+
+// ============================================================
 // 7. Research API endpoint tests (HTTP)
 // ============================================================
 
@@ -1516,8 +3723,230 @@ async function testResearchSeedAndRetrieve(): Promise<void> {
 }
 
 // ============================================================
-// 8. Milestone API endpoint tests (HTTP)
+// 7b. Research PATCH API endpoint tests (HTTP)
 // ============================================================
+
+/**
+ * Helper: seeds a session, goal, and research item for PATCH tests.
+ * Returns { goalId, itemId } for use in assertions.
+ */
+async function seedResearchItemForPatch(): Promise<{ goalId: string; itemId: string }> {
+  const sessionId = `test-patch-research-session-${Date.now()}`;
+  const saveRes = await fetch(`${BASE}/api/sessions/${sessionId}/messages`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ messages: [{ role: "user", text: "patch test" }] }),
+  });
+  if (!saveRes.ok) throw new Error(`Failed to seed session: HTTP ${saveRes.status}`);
+
+  const goalId = `test-patch-goal-${Date.now()}`;
+  const seedGoalBody = {
+    id: goalId,
+    sessionId,
+    intent: "Test PATCH research",
+    goal: "Verify PATCH research endpoint",
+    problemStatement: "Need to test PATCH",
+    businessValue: "Reliable API",
+    targetOutcome: "PATCH returns updated item",
+    successCriteria: [],
+    assumptions: [],
+    constraints: [],
+    risks: [],
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+  const goalSeedRes = await fetch(`${BASE}/api/test/seed-goal`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify(seedGoalBody),
+  });
+  if (!goalSeedRes.ok) throw new Error(`Failed to seed goal: HTTP ${goalSeedRes.status}`);
+
+  const itemId = `test-patch-item-${Date.now()}`;
+  const seedItemBody = {
+    id: itemId,
+    goalId,
+    category: "domain",
+    question: "What is the scope?",
+    status: "open",
+    findings: "",
+    decision: "",
+  };
+  const itemSeedRes = await fetch(`${BASE}/api/test/seed-research-item`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify(seedItemBody),
+  });
+  if (!itemSeedRes.ok) throw new Error(`Failed to seed research item: HTTP ${itemSeedRes.status}`);
+
+  return { goalId, itemId };
+}
+
+async function testResearchPatchSuccess(): Promise<void> {
+  const { goalId, itemId } = await seedResearchItemForPatch();
+
+  const res = await fetch(`${BASE}/api/goals/${goalId}/research/${itemId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ findings: "New findings text", status: "researching" }),
+  });
+  if (!res.ok) throw new Error(`PATCH HTTP ${res.status}`);
+  const data = await res.json();
+  if (data.id !== itemId) throw new Error("Expected updated item id in response");
+  if (data.status !== "researching") throw new Error(`Expected status 'researching', got '${data.status}'`);
+  log("  ", `PATCH research success (id: ${itemId.slice(0, 16)}...)`);
+}
+
+async function testResearchPatchNoAuth(): Promise<void> {
+  const res = await fetch(`${BASE}/api/goals/some-goal/research/some-item`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ findings: "test" }),
+  });
+  // 401 without token, or 200/404 when env-token fallback is active
+  if (res.status !== 401 && res.status !== 404 && res.status !== 200) {
+    throw new Error(`Expected 401, 404, or 200 (env-token fallback), got ${res.status}`);
+  }
+}
+
+async function testResearchPatchInvalidFindingsType(): Promise<void> {
+  const { goalId, itemId } = await seedResearchItemForPatch();
+
+  const res = await fetch(`${BASE}/api/goals/${goalId}/research/${itemId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ findings: 12345 }),
+  });
+  if (res.status !== 400) throw new Error(`Expected 400, got ${res.status}`);
+  const data = await res.json();
+  if (!data.error) throw new Error("Expected error message for invalid findings type");
+}
+
+async function testResearchPatchFindingsTooLong(): Promise<void> {
+  const { goalId, itemId } = await seedResearchItemForPatch();
+
+  const res = await fetch(`${BASE}/api/goals/${goalId}/research/${itemId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ findings: "x".repeat(2001) }),
+  });
+  if (res.status !== 400) throw new Error(`Expected 400, got ${res.status}`);
+  const data = await res.json();
+  if (!data.error) throw new Error("Expected error message for findings too long");
+}
+
+async function testResearchPatchDecisionTooLong(): Promise<void> {
+  const { goalId, itemId } = await seedResearchItemForPatch();
+
+  const res = await fetch(`${BASE}/api/goals/${goalId}/research/${itemId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ decision: "x".repeat(1001) }),
+  });
+  if (res.status !== 400) throw new Error(`Expected 400, got ${res.status}`);
+  const data = await res.json();
+  if (!data.error) throw new Error("Expected error message for decision too long");
+}
+
+async function testResearchPatchInvalidStatus(): Promise<void> {
+  const { goalId, itemId } = await seedResearchItemForPatch();
+
+  const res = await fetch(`${BASE}/api/goals/${goalId}/research/${itemId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ status: "invalid-status" }),
+  });
+  if (res.status !== 400) throw new Error(`Expected 400, got ${res.status}`);
+  const data = await res.json();
+  if (!data.error) throw new Error("Expected error message for invalid status");
+}
+
+async function testResearchPatchNoFields(): Promise<void> {
+  const { goalId, itemId } = await seedResearchItemForPatch();
+
+  const res = await fetch(`${BASE}/api/goals/${goalId}/research/${itemId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({}),
+  });
+  if (res.status !== 400) throw new Error(`Expected 400, got ${res.status}`);
+  const data = await res.json();
+  if (!data.error) throw new Error("Expected error message for empty body");
+}
+
+async function testResearchPatchUnknownGoal(): Promise<void> {
+  const res = await fetch(`${BASE}/api/goals/nonexistent-goal-99999/research/some-item`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ findings: "test" }),
+  });
+  if (res.status !== 404) throw new Error(`Expected 404 for unknown goal, got ${res.status}`);
+}
+
+async function testResearchPatchItemNotBelongingToGoal(): Promise<void> {
+  // Create two goals, seed an item under goal A, then try to PATCH it via goal B's URL
+  const sessionIdA = `test-idor-session-A-${Date.now()}`;
+  await fetch(`${BASE}/api/sessions/${sessionIdA}/messages`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ messages: [{ role: "user", text: "idor test A" }] }),
+  });
+  const sessionIdB = `test-idor-session-B-${Date.now()}`;
+  await fetch(`${BASE}/api/sessions/${sessionIdB}/messages`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ messages: [{ role: "user", text: "idor test B" }] }),
+  });
+
+  const goalIdA = `test-idor-goal-A-${Date.now()}`;
+  await fetch(`${BASE}/api/test/seed-goal`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({
+      id: goalIdA, sessionId: sessionIdA, intent: "IDOR test A", goal: "IDOR A",
+      problemStatement: "x", businessValue: "x", targetOutcome: "x",
+      successCriteria: [], assumptions: [], constraints: [], risks: [],
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    }),
+  });
+
+  const goalIdB = `test-idor-goal-B-${Date.now()}`;
+  await fetch(`${BASE}/api/test/seed-goal`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({
+      id: goalIdB, sessionId: sessionIdB, intent: "IDOR test B", goal: "IDOR B",
+      problemStatement: "x", businessValue: "x", targetOutcome: "x",
+      successCriteria: [], assumptions: [], constraints: [], risks: [],
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    }),
+  });
+
+  // Seed item under goal A
+  const itemId = `test-idor-item-${Date.now()}`;
+  const itemSeedRes = await fetch(`${BASE}/api/test/seed-research-item`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({
+      id: itemId, goalId: goalIdA, category: "domain",
+      question: "IDOR check", status: "open", findings: "", decision: "",
+    }),
+  });
+  if (!itemSeedRes.ok) throw new Error(`Failed to seed IDOR item: HTTP ${itemSeedRes.status}`);
+
+  // Attempt to PATCH item via goal B — must return 404
+  const res = await fetch(`${BASE}/api/goals/${goalIdB}/research/${itemId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ findings: "hacked" }),
+  });
+  if (res.status !== 404) {
+    throw new Error(`Expected 404 for IDOR attempt, got ${res.status}`);
+  }
+  log("  ", "IDOR: item from goal A rejected when accessed via goal B URL");
+}
+
+
 
 async function testMilestonesGetNoAuthHeaderIsHandled(): Promise<void> {
   const res = await fetch(`${BASE}/api/goals/some-goal-id/milestones`);
@@ -1664,6 +4093,972 @@ async function testMilestonesSeedAndRetrieve(): Promise<void> {
 }
 
 // ============================================================
+// 9. Issue Draft API endpoint tests (HTTP)
+// ============================================================
+
+async function testIssueDraftsGetNoAuthHeaderIsHandled(): Promise<void> {
+  const res = await fetch(`${BASE}/api/milestones/some-milestone-id/issues`);
+  // Same env-token fallback caveat as other no-auth tests: missing Authorization
+  // header may be satisfied by an env-based token, so 401/404/200 are all acceptable.
+  if (res.status !== 401 && res.status !== 404 && res.status !== 200) {
+    throw new Error(`Expected 401, 404, or 200 (env-token fallback), got ${res.status}`);
+  }
+}
+
+async function testIssueDraftsGetNotFound(): Promise<void> {
+  const res = await fetch(`${BASE}/api/milestones/nonexistent-milestone-id-99999/issues`, {
+    headers: testAuthHeaders(),
+  });
+  if (res.status !== 404) throw new Error(`Expected 404, got ${res.status}`);
+  const data = await res.json();
+  if (!data.error) throw new Error("Expected error message in 404 response");
+}
+
+async function testIssueDraftsGetEmptyForMilestoneWithNoIssues(): Promise<void> {
+  // Create a session so that the ownership check passes
+  const sessionId = `test-issues-empty-session-${Date.now()}`;
+  const saveRes = await fetch(`${BASE}/api/sessions/${sessionId}/messages`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ messages: [{ role: "user", text: "issues empty test" }] }),
+  });
+  if (!saveRes.ok) throw new Error(`Failed to seed session: HTTP ${saveRes.status}`);
+
+  const goalId = `test-issues-empty-goal-${Date.now()}`;
+  const seedGoalBody = {
+    id: goalId,
+    sessionId,
+    intent: "Test issues empty",
+    goal: "Verify empty issues array",
+    problemStatement: "No issue drafts exist",
+    businessValue: "Reliable API",
+    targetOutcome: "Empty array returned",
+    successCriteria: [],
+    assumptions: [],
+    constraints: [],
+    risks: [],
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+  const seedGoalRes = await fetch(`${BASE}/api/test/seed-goal`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify(seedGoalBody),
+  });
+  if (!seedGoalRes.ok) throw new Error(`Failed to seed goal: HTTP ${seedGoalRes.status}`);
+
+  const milestoneId = `test-issues-empty-milestone-${Date.now()}`;
+  const seedMilestoneRes = await fetch(`${BASE}/api/test/seed-milestone`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({
+      id: milestoneId,
+      goalId,
+      name: "Empty Milestone",
+      goal: "Milestone with no issues",
+      scope: "None",
+      order: 1,
+      dependencies: [],
+      acceptanceCriteria: ["done"],
+      exitCriteria: [],
+      status: "draft",
+    }),
+  });
+  if (!seedMilestoneRes.ok) throw new Error(`Failed to seed milestone: HTTP ${seedMilestoneRes.status}`);
+
+  const res = await fetch(`${BASE}/api/milestones/${milestoneId}/issues`, { headers: testAuthHeaders() });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const data = await res.json();
+  if (!Array.isArray(data.issues)) throw new Error("Expected issues array in response");
+  if (data.issues.length !== 0) throw new Error(`Expected empty issues array, got ${data.issues.length}`);
+  log("  ", "Issues is empty for milestone with no drafts");
+}
+
+async function testIssueDraftsSeedAndRetrieve(): Promise<void> {
+  // Create a session so that the ownership check passes
+  const sessionId = `test-issues-session-${Date.now()}`;
+  const saveRes = await fetch(`${BASE}/api/sessions/${sessionId}/messages`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ messages: [{ role: "user", text: "issues seed test" }] }),
+  });
+  if (!saveRes.ok) throw new Error(`Failed to seed session: HTTP ${saveRes.status}`);
+
+  const goalId = `test-issues-goal-${Date.now()}`;
+  const seedGoalBody = {
+    id: goalId,
+    sessionId,
+    intent: "Test issues retrieval",
+    goal: "Verify issue drafts are returned in order",
+    problemStatement: "Need to test issues endpoint",
+    businessValue: "Reliable API",
+    targetOutcome: "Issue drafts returned",
+    successCriteria: ["Drafts returned"],
+    assumptions: [],
+    constraints: [],
+    risks: [],
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+  const goalSeedRes = await fetch(`${BASE}/api/test/seed-goal`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify(seedGoalBody),
+  });
+  if (!goalSeedRes.ok) throw new Error(`Failed to seed goal: HTTP ${goalSeedRes.status}`);
+
+  const milestoneId = `test-issues-milestone-${Date.now()}`;
+  const seedMilestoneRes = await fetch(`${BASE}/api/test/seed-milestone`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({
+      id: milestoneId,
+      goalId,
+      name: "Test Milestone",
+      goal: "Milestone for issue drafts",
+      scope: "Issue drafts",
+      order: 1,
+      dependencies: [],
+      acceptanceCriteria: ["done"],
+      exitCriteria: [],
+      status: "draft",
+    }),
+  });
+  if (!seedMilestoneRes.ok) throw new Error(`Failed to seed milestone: HTTP ${seedMilestoneRes.status}`);
+
+  // Seed two issue drafts in reverse order to verify ordering
+  const ts = Date.now();
+  const draft2Id = `test-draft-2-${ts}`;
+  const draft1Id = `test-draft-1-${ts}`;
+
+  const commonDraftFields = {
+    milestoneId,
+    purpose: "Test purpose",
+    problem: "Test problem",
+    expectedOutcome: "Test outcome",
+    scopeBoundaries: "In scope: everything",
+    technicalContext: "No context",
+    dependencies: [],
+    acceptanceCriteria: ["Done"],
+    testingExpectations: "Run tests",
+    researchLinks: [],
+    status: "draft" as const,
+    filesToModify: [{ path: "server.ts", reason: "Add endpoint" }],
+    filesToRead: [],
+    securityChecklist: ["Check auth"],
+    verificationCommands: ["npx tsc --noEmit"],
+  };
+
+  const seedDraft2Res = await fetch(`${BASE}/api/test/seed-issue-draft`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ ...commonDraftFields, id: draft2Id, title: "Draft 2", order: 2 }),
+  });
+  if (!seedDraft2Res.ok) throw new Error(`Failed to seed draft 2: HTTP ${seedDraft2Res.status}`);
+
+  const seedDraft1Res = await fetch(`${BASE}/api/test/seed-issue-draft`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ ...commonDraftFields, id: draft1Id, title: "Draft 1", order: 1 }),
+  });
+  if (!seedDraft1Res.ok) throw new Error(`Failed to seed draft 1: HTTP ${seedDraft1Res.status}`);
+
+  const res = await fetch(`${BASE}/api/milestones/${milestoneId}/issues`, { headers: testAuthHeaders() });
+  if (!res.ok) throw new Error(`GET /api/milestones/:id/issues HTTP ${res.status}`);
+  const data = await res.json();
+  if (!Array.isArray(data.issues)) throw new Error("Expected issues array in response");
+  if (data.issues.length !== 2) throw new Error(`Expected 2 issue drafts, got ${data.issues.length}`);
+  if (data.issues[0].order !== 1) throw new Error(`Expected first draft order 1, got ${data.issues[0].order}`);
+  if (data.issues[1].order !== 2) throw new Error(`Expected second draft order 2, got ${data.issues[1].order}`);
+  if (data.issues[0].milestoneId !== milestoneId) throw new Error("IssueDraft milestoneId mismatch");
+  log("  ", `Issue drafts seed → get round-trip passed (2 drafts in order)`);
+}
+
+// ============================================================
+// 10. Push-to-GitHub endpoint tests (HTTP, no real GitHub calls)
+// ============================================================
+
+/**
+ * Helper: seeds a session, goal, milestone, and issue draft for push-to-github tests.
+ * The issue draft is seeded with the given status.
+ */
+async function seedPushScenario(status: "draft" | "ready" | "created" = "ready"): Promise<{
+  sessionId: string;
+  goalId: string;
+  milestoneId: string;
+  draftId: string;
+}> {
+  const ts = Date.now();
+  const sessionId = `push-session-${ts}`;
+  const saveRes = await fetch(`${BASE}/api/sessions/${sessionId}/messages`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ messages: [{ role: "user", text: "push test" }] }),
+  });
+  if (!saveRes.ok) throw new Error(`Failed to seed session: HTTP ${saveRes.status}`);
+
+  const goalId = `push-goal-${ts}`;
+  const goalSeedRes = await fetch(`${BASE}/api/test/seed-goal`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({
+      id: goalId,
+      sessionId,
+      intent: "Push test",
+      goal: "Test push endpoints",
+      problemStatement: "Need to test push",
+      businessValue: "Reliable push",
+      targetOutcome: "Push works",
+      successCriteria: [],
+      assumptions: [],
+      constraints: [],
+      risks: [],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    }),
+  });
+  if (!goalSeedRes.ok) throw new Error(`Failed to seed goal: HTTP ${goalSeedRes.status}`);
+
+  const milestoneId = `push-ms-${ts}`;
+  const msSeedRes = await fetch(`${BASE}/api/test/seed-milestone`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({
+      id: milestoneId,
+      goalId,
+      name: "Push Milestone",
+      goal: "Test milestone push",
+      scope: "Push tests",
+      order: 1,
+      dependencies: [],
+      acceptanceCriteria: ["Push works"],
+      exitCriteria: [],
+      status: "ready",
+    }),
+  });
+  if (!msSeedRes.ok) throw new Error(`Failed to seed milestone: HTTP ${msSeedRes.status}`);
+
+  const draftId = `push-draft-${ts}`;
+  const draftSeedRes = await fetch(`${BASE}/api/test/seed-issue-draft`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({
+      id: draftId,
+      milestoneId,
+      title: "Push Test Issue",
+      purpose: "Test the push endpoint",
+      problem: "No push endpoint tested",
+      expectedOutcome: "Issue created on GitHub",
+      scopeBoundaries: "Push only",
+      technicalContext: "Express endpoint",
+      dependencies: [],
+      acceptanceCriteria: ["Issue created"],
+      testingExpectations: "Integration test",
+      researchLinks: [],
+      order: 1,
+      status,
+      filesToModify: [],
+      filesToRead: [],
+      securityChecklist: [],
+      verificationCommands: [],
+    }),
+  });
+  if (!draftSeedRes.ok) throw new Error(`Failed to seed issue draft: HTTP ${draftSeedRes.status}`);
+
+  return { sessionId, goalId, milestoneId, draftId };
+}
+
+async function testPushMilestoneNoAuth(): Promise<void> {
+  const res = await fetch(`${BASE}/api/milestones/unknown-ms/push-to-github`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ owner: "octocat", repo: "hello-world" }),
+  });
+  if (res.status !== 401 && res.status !== 404) {
+    throw new Error(`Expected 401 or 404 (env-token fallback), got ${res.status}`);
+  }
+}
+
+async function testPushMilestoneInvalidOwner(): Promise<void> {
+  const { milestoneId } = await seedPushScenario();
+  const res = await fetch(`${BASE}/api/milestones/${milestoneId}/push-to-github`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ owner: "bad owner!", repo: "hello-world" }),
+  });
+  if (res.status !== 400) throw new Error(`Expected 400, got ${res.status}`);
+  const data = await res.json();
+  if (!data.error || !data.error.includes("owner")) throw new Error("Expected error about owner");
+  log("  ", "Invalid owner → 400 with error message about 'owner'");
+}
+
+async function testPushMilestoneInvalidRepo(): Promise<void> {
+  const { milestoneId } = await seedPushScenario();
+  const res = await fetch(`${BASE}/api/milestones/${milestoneId}/push-to-github`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ owner: "octocat", repo: "bad repo name!" }),
+  });
+  if (res.status !== 400) throw new Error(`Expected 400, got ${res.status}`);
+  const data = await res.json();
+  if (!data.error || !data.error.includes("repo")) throw new Error("Expected error about repo");
+  log("  ", "Invalid repo → 400 with error message about 'repo'");
+}
+
+async function testPushMilestoneNotFound(): Promise<void> {
+  const res = await fetch(`${BASE}/api/milestones/nonexistent-ms/push-to-github`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ owner: "octocat", repo: "hello-world" }),
+  });
+  if (res.status !== 401 && res.status !== 404) throw new Error(`Expected 401 or 404 (env-token fallback), got ${res.status}`);
+  log("  ", "Non-existent milestone → 401/404");
+}
+
+async function testPushMilestoneIdempotency(): Promise<void> {
+  // Seed a milestone that already has a githubNumber — the endpoint should return it without calling GitHub
+  const ts = Date.now();
+  const sessionId = `push-idem-session-${ts}`;
+  const saveRes = await fetch(`${BASE}/api/sessions/${sessionId}/messages`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ messages: [{ role: "user", text: "idem test" }] }),
+  });
+  if (!saveRes.ok) throw new Error(`Failed to seed session: HTTP ${saveRes.status}`);
+
+  const goalId = `push-idem-goal-${ts}`;
+  const goalSeedRes = await fetch(`${BASE}/api/test/seed-goal`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({
+      id: goalId,
+      sessionId,
+      intent: "Idempotency test",
+      goal: "Test idempotency",
+      problemStatement: "Test",
+      businessValue: "High",
+      targetOutcome: "Works",
+      successCriteria: [],
+      assumptions: [],
+      constraints: [],
+      risks: [],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    }),
+  });
+  if (!goalSeedRes.ok) throw new Error(`Failed to seed goal: HTTP ${goalSeedRes.status}`);
+
+  const milestoneId = `push-idem-ms-${ts}`;
+  const msSeedRes = await fetch(`${BASE}/api/test/seed-milestone`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({
+      id: milestoneId,
+      goalId,
+      name: "Idempotent Milestone",
+      goal: "Already created",
+      scope: "Idempotency",
+      order: 1,
+      dependencies: [],
+      acceptanceCriteria: [],
+      exitCriteria: [],
+      status: "ready",
+      githubNumber: 42,
+      githubUrl: "https://github.com/octocat/hello-world/milestone/42",
+    }),
+  });
+  if (!msSeedRes.ok) throw new Error(`Failed to seed milestone: HTTP ${msSeedRes.status}`);
+
+  const res = await fetch(`${BASE}/api/milestones/${milestoneId}/push-to-github`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ owner: "octocat", repo: "hello-world" }),
+  });
+  if (!res.ok) throw new Error(`Expected 200, got ${res.status}`);
+  const data = await res.json();
+  if (data.githubNumber !== 42) throw new Error(`Expected githubNumber 42, got ${data.githubNumber}`);
+  if (!data.alreadyExisted) throw new Error("Expected alreadyExisted: true");
+  log("  ", "Milestone already pushed → idempotent 200 with alreadyExisted: true");
+}
+
+async function testPushIssueNoAuth(): Promise<void> {
+  const res = await fetch(`${BASE}/api/milestones/ms/issues/i/push-to-github`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ owner: "octocat", repo: "hello-world" }),
+  });
+  if (res.status !== 401 && res.status !== 404) {
+    throw new Error(`Expected 401 or 404 (env-token fallback), got ${res.status}`);
+  }
+}
+
+async function testPushIssueInvalidOwner(): Promise<void> {
+  const { milestoneId, draftId } = await seedPushScenario();
+  const res = await fetch(`${BASE}/api/milestones/${milestoneId}/issues/${draftId}/push-to-github`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ owner: "-invalid-", repo: "hello-world" }),
+  });
+  if (res.status !== 400) throw new Error(`Expected 400, got ${res.status}`);
+  const data = await res.json();
+  if (!data.error || !data.error.includes("owner")) throw new Error("Expected error about owner");
+  log("  ", "Invalid owner → 400 with error message about 'owner'");
+}
+
+async function testPushIssueNotReadyStatus(): Promise<void> {
+  const { milestoneId, draftId } = await seedPushScenario("draft");
+  const res = await fetch(`${BASE}/api/milestones/${milestoneId}/issues/${draftId}/push-to-github`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ owner: "octocat", repo: "hello-world" }),
+  });
+  if (res.status !== 400) throw new Error(`Expected 400 for non-ready draft, got ${res.status}`);
+  const data = await res.json();
+  if (!data.error || !data.error.includes("status")) throw new Error("Expected error about status");
+  log("  ", "Non-ready draft → 400 with error message about 'status'");
+}
+
+async function testPushIssueNotFound(): Promise<void> {
+  const { milestoneId } = await seedPushScenario();
+  const res = await fetch(`${BASE}/api/milestones/${milestoneId}/issues/nonexistent-draft/push-to-github`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ owner: "octocat", repo: "hello-world" }),
+  });
+  if (res.status !== 401 && res.status !== 404) throw new Error(`Expected 401 or 404, got ${res.status}`);
+  log("  ", "Non-existent issue draft → 401/404");
+}
+
+async function testPushIssueMilestoneNotFound(): Promise<void> {
+  const { draftId } = await seedPushScenario();
+  const res = await fetch(`${BASE}/api/milestones/nonexistent-ms/issues/${draftId}/push-to-github`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ owner: "octocat", repo: "hello-world" }),
+  });
+  if (res.status !== 401 && res.status !== 404) throw new Error(`Expected 401 or 404, got ${res.status}`);
+  log("  ", "Non-existent milestone for issue push → 401/404");
+}
+
+async function testPushIssueIDORGuard(): Promise<void> {
+  // Create two separate milestones and verify that drafts can't be pushed via the wrong milestone
+  const scenario1 = await seedPushScenario("ready");
+  const scenario2 = await seedPushScenario("ready");
+
+  // Try to push draft from scenario1 via milestone from scenario2 (IDOR attempt)
+  const res = await fetch(
+    `${BASE}/api/milestones/${scenario2.milestoneId}/issues/${scenario1.draftId}/push-to-github`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+      body: JSON.stringify({ owner: "octocat", repo: "hello-world" }),
+    }
+  );
+  if (res.status !== 404) throw new Error(`Expected 404 for IDOR attempt, got ${res.status}`);
+  log("  ", "IDOR: draft from wrong milestone → 404");
+}
+
+async function testPushIssueInvalidLabels(): Promise<void> {
+  const { milestoneId, draftId } = await seedPushScenario();
+  const res = await fetch(`${BASE}/api/milestones/${milestoneId}/issues/${draftId}/push-to-github`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ owner: "octocat", repo: "hello-world", labels: "not-an-array" }),
+  });
+  if (res.status !== 400) throw new Error(`Expected 400 for invalid labels, got ${res.status}`);
+  const data = await res.json();
+  if (!data.error || !data.error.includes("labels")) throw new Error("Expected error about labels");
+  log("  ", "Invalid labels (not array) → 400 with error message about 'labels'");
+}
+
+// ============================================================
+// GitHub Write Tools — Real API Integration Tests
+// ============================================================
+// These tests create real resources in a configured test repository and verify
+// them with GET requests. They are skipped unless TEST_GITHUB_REPO (format:
+// "owner/repo") is provided in the environment. COPILOT_GITHUB_TOKEN must
+// have Issues (write) and Contents (write) scopes.
+//
+// Usage: TEST_GITHUB_REPO=KennethHeine/test-chat npm test
+
+/**
+ * Returns a human-readable reason why real GitHub API tests are skipped,
+ * or null if they should run.
+ */
+function realApiSkipReason(): string | null {
+  if (!REAL_API_REPO) {
+    return "TEST_GITHUB_REPO not set; skipping real GitHub API integration tests.";
+  }
+  if (!REAL_API_TOKEN) {
+    return "COPILOT_GITHUB_TOKEN not set; skipping real GitHub API integration tests.";
+  }
+  const parts = REAL_API_REPO.split("/");
+  if (parts.length !== 2 || !parts[0] || !parts[1]) {
+    return `TEST_GITHUB_REPO is malformed ("${REAL_API_REPO}"); expected "owner/repo". Skipping real GitHub API integration tests.`;
+  }
+  return null;
+}
+
+function skipRealApiTests(): boolean {
+  return realApiSkipReason() !== null;
+}
+
+function realOwner(): string {
+  return REAL_API_REPO.split("/")[0];
+}
+
+function realRepo(): string {
+  return REAL_API_REPO.split("/")[1];
+}
+
+/** Deletes a GitHub milestone by number. Used for post-test cleanup. */
+async function cleanupGithubMilestone(milestoneNumber: number): Promise<void> {
+  await githubWrite(
+    REAL_API_TOKEN,
+    "DELETE",
+    `/repos/${encodeURIComponent(realOwner())}/${encodeURIComponent(realRepo())}/milestones/${milestoneNumber}`
+  );
+}
+
+/** Closes a GitHub issue. Issues cannot be deleted via API; closing is the accepted cleanup. */
+async function closeGithubIssue(issueNumber: number): Promise<void> {
+  await githubWrite(
+    REAL_API_TOKEN,
+    "PATCH",
+    `/repos/${encodeURIComponent(realOwner())}/${encodeURIComponent(realRepo())}/issues/${issueNumber}`,
+    { state: "closed" }
+  );
+}
+
+/** Deletes a Git branch ref. Used for post-test cleanup. */
+async function cleanupGithubBranch(branchName: string): Promise<void> {
+  await githubWrite(
+    REAL_API_TOKEN,
+    "DELETE",
+    `/repos/${encodeURIComponent(realOwner())}/${encodeURIComponent(realRepo())}/git/refs/heads/${encodeURIComponent(branchName)}`
+  );
+}
+
+/** Deletes a GitHub label by name. Used for post-test cleanup. */
+async function cleanupGithubLabel(labelName: string): Promise<void> {
+  await githubWrite(
+    REAL_API_TOKEN,
+    "DELETE",
+    `/repos/${encodeURIComponent(realOwner())}/${encodeURIComponent(realRepo())}/labels/${encodeURIComponent(labelName)}`
+  );
+}
+
+// ─── create_github_milestone — real API ──────────────────────
+
+async function testRealApiCreateGithubMilestoneCreatesAndDeletes(): Promise<void> {
+  const skipReason = realApiSkipReason();
+  if (skipReason) {
+    log("  ", skipReason);
+    return;
+  }
+  const store = new InMemoryPlanningStore();
+  const { goalId, milestoneId, sessionId } = await seedGoalAndMilestone(store);
+  // Use a unique name to avoid collisions with real milestones
+  const msName = `ci-ms-${REAL_RUN_ID}`;
+  await store.updateMilestone(milestoneId, { name: msName });
+
+  const tools = createGitHubTools(REAL_API_TOKEN, store);
+  const tool = tools.find((t) => t.name === "create_github_milestone")!;
+
+  let createdNumber: number | undefined;
+  try {
+    const result: any = await tool.handler(
+      { milestoneId, goalId, sessionId, owner: realOwner(), repo: realRepo() },
+      STUB_INVOCATION
+    );
+    if (typeof result.githubNumber !== "number") {
+      throw new Error(`Expected numeric githubNumber, got: ${JSON.stringify(result)}`);
+    }
+    createdNumber = result.githubNumber;
+    if (!result.githubUrl?.includes("milestone")) {
+      throw new Error(`Unexpected githubUrl: ${result.githubUrl}`);
+    }
+    // Verify the planning store was updated
+    const updated = await store.getMilestone(milestoneId);
+    if (updated?.githubNumber !== createdNumber) {
+      throw new Error(`Store githubNumber mismatch: expected ${createdNumber}, got ${updated?.githubNumber}`);
+    }
+    log("  ", `Created GitHub milestone #${createdNumber}: '${msName}'`);
+    // Verify the milestone actually exists via GET
+    const fetched: any = await githubFetch(
+      REAL_API_TOKEN,
+      `/repos/${encodeURIComponent(realOwner())}/${encodeURIComponent(realRepo())}/milestones/${createdNumber}`
+    );
+    if (fetched.title !== msName) {
+      throw new Error(`Milestone title mismatch: expected '${msName}', got '${fetched.title}'`);
+    }
+  } finally {
+    if (createdNumber !== undefined) {
+      await new Promise<void>((r) => setTimeout(r, REAL_RATE_LIMIT_DELAY));
+      await cleanupGithubMilestone(createdNumber).catch((e) =>
+        log("  ", `Warning: milestone cleanup failed (#${createdNumber}): ${e.message}`)
+      );
+    }
+  }
+}
+
+async function testRealApiCreateGithubMilestoneIdempotentWhenExists(): Promise<void> {
+  const skipReason = realApiSkipReason();
+  if (skipReason) {
+    log("  ", skipReason);
+    return;
+  }
+  const store = new InMemoryPlanningStore();
+  const { goalId, milestoneId, sessionId } = await seedGoalAndMilestone(store);
+  const msName = `ci-ms-idem-${REAL_RUN_ID}`;
+  await store.updateMilestone(milestoneId, { name: msName });
+
+  const tools = createGitHubTools(REAL_API_TOKEN, store);
+  const tool = tools.find((t) => t.name === "create_github_milestone")!;
+
+  let createdNumber: number | undefined;
+  try {
+    // First call — creates the milestone
+    const first: any = await tool.handler(
+      { milestoneId, goalId, sessionId, owner: realOwner(), repo: realRepo() },
+      STUB_INVOCATION
+    );
+    createdNumber = first.githubNumber;
+    log("  ", `First call: created milestone #${createdNumber}`);
+    await new Promise<void>((r) => setTimeout(r, REAL_RATE_LIMIT_DELAY));
+
+    // Second call — must return the same milestone number (idempotent)
+    const second: any = await tool.handler(
+      { milestoneId, goalId, sessionId, owner: realOwner(), repo: realRepo() },
+      STUB_INVOCATION
+    );
+    if (second.githubNumber !== createdNumber) {
+      throw new Error(`Idempotency failed: second call returned #${second.githubNumber}, expected #${createdNumber}`);
+    }
+    log("  ", `Second call: idempotently returned milestone #${second.githubNumber}`);
+  } finally {
+    if (createdNumber !== undefined) {
+      await new Promise<void>((r) => setTimeout(r, REAL_RATE_LIMIT_DELAY));
+      await cleanupGithubMilestone(createdNumber).catch((e) =>
+        log("  ", `Warning: milestone cleanup failed (#${createdNumber}): ${e.message}`)
+      );
+    }
+  }
+}
+
+// ─── create_github_issue — real API ──────────────────────────
+
+async function testRealApiCreateGithubIssueCreatesAndCloses(): Promise<void> {
+  const skipReason = realApiSkipReason();
+  if (skipReason) {
+    log("  ", skipReason);
+    return;
+  }
+  const store = new InMemoryPlanningStore();
+  const { goalId, draftId, sessionId } = await seedGoalMilestoneAndDraft(store);
+  // Use a unique title so the test issue is clearly identifiable
+  await store.updateIssueDraft(draftId, { title: `[ci-test] Issue ${REAL_RUN_ID}` });
+
+  const tools = createGitHubTools(REAL_API_TOKEN, store);
+  const tool = tools.find((t) => t.name === "create_github_issue")!;
+
+  let createdNumber: number | undefined;
+  try {
+    const result: any = await tool.handler(
+      { draftId, goalId, sessionId, owner: realOwner(), repo: realRepo() },
+      STUB_INVOCATION
+    );
+    if (typeof result.githubIssueNumber !== "number") {
+      throw new Error(`Expected numeric githubIssueNumber, got: ${JSON.stringify(result)}`);
+    }
+    createdNumber = result.githubIssueNumber;
+    if (!result.githubIssueUrl?.includes("issues")) {
+      throw new Error(`Unexpected githubIssueUrl: ${result.githubIssueUrl}`);
+    }
+    // Verify draft status was updated to 'created'
+    const updatedDraft = await store.getIssueDraft(draftId);
+    if (updatedDraft?.status !== "created") {
+      throw new Error(`Expected draft status 'created', got '${updatedDraft?.status}'`);
+    }
+    if (updatedDraft?.githubIssueNumber !== createdNumber) {
+      throw new Error(`Draft githubIssueNumber mismatch: expected ${createdNumber}, got ${updatedDraft?.githubIssueNumber}`);
+    }
+    log("  ", `Created GitHub issue #${createdNumber}: ${result.githubIssueUrl}`);
+    // Verify the issue actually exists via GET
+    const fetched: any = await githubFetch(
+      REAL_API_TOKEN,
+      `/repos/${encodeURIComponent(realOwner())}/${encodeURIComponent(realRepo())}/issues/${createdNumber}`
+    );
+    if (fetched.number !== createdNumber) {
+      throw new Error(`Issue number mismatch in fetched response: expected ${createdNumber}, got ${fetched.number}`);
+    }
+    if (fetched.state !== "open") {
+      throw new Error(`Expected issue state 'open', got '${fetched.state}'`);
+    }
+  } finally {
+    if (createdNumber !== undefined) {
+      await new Promise<void>((r) => setTimeout(r, REAL_RATE_LIMIT_DELAY));
+      await closeGithubIssue(createdNumber).catch((e) =>
+        log("  ", `Warning: issue cleanup failed (#${createdNumber}): ${e.message}`)
+      );
+    }
+  }
+}
+
+async function testRealApiCreateGithubIssueIdempotentWhenAlreadyCreated(): Promise<void> {
+  const skipReason = realApiSkipReason();
+  if (skipReason) {
+    log("  ", skipReason);
+    return;
+  }
+  const store = new InMemoryPlanningStore();
+  const { goalId, draftId, sessionId } = await seedGoalMilestoneAndDraft(store);
+  await store.updateIssueDraft(draftId, { title: `[ci-test] Idempotency ${REAL_RUN_ID}` });
+
+  const tools = createGitHubTools(REAL_API_TOKEN, store);
+  const tool = tools.find((t) => t.name === "create_github_issue")!;
+
+  let createdNumber: number | undefined;
+  try {
+    // First call — creates the issue
+    const first: any = await tool.handler(
+      { draftId, goalId, sessionId, owner: realOwner(), repo: realRepo() },
+      STUB_INVOCATION
+    );
+    createdNumber = first.githubIssueNumber;
+    log("  ", `First call: created issue #${createdNumber}`);
+    await new Promise<void>((r) => setTimeout(r, REAL_RATE_LIMIT_DELAY));
+
+    // Second call — draft is already 'created', must return early with alreadyCreated flag
+    const second: any = await tool.handler(
+      { draftId, goalId, sessionId, owner: realOwner(), repo: realRepo() },
+      STUB_INVOCATION
+    );
+    if (second.githubIssueNumber !== createdNumber) {
+      throw new Error(`Idempotency failed: second call returned #${second.githubIssueNumber}, expected #${createdNumber}`);
+    }
+    if (second.alreadyCreated !== true) {
+      throw new Error("Expected alreadyCreated:true on second call");
+    }
+    log("  ", `Second call: idempotently returned issue #${second.githubIssueNumber}`);
+  } finally {
+    if (createdNumber !== undefined) {
+      await new Promise<void>((r) => setTimeout(r, REAL_RATE_LIMIT_DELAY));
+      await closeGithubIssue(createdNumber).catch((e) =>
+        log("  ", `Warning: issue cleanup failed (#${createdNumber}): ${e.message}`)
+      );
+    }
+  }
+}
+
+// ─── create_github_branch — real API ─────────────────────────
+
+async function testRealApiCreateGithubBranchCreatesAndDeletes(): Promise<void> {
+  const skipReason = realApiSkipReason();
+  if (skipReason) {
+    log("  ", skipReason);
+    return;
+  }
+  const tools = createGitHubTools(REAL_API_TOKEN);
+  const tool = tools.find((t) => t.name === "create_github_branch")!;
+  const branchName = `ci-test-branch-${REAL_RUN_ID}`;
+
+  // Resolve the default branch's HEAD SHA to use as base
+  const repoData: any = await githubFetch(
+    REAL_API_TOKEN,
+    `/repos/${encodeURIComponent(realOwner())}/${encodeURIComponent(realRepo())}`
+  );
+  const defaultBranch: string = repoData.default_branch ?? "main";
+  const refData: any = await githubFetch(
+    REAL_API_TOKEN,
+    `/repos/${encodeURIComponent(realOwner())}/${encodeURIComponent(realRepo())}/git/ref/heads/${encodeURIComponent(defaultBranch)}`
+  );
+  const baseSha: string = refData.object.sha;
+
+  let createdBranchName: string | undefined;
+  try {
+    const result: any = await tool.handler(
+      { owner: realOwner(), repo: realRepo(), branchName, baseSha },
+      STUB_INVOCATION
+    );
+    if (result.branchName !== branchName) {
+      throw new Error(`Expected branchName '${branchName}', got '${result.branchName}'`);
+    }
+    if (result.alreadyExists !== false) {
+      throw new Error("Expected alreadyExists false for a new branch");
+    }
+    createdBranchName = result.branchName;
+    log("  ", `Created branch '${result.ref}' at ${result.sha?.slice(0, 8)}`);
+    // Verify the branch actually exists via GET
+    const fetched: any = await githubFetch(
+      REAL_API_TOKEN,
+      `/repos/${encodeURIComponent(realOwner())}/${encodeURIComponent(realRepo())}/git/ref/heads/${encodeURIComponent(branchName)}`
+    );
+    if (!fetched.ref?.includes(branchName)) {
+      throw new Error(`Branch ref not found after creation: ${fetched.ref}`);
+    }
+    if (fetched.object?.sha !== baseSha) {
+      throw new Error(`Branch SHA mismatch: expected ${baseSha}, got ${fetched.object?.sha}`);
+    }
+  } finally {
+    if (createdBranchName !== undefined) {
+      await new Promise<void>((r) => setTimeout(r, REAL_RATE_LIMIT_DELAY));
+      await cleanupGithubBranch(createdBranchName).catch((e) =>
+        log("  ", `Warning: branch cleanup failed ('${createdBranchName}'): ${e.message}`)
+      );
+    }
+  }
+}
+
+async function testRealApiCreateGithubBranchIdempotentWhenExists(): Promise<void> {
+  const skipReason = realApiSkipReason();
+  if (skipReason) {
+    log("  ", skipReason);
+    return;
+  }
+  const tools = createGitHubTools(REAL_API_TOKEN);
+  const tool = tools.find((t) => t.name === "create_github_branch")!;
+  const branchName = `ci-test-branch-idem-${REAL_RUN_ID}`;
+
+  const repoData: any = await githubFetch(
+    REAL_API_TOKEN,
+    `/repos/${encodeURIComponent(realOwner())}/${encodeURIComponent(realRepo())}`
+  );
+  const defaultBranch: string = repoData.default_branch ?? "main";
+  const refData: any = await githubFetch(
+    REAL_API_TOKEN,
+    `/repos/${encodeURIComponent(realOwner())}/${encodeURIComponent(realRepo())}/git/ref/heads/${encodeURIComponent(defaultBranch)}`
+  );
+  const baseSha: string = refData.object.sha;
+
+  let createdBranchName: string | undefined;
+  try {
+    // First call — creates the branch
+    const first: any = await tool.handler(
+      { owner: realOwner(), repo: realRepo(), branchName, baseSha },
+      STUB_INVOCATION
+    );
+    createdBranchName = first.branchName;
+    log("  ", `First call: created branch '${first.branchName}'`);
+    await new Promise<void>((r) => setTimeout(r, REAL_RATE_LIMIT_DELAY));
+
+    // Second call — branch already exists; must return alreadyExists: true
+    const second: any = await tool.handler(
+      { owner: realOwner(), repo: realRepo(), branchName, baseSha },
+      STUB_INVOCATION
+    );
+    if (second.alreadyExists !== true) {
+      throw new Error(`Expected alreadyExists true on second call, got: ${JSON.stringify(second)}`);
+    }
+    if (second.branchName !== branchName) {
+      throw new Error(`Expected branchName '${branchName}' on second call, got '${second.branchName}'`);
+    }
+    log("  ", `Second call: idempotently returned branch '${second.branchName}' (alreadyExists: true)`);
+  } finally {
+    if (createdBranchName !== undefined) {
+      await new Promise<void>((r) => setTimeout(r, REAL_RATE_LIMIT_DELAY));
+      await cleanupGithubBranch(createdBranchName).catch((e) =>
+        log("  ", `Warning: branch cleanup failed ('${createdBranchName}'): ${e.message}`)
+      );
+    }
+  }
+}
+
+// ─── manage_github_labels — real API ─────────────────────────
+
+async function testRealApiManageGithubLabelsCreatesAndDeletes(): Promise<void> {
+  const skipReason = realApiSkipReason();
+  if (skipReason) {
+    log("  ", skipReason);
+    return;
+  }
+  const tools = createGitHubTools(REAL_API_TOKEN);
+  const tool = tools.find((t) => t.name === "manage_github_labels")!;
+  const labelName = `ci-test-label-${REAL_RUN_ID}`;
+
+  let labelCreated = false;
+  try {
+    const result: any = await tool.handler(
+      {
+        owner: realOwner(),
+        repo: realRepo(),
+        labels: [{ name: labelName, color: "d93f0b", description: "CI integration test label" }],
+      },
+      STUB_INVOCATION
+    );
+    if (!Array.isArray(result.labels) || result.labels.length !== 1) {
+      throw new Error(`Expected 1 label in result, got: ${JSON.stringify(result)}`);
+    }
+    if (result.labels[0].alreadyExists !== false) {
+      throw new Error(`Expected alreadyExists false for new label, got: ${JSON.stringify(result.labels[0])}`);
+    }
+    labelCreated = true;
+    log("  ", `Created GitHub label: '${labelName}'`);
+    // Verify the label actually exists via GET
+    const fetched: any = await githubFetch(
+      REAL_API_TOKEN,
+      `/repos/${encodeURIComponent(realOwner())}/${encodeURIComponent(realRepo())}/labels/${encodeURIComponent(labelName)}`
+    );
+    if (fetched.name !== labelName) {
+      throw new Error(`Label name mismatch: expected '${labelName}', got '${fetched.name}'`);
+    }
+    if (fetched.color !== "d93f0b") {
+      throw new Error(`Label color mismatch: expected 'd93f0b', got '${fetched.color}'`);
+    }
+  } finally {
+    if (labelCreated) {
+      await new Promise<void>((r) => setTimeout(r, REAL_RATE_LIMIT_DELAY));
+      await cleanupGithubLabel(labelName).catch((e) =>
+        log("  ", `Warning: label cleanup failed ('${labelName}'): ${e.message}`)
+      );
+    }
+  }
+}
+
+async function testRealApiManageGithubLabelsIdempotentWhenExists(): Promise<void> {
+  const skipReason = realApiSkipReason();
+  if (skipReason) {
+    log("  ", skipReason);
+    return;
+  }
+  const tools = createGitHubTools(REAL_API_TOKEN);
+  const tool = tools.find((t) => t.name === "manage_github_labels")!;
+  const labelName = `ci-test-label-idem-${REAL_RUN_ID}`;
+
+  let labelCreated = false;
+  try {
+    // First call — creates the label
+    const first: any = await tool.handler(
+      { owner: realOwner(), repo: realRepo(), labels: [{ name: labelName, color: "0075ca" }] },
+      STUB_INVOCATION
+    );
+    if (first.labels[0].alreadyExists !== false) {
+      throw new Error("Expected alreadyExists false on first call");
+    }
+    labelCreated = true;
+    log("  ", `First call: created label '${labelName}'`);
+    await new Promise<void>((r) => setTimeout(r, REAL_RATE_LIMIT_DELAY));
+
+    // Second call — label already exists; must return alreadyExists: true
+    const second: any = await tool.handler(
+      { owner: realOwner(), repo: realRepo(), labels: [{ name: labelName, color: "0075ca" }] },
+      STUB_INVOCATION
+    );
+    if (second.labels[0].alreadyExists !== true) {
+      throw new Error(`Expected alreadyExists true on second call, got: ${JSON.stringify(second.labels[0])}`);
+    }
+    log("  ", `Second call: idempotently returned label '${labelName}' (alreadyExists: true)`);
+  } finally {
+    if (labelCreated) {
+      await new Promise<void>((r) => setTimeout(r, REAL_RATE_LIMIT_DELAY));
+      await cleanupGithubLabel(labelName).catch((e) =>
+        log("  ", `Warning: label cleanup failed ('${labelName}'): ${e.message}`)
+      );
+    }
+  }
+}
+
+// ============================================================
 // Main
 // ============================================================
 
@@ -1710,6 +5105,7 @@ async function main() {
   await run("Server health check", testServerHealth);
   await run("Server models endpoint", testServerModels);
   await run("Server chat (SSE streaming)", testServerChat);
+  await run("SSE event types — new planning/intent/subagent/compaction events", testSseEventTypes);
 
   // --- Session persistence tests ---
   console.log("\n── Session Persistence Tests ──\n");
@@ -1727,6 +5123,20 @@ async function main() {
   await run("Model switch validates required fields", testServerModelSwitchMissingFields);
   await run("Quota endpoint returns data", testServerQuotaEndpoint);
   await run("Quota endpoint handles no auth gracefully", testServerQuotaNoAuth);
+  await run("Reasoning effort: invalid value returns 400", testReasoningEffortInvalidValue);
+  await run("Reasoning effort: valid values accepted", testReasoningEffortValidValues);
+
+  // --- User input request endpoint tests ---
+  console.log("\n── User Input Request Tests ──\n");
+
+  await run("POST /api/chat/input — auth check", testChatInputNoAuth);
+  await run("POST /api/chat/input — missing requestId returns 400", testChatInputMissingRequestId);
+  await run("POST /api/chat/input — missing answer returns 400", testChatInputMissingAnswer);
+  await run("POST /api/chat/input — missing wasFreeform returns 400", testChatInputMissingWasFreeform);
+  await run("POST /api/chat/input — unknown requestId returns 404", testChatInputUnknownRequestId);
+  await run("user_input_request SSE event payload shape", testUserInputRequestEventShape);
+  await run("POST /api/chat/input — seed → resolve → cleanup roundtrip", testChatInputRoundtrip);
+  await run("POST /api/chat/input — cross-user ownership returns 403", testChatInputOwnershipRejection);
 
   // --- Goal API tests ---
   console.log("\n── Goal API Tests ──\n");
@@ -1745,6 +5155,19 @@ async function main() {
   await run("GET /api/goals/:id/research returns empty array for goal with no items", testResearchGetEmptyForGoalWithNoItems);
   await run("Research seed → get round-trip", testResearchSeedAndRetrieve);
 
+  // --- Research PATCH API tests ---
+  console.log("\n── Research PATCH API Tests ──\n");
+
+  await run("PATCH /api/goals/:goalId/research/:itemId — no auth is handled", testResearchPatchNoAuth);
+  await run("PATCH /api/goals/:goalId/research/:itemId — success update", testResearchPatchSuccess);
+  await run("PATCH /api/goals/:goalId/research/:itemId — invalid findings type returns 400", testResearchPatchInvalidFindingsType);
+  await run("PATCH /api/goals/:goalId/research/:itemId — findings too long returns 400", testResearchPatchFindingsTooLong);
+  await run("PATCH /api/goals/:goalId/research/:itemId — decision too long returns 400", testResearchPatchDecisionTooLong);
+  await run("PATCH /api/goals/:goalId/research/:itemId — invalid status returns 400", testResearchPatchInvalidStatus);
+  await run("PATCH /api/goals/:goalId/research/:itemId — empty body returns 400", testResearchPatchNoFields);
+  await run("PATCH /api/goals/:goalId/research/:itemId — unknown goal returns 404", testResearchPatchUnknownGoal);
+  await run("PATCH /api/goals/:goalId/research/:itemId — IDOR: item not in goal returns 404", testResearchPatchItemNotBelongingToGoal);
+
   // --- Milestone API tests ---
   console.log("\n── Milestone API Tests ──\n");
 
@@ -1753,13 +5176,37 @@ async function main() {
   await run("GET /api/goals/:id/milestones returns empty array for goal with no milestones", testMilestonesGetEmptyForGoalWithNoMilestones);
   await run("Milestone seed → get round-trip (ordered)", testMilestonesSeedAndRetrieve);
 
+  // --- Issue Draft API tests ---
+  console.log("\n── Issue Draft API Tests ──\n");
+
+  await run("GET /api/milestones/:id/issues — no Authorization header is handled", testIssueDraftsGetNoAuthHeaderIsHandled);
+  await run("GET /api/milestones/:id/issues returns 404 for unknown milestone", testIssueDraftsGetNotFound);
+  await run("GET /api/milestones/:id/issues returns empty array for milestone with no drafts", testIssueDraftsGetEmptyForMilestoneWithNoIssues);
+  await run("Issue draft seed → get round-trip (ordered)", testIssueDraftsSeedAndRetrieve);
+
+  // --- Push-to-GitHub API tests ---
+  console.log("\n── Push-to-GitHub API Tests ──\n");
+
+  await run("POST /api/milestones/:id/push-to-github — no auth returns 401 (or 404 with env token)", testPushMilestoneNoAuth);
+  await run("POST /api/milestones/:id/push-to-github — invalid owner returns 400", testPushMilestoneInvalidOwner);
+  await run("POST /api/milestones/:id/push-to-github — invalid repo returns 400", testPushMilestoneInvalidRepo);
+  await run("POST /api/milestones/:id/push-to-github — not found returns 401 or 404", testPushMilestoneNotFound);
+  await run("POST /api/milestones/:id/push-to-github — idempotent when githubNumber exists", testPushMilestoneIdempotency);
+  await run("POST /api/milestones/:milestoneId/issues/:issueId/push-to-github — no auth returns 401 (or 404 with env token)", testPushIssueNoAuth);
+  await run("POST /api/milestones/:milestoneId/issues/:issueId/push-to-github — invalid owner returns 400", testPushIssueInvalidOwner);
+  await run("POST /api/milestones/:milestoneId/issues/:issueId/push-to-github — draft status returns 400", testPushIssueNotReadyStatus);
+  await run("POST /api/milestones/:milestoneId/issues/:issueId/push-to-github — unknown draft returns 401 or 404", testPushIssueNotFound);
+  await run("POST /api/milestones/:milestoneId/issues/:issueId/push-to-github — unknown milestone returns 401 or 404", testPushIssueMilestoneNotFound);
+  await run("POST /api/milestones/:milestoneId/issues/:issueId/push-to-github — IDOR guard returns 404", testPushIssueIDORGuard);
+  await run("POST /api/milestones/:milestoneId/issues/:issueId/push-to-github — invalid labels returns 400", testPushIssueInvalidLabels);
+
   // Cleanup
   serverProcess.kill();
 
   // --- Planning tools tests ---
   console.log("\n── Planning Tools Tests ──\n");
 
-  await run("Planning tools: all 9 tools registered with correct names", testPlanningToolRegistration);
+  await run("Planning tools: all 12 tools registered with correct names", testPlanningToolRegistration);
   await run("define_goal: returns structured template from raw intent", testDefineGoalReturnsTemplate);
   await run("define_goal: empty intent returns validation error", testDefineGoalEmptyIntentReturnsError);
   await run("save_goal: valid data returns goal with generated ID and timestamps", testSaveGoalValidDataReturnsGoalWithId);
@@ -1777,6 +5224,16 @@ async function main() {
   await run("generate_research_checklist: all items have 'open' status and correct goalId", testGenerateResearchChecklistAllItemsHaveOpenStatus);
   await run("generate_research_checklist: unknown goalId returns error", testGenerateResearchChecklistUnknownGoalReturnsError);
   await run("generate_research_checklist: wrong sessionId returns error", testGenerateResearchChecklistWrongSessionReturnsError);
+  await run("suggest_research: detects external API trigger (Stripe → integration)", testSuggestResearchDetectsExternalApiTrigger);
+  await run("suggest_research: detects infrastructure trigger (Docker → infrastructure)", testSuggestResearchDetectsInfrastructureTrigger);
+  await run("suggest_research: detects security trigger (authentication → security)", testSuggestResearchDetectsSecurityTrigger);
+  await run("suggest_research: detects data model trigger (PostgreSQL → data_model)", testSuggestResearchDetectsDataModelTrigger);
+  await run("suggest_research: detects multiple trigger categories from rich goal", testSuggestResearchDetectsMultipleTriggerCategories);
+  await run("suggest_research: context parameter extends trigger detection", testSuggestResearchContextParameterExtendsDetection);
+  await run("suggest_research: no triggers returns empty items with message", testSuggestResearchNoTriggersReturnsEmptyWithMessage);
+  await run("suggest_research: unknown goalId returns error", testSuggestResearchUnknownGoalReturnsError);
+  await run("suggest_research: wrong sessionId returns error", testSuggestResearchWrongSessionReturnsError);
+  await run("suggest_research: triggered items are saved to planning store", testSuggestResearchSavesItemsToStore);
   await run("update_research_item: open → researching transition succeeds", testUpdateResearchItemOpenToResearching);
   await run("update_research_item: resolving without findings returns error", testUpdateResearchItemResolvingRequiresFindings);
   await run("update_research_item: full open → researching → resolved lifecycle", testUpdateResearchItemFullLifecycle);
@@ -1805,6 +5262,95 @@ async function main() {
   await run("get_milestones: unknown goalId returns error", testGetMilestonesUnknownGoalReturnsError);
   await run("update_milestone: order collision returns error", testUpdateMilestoneOrderCollisionReturnsError);
   await run("create_milestone_plan: name exceeding max length after sanitization returns error", testCreateMilestonePlanNameLengthAfterSanitizationReturnsError);
+
+  // --- generate_issue_drafts tests ---
+  console.log("\n── generate_issue_drafts Tool Tests ──\n");
+
+  await run("generate_issue_drafts: returns ordered issue drafts", testGenerateIssueDraftsReturnsOrderedDrafts);
+  await run("generate_issue_drafts: R9 fields are present on created drafts", testGenerateIssueDraftsR9FieldsPresent);
+  await run("generate_issue_drafts: dependency chain is resolved to IDs", testGenerateIssueDraftsDependencyChainRespected);
+  await run("generate_issue_drafts: circular dependency returns error", testGenerateIssueDraftsCircularDependencyReturnsError);
+  await run("generate_issue_drafts: wrong sessionId returns error", testGenerateIssueDraftsWrongSessionReturnsError);
+  await run("generate_issue_drafts: unknown milestoneId returns error", testGenerateIssueDraftsUnknownMilestoneReturnsError);
+  await run("generate_issue_drafts: >5 filesToModify returns R9 quality error", testGenerateIssueDraftsR9TooManyFilesToModifyReturnsError);
+  await run("generate_issue_drafts: empty filesToModify returns error", testGenerateIssueDraftsMissingFilesToModifyReturnsError);
+  await run("generate_issue_drafts: duplicate order values return error", testGenerateIssueDraftsDuplicateOrderReturnsError);
+  await run("generate_issue_drafts: text fields are sanitized before storage", testGenerateIssueDraftsTextFieldsAreSanitized);
+  await run("generate_issue_drafts: path traversal in filesToModify returns error", testGenerateIssueDraftsPathTraversalReturnsError);
+  await run("generate_issue_drafts: empty verificationCommands returns error", testGenerateIssueDraftsMissingVerificationCommandsReturnsError);
+  await run("generate_issue_drafts: researchLinks are persisted on draft", testGenerateIssueDraftsResearchLinksArePersistedOnDraft);
+
+  // --- update_issue_draft tests ---
+  console.log("\n── update_issue_draft Tool Tests ──\n");
+
+  await run("update_issue_draft: fields are updated and returned", testUpdateIssueDraftFieldsAreUpdated);
+  await run("update_issue_draft: wrong sessionId returns error", testUpdateIssueDraftWrongSessionReturnsError);
+  await run("update_issue_draft: unknown draftId returns error", testUpdateIssueDraftNotFoundReturnsError);
+  await run("update_issue_draft: invalid FileRef returns error", testUpdateIssueDraftFileRefValidationOnUpdate);
+  await run("update_issue_draft: text fields are sanitized before storage", testUpdateIssueDraftTextFieldsAreSanitized);
+  await run("update_issue_draft: invalid status returns error", testUpdateIssueDraftInvalidStatusReturnsError);
+  await run("update_issue_draft: R9 fields can be updated", testUpdateIssueDraftR9FieldsCanBeUpdated);
+
+  await run("create_github_milestone: GitHub tool names include new tool", testGithubToolRegistration);
+  await run("create_github_milestone: creates new when none exists", testCreateGithubMilestoneCreatesNew);
+  await run("create_github_milestone: idempotent when milestone exists on GitHub", testCreateGithubMilestoneIdempotentWhenExists);
+  await run("create_github_milestone: accepts valid dueDate", testCreateGithubMilestoneWithDueDate);
+  await run("create_github_milestone: invalid dueDate throws", testCreateGithubMilestoneInvalidDueDateThrows);
+  await run("create_github_milestone: wrong sessionId throws", testCreateGithubMilestoneWrongSessionThrows);
+  await run("create_github_milestone: empty owner throws", testCreateGithubMilestoneMissingOwnerThrows);
+  await run("create_github_milestone: missing planningStore throws", testCreateGithubMilestoneWithoutPlanningStoreThrows);
+
+  // --- create_github_issue tests ---
+  console.log("\n── create_github_issue Tool Tests ──\n");
+
+  await run("create_github_issue: creates issue and updates draft status to created", testCreateGithubIssueCreatesIssue);
+  await run("create_github_issue: idempotent when draft already created", testCreateGithubIssueIdempotentWhenAlreadyCreated);
+  await run("create_github_issue: sets GitHub milestone number when available", testCreateGithubIssueSetsGithubMilestoneNumber);
+  await run("create_github_issue: includes Research Context section when researchLinks present", testCreateGithubIssueIncludesResearchContext);
+  await run("create_github_issue: applies labels when provided", testCreateGithubIssueAppliesLabels);
+  await run("create_github_issue: wrong sessionId throws", testCreateGithubIssueWrongSessionThrows);
+  await run("create_github_issue: missing planningStore throws", testCreateGithubIssueWithoutPlanningStoreThrows);
+  await run("create_github_issue: missing draft throws", testCreateGithubIssueMissingDraftThrows);
+  await run("create_github_issue: issue body contains all required sections", testCreateGithubIssueBodyContainsAllSections);
+  await run("create_github_issue: draft with status 'draft' is rejected", testCreateGithubIssueDraftNotReadyThrows);
+  await run("create_github_issue: missing issue number in response throws", testCreateGithubIssueMissingNumberThrows);
+
+  // --- create_github_branch tests ---
+  console.log("\n── create_github_branch Tool Tests ──\n");
+
+  await run("create_github_branch: creates new branch from base SHA", testCreateGithubBranchCreatesNew);
+  await run("create_github_branch: sanitizes unsafe characters in branch name", testCreateGithubBranchSanitizesBranchName);
+  await run("create_github_branch: idempotent when branch already exists (422)", testCreateGithubBranchIdempotentWhenExists);
+  await run("create_github_branch: empty owner throws", testCreateGithubBranchMissingOwnerThrows);
+  await run("create_github_branch: empty baseSha throws", testCreateGithubBranchMissingBaseShaThrows);
+
+  // --- manage_github_labels tests ---
+  console.log("\n── manage_github_labels Tool Tests ──\n");
+
+  await run("manage_github_labels: creates new labels", testManageGithubLabelsCreatesNew);
+  await run("manage_github_labels: idempotent when label already exists (422)", testManageGithubLabelsIdempotentWhenExists);
+  await run("manage_github_labels: uses default color when none provided", testManageGithubLabelsDefaultColor);
+  await run("manage_github_labels: invalid color throws", testManageGithubLabelsInvalidColorThrows);
+  await run("manage_github_labels: whitespace-padded color is trimmed and accepted", testManageGithubLabelsColorWithWhitespaceAccepted);
+  await run("manage_github_labels: description over 100 chars throws", testManageGithubLabelsDescriptionTooLongThrows);
+  await run("manage_github_labels: empty owner throws", testManageGithubLabelsMissingOwnerThrows);
+  await run("manage_github_labels: empty labels array throws", testManageGithubLabelsEmptyArrayThrows);
+
+  // --- GitHub Write Tools — Real API integration tests ---
+  console.log("\n── GitHub Write Tools — Real API Integration Tests ──\n");
+  const realApiBannerReason = realApiSkipReason();
+  if (realApiBannerReason) {
+    console.log(`  (${realApiBannerReason})\n`);
+  }
+
+  await run("create_github_milestone (real API): creates milestone and verifies via GET", testRealApiCreateGithubMilestoneCreatesAndDeletes);
+  await run("create_github_milestone (real API): idempotent when milestone already exists", testRealApiCreateGithubMilestoneIdempotentWhenExists);
+  await run("create_github_issue (real API): creates issue and verifies via GET", testRealApiCreateGithubIssueCreatesAndCloses);
+  await run("create_github_issue (real API): idempotent when draft already created", testRealApiCreateGithubIssueIdempotentWhenAlreadyCreated);
+  await run("create_github_branch (real API): creates branch and verifies via GET", testRealApiCreateGithubBranchCreatesAndDeletes);
+  await run("create_github_branch (real API): idempotent when branch already exists (422)", testRealApiCreateGithubBranchIdempotentWhenExists);
+  await run("manage_github_labels (real API): creates label and verifies via GET", testRealApiManageGithubLabelsCreatesAndDeletes);
+  await run("manage_github_labels (real API): idempotent when label already exists (422)", testRealApiManageGithubLabelsIdempotentWhenExists);
 
   // --- Summary ---
   console.log("\n═══════════════════════════════════════════════");

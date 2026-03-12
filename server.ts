@@ -5,9 +5,20 @@ import { fileURLToPath } from "url";
 import { config } from "dotenv";
 import path from "path";
 import { createSessionStore, hashToken, AzureSessionStore, InMemorySessionStore, type SessionStore } from "./storage.js";
-import { createGitHubTools, GITHUB_TOOL_NAMES } from "./tools.js";
-import { InMemoryPlanningStore, type PlanningStore } from "./planning-store.js";
+import { createGitHubTools, GITHUB_TOOL_NAMES, githubFetch, githubWrite, buildIssueBody } from "./tools.js";
+import { InMemoryPlanningStore, AzurePlanningStore, createPlanningStore, type PlanningStore } from "./planning-store.js";
 import { createPlanningTools } from "./planning-tools.js";
+
+// SDK does not re-export these types from its main index, so define them locally.
+interface UserInputRequest {
+  question: string;
+  choices?: string[];
+  allowFreeform?: boolean;
+}
+interface UserInputResponse {
+  answer: string;
+  wasFreeform: boolean;
+}
 
 // --- System Message for Agent Orchestration ---
 const ORCHESTRATOR_SYSTEM_MESSAGE = `You are a coding task orchestrator. Your role is to help users research codebases, plan coding tasks, and coordinate work across repositories.
@@ -43,7 +54,7 @@ let sessionStore: SessionStore = createSessionStore(storageAccountName || undefi
 // --- Planning Store ---
 // Goals are created via planning tools (planning-tools.ts), not through API endpoints.
 // This store is shared with the tool factory once planning tools are wired in.
-const planningStore: PlanningStore = new InMemoryPlanningStore();
+let planningStore: PlanningStore = createPlanningStore(storageAccountName || undefined);
 
 // --- Per-user Copilot Clients ---
 
@@ -51,6 +62,34 @@ const planningStore: PlanningStore = new InMemoryPlanningStore();
 const clients = new Map<string, CopilotClient>();
 // Key: "token:sessionId" → CopilotSession (in-memory SDK sessions for active conversations)
 const sessions = new Map<string, CopilotSession>();
+
+// --- User Input Requests ---
+
+// Timeout for pending user input requests (ms). Configurable via env var; default 2 minutes.
+const DEFAULT_USER_INPUT_TIMEOUT_MS = 120000;
+const parsedUserInputTimeout = Number.parseInt(process.env.USER_INPUT_TIMEOUT_MS ?? "", 10);
+const USER_INPUT_TIMEOUT_MS =
+  Number.isNaN(parsedUserInputTimeout) || parsedUserInputTimeout <= 0
+    ? DEFAULT_USER_INPUT_TIMEOUT_MS
+    : parsedUserInputTimeout;
+
+interface PendingInput {
+  resolve: (response: UserInputResponse) => void;
+  reject: (err: Error) => void;
+  ownerTokenHash: string;
+}
+
+// Global map of requestId → pending Promise resolver. RequestIds are UUIDs so no collisions.
+const pendingInputs = new Map<string, PendingInput>();
+
+interface ActiveConnection {
+  res: Response;
+  inputIds: Set<string>;
+}
+
+// Maps session key → active SSE connection info. Updated per SSE request so onUserInputRequest
+// always writes to the current response object even when sessions are reused across requests.
+const activeConnections = new Map<string, ActiveConnection>();
 
 function extractToken(req: Request): string | undefined {
   const authHeader = req.headers.authorization;
@@ -96,16 +135,61 @@ const safePermissionHandler: PermissionHandler = async (request) => {
   return { kind: "denied-by-rules", rules: [{ description: `Denied ${request.kind}: only custom tools and read operations are auto-approved` }] };
 };
 
+// Extract a display name from a sub-agent event, preferring agentDisplayName over agentName
+function extractSubagentName(data: { agentDisplayName?: unknown; agentName?: unknown } | undefined): string {
+  if (typeof data?.agentDisplayName === "string" && data.agentDisplayName) {
+    return data.agentDisplayName.slice(0, 100);
+  }
+  if (typeof data?.agentName === "string" && data.agentName) {
+    return data.agentName.slice(0, 100);
+  }
+  return "Sub-agent";
+}
+
+// Allowed reasoning effort levels (from SDK ReasoningEffort type)
+const ALLOWED_REASONING_EFFORTS = ["low", "medium", "high", "xhigh"] as const;
+type ReasoningEffort = typeof ALLOWED_REASONING_EFFORTS[number];
+
+// Valid values and max lengths for research item updates
+const VALID_RESEARCH_STATUSES = ["open", "researching", "resolved"] as const;
+const MAX_RESEARCH_FINDINGS_LENGTH = 2000;
+const MAX_RESEARCH_DECISION_LENGTH = 1000;
+
+// Valid values and max lengths for issue draft updates
+const VALID_ISSUE_DRAFT_STATUSES = ["draft", "ready", "created"] as const;
+const MAX_ISSUE_TITLE_LENGTH = 256;
+const MAX_ISSUE_PURPOSE_LENGTH = 500;
+const MAX_ISSUE_PROBLEM_LENGTH = 1000;
+const MAX_ISSUE_EXPECTED_OUTCOME_LENGTH = 500;
+const MAX_ISSUE_SCOPE_BOUNDARIES_LENGTH = 1000;
+const MAX_ISSUE_TECHNICAL_CONTEXT_LENGTH = 2000;
+const MAX_ISSUE_TESTING_EXPECTATIONS_LENGTH = 1000;
+const MAX_ISSUE_FILE_PATH_LENGTH = 256;
+const MAX_ISSUE_FILE_REASON_LENGTH = 500;
+
+/**
+ * HTML-escapes a string to prevent stored XSS if the value is later rendered
+ * in a browser context. Mirrors the sanitizeText() helper in planning-tools.ts.
+ */
+function sanitizeResearchText(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#x27;");
+}
+
 // Build the shared session config used for both new and resumed sessions
-function buildSessionConfig(token: string, model: string): SessionConfig {
-  return {
+function buildSessionConfig(token: string, model: string, reasoningEffort?: ReasoningEffort): SessionConfig {
+  const cfg: SessionConfig = {
     model,
     streaming: true,
     onPermissionRequest: safePermissionHandler,
     systemMessage: {
       content: ORCHESTRATOR_SYSTEM_MESSAGE,
     },
-    tools: [...createGitHubTools(token), ...createPlanningTools(token, planningStore)],
+    tools: [...createGitHubTools(token, planningStore), ...createPlanningTools(token, planningStore)],
     hooks: {
       onPreToolUse: async (input) => {
         console.log(`[hook] pre-tool: ${input.toolName}`);
@@ -128,6 +212,10 @@ function buildSessionConfig(token: string, model: string): SessionConfig {
       },
     },
   };
+  if (reasoningEffort) {
+    cfg.reasoningEffort = reasoningEffort;
+  }
+  return cfg;
 }
 
 // Resolve or create a CopilotSession — handles resumption (Phase 2.3), tools (2.1), and hooks (2.4)
@@ -136,9 +224,53 @@ async function resolveSession(
   token: string,
   sid: string,
   model: string,
-  message: string
+  message: string,
+  reasoningEffort?: ReasoningEffort
 ): Promise<CopilotSession> {
-  const sessionConfig = buildSessionConfig(token, model);
+  const sessionConfig = buildSessionConfig(token, model, reasoningEffort);
+  const skey = sessionKey(token, sid);
+
+  // Attach onUserInputRequest — looks up the current active SSE connection dynamically so that
+  // reused sessions (across multiple SSE requests) always write to the correct response object.
+  sessionConfig.onUserInputRequest = async (request: UserInputRequest): Promise<UserInputResponse> => {
+    const tHash = await hashToken(token);
+    const conn = activeConnections.get(skey);
+    if (!conn) {
+      throw new Error("onUserInputRequest: no active SSE connection for this session");
+    }
+    const requestId = crypto.randomUUID();
+    conn.res.write(`data: ${JSON.stringify({
+      type: "user_input_request",
+      requestId,
+      question: request.question,
+      choices: request.choices ?? null,
+      allowFreeform: request.allowFreeform ?? true,
+    })}\n\n`);
+    return new Promise<UserInputResponse>((resolve, reject) => {
+      const pendingCleanup = () => {
+        pendingInputs.delete(requestId);
+        conn.inputIds.delete(requestId);
+      };
+      const timeoutHandle = setTimeout(() => {
+        if (pendingInputs.has(requestId)) {
+          pendingCleanup();
+          reject(new Error("User input request timed out"));
+        }
+      }, USER_INPUT_TIMEOUT_MS);
+      const wrappedResolve = (value: UserInputResponse) => {
+        pendingCleanup();
+        clearTimeout(timeoutHandle);
+        resolve(value);
+      };
+      const wrappedReject = (error: Error) => {
+        pendingCleanup();
+        clearTimeout(timeoutHandle);
+        reject(error);
+      };
+      conn.inputIds.add(requestId);
+      pendingInputs.set(requestId, { resolve: wrappedResolve, reject: wrappedReject, ownerTokenHash: tHash });
+    });
+  };
 
   // Phase 2.3: Try to resume an existing SDK session
   const tHash = await hashToken(token);
@@ -147,7 +279,7 @@ async function resolveSession(
     try {
       // Pass the full session config so resumed sessions get tools, hooks, and streaming
       const resumed = await client.resumeSession(existingMeta.sdkSessionId, sessionConfig);
-      sessions.set(sessionKey(token, sid), resumed);
+      sessions.set(skey, resumed);
       return resumed;
     } catch (err: any) {
       console.warn(`[resumeSession] Failed to resume SDK session ${existingMeta.sdkSessionId}: ${err.message || err}`);
@@ -157,7 +289,7 @@ async function resolveSession(
   // Phase 2.1: Create session with GitHub API tools
   // Phase 2.4: Create session with hooks for task tracking
   const session = await client.createSession(sessionConfig);
-  sessions.set(sessionKey(token, sid), session);
+  sessions.set(skey, session);
 
   // Store session metadata with SDK session ID for resumption
   const title = message.length > 50 ? message.slice(0, 50) + "…" : message;
@@ -188,6 +320,7 @@ app.get("/api/health", (_req: Request, res: Response) => {
   res.json({
     status: "ok",
     storage: sessionStore instanceof AzureSessionStore ? "azure" : "memory",
+    planningStorage: planningStore instanceof AzurePlanningStore ? "azure" : "memory",
     clients: {
       total: clientCount,
       connected: connectedClients,
@@ -311,10 +444,16 @@ app.post("/api/chat", async (req: Request, res: Response) => {
     return;
   }
 
-  const { message, sessionId, model } = req.body;
+  const { message, sessionId, model, reasoningEffort } = req.body;
 
   if (!message || typeof message !== "string") {
     res.status(400).json({ error: "Missing or invalid 'message' field" });
+    return;
+  }
+
+  // Validate reasoningEffort if provided
+  if (reasoningEffort !== undefined && !ALLOWED_REASONING_EFFORTS.includes(reasoningEffort)) {
+    res.status(400).json({ error: `Invalid reasoningEffort. Must be one of: ${ALLOWED_REASONING_EFFORTS.join(", ")}` });
     return;
   }
 
@@ -335,7 +474,7 @@ app.post("/api/chat", async (req: Request, res: Response) => {
       session = sessions.get(key)!;
     } else {
       sid = sid || generateSessionId();
-      session = await resolveSession(c, token, sid, model || "gpt-4.1", message);
+      session = await resolveSession(c, token, sid, model || "gpt-4.1", message, reasoningEffort);
     }
 
     // Update session last-used time
@@ -352,10 +491,30 @@ app.post("/api/chat", async (req: Request, res: Response) => {
     // Track toolCallId -> toolName mappings for correlating start/complete events
     const activeTools = new Map<string, string>();
 
+    // Register active SSE connection so onUserInputRequest can write to the correct response.
+    // The final session key is computed from the resolved sid (which may have been generated above).
+    const skey = sessionKey(token, sid);
+    const connectionInputIds = new Set<string>();
+    activeConnections.set(skey, { res, inputIds: connectionInputIds });
+
     const cleanup = () => {
       for (const unsub of unsubscribers) unsub();
       unsubscribers.length = 0;
       activeTools.clear();
+      // Reject any pending user input requests from this connection (wrappedReject handles cleanup)
+      for (const rid of connectionInputIds) {
+        const pending = pendingInputs.get(rid);
+        if (pending) {
+          pending.reject(new Error("SSE connection closed"));
+        }
+      }
+      connectionInputIds.clear();
+      // Only delete the active connection if this response is still registered.
+      // A newer SSE request on the same session may have already replaced it.
+      const current = activeConnections.get(skey);
+      if (current && current.res === res) {
+        activeConnections.delete(skey);
+      }
     };
 
     // Listen for streaming deltas
@@ -437,6 +596,66 @@ app.post("/api/chat", async (req: Request, res: Response) => {
       })
     );
 
+    // Planning mode changes — emit planning_start when entering plan mode, plan_ready when exiting
+    unsubscribers.push(
+      session.on("session.mode_changed", (event) => {
+        const newMode = event.data?.newMode || "";
+        const previousMode = event.data?.previousMode || "";
+        if (newMode === "plan") {
+          res.write(`data: ${JSON.stringify({ type: "planning_start" })}\n\n`);
+        } else if (previousMode === "plan") {
+          res.write(`data: ${JSON.stringify({ type: "plan_ready" })}\n\n`);
+        }
+      })
+    );
+
+    // Agent intent — what the agent is currently doing
+    unsubscribers.push(
+      session.on("assistant.intent", (event) => {
+        const intent = typeof event.data?.intent === "string" ? event.data.intent.slice(0, 200) : "";
+        if (intent) {
+          res.write(`data: ${JSON.stringify({ type: "intent", intent })}\n\n`);
+        }
+      })
+    );
+
+    // Sub-agent lifecycle events
+    unsubscribers.push(
+      session.on("subagent.started", (event) => {
+        const name = extractSubagentName(event.data);
+        res.write(`data: ${JSON.stringify({ type: "subagent_start", name })}\n\n`);
+      })
+    );
+
+    unsubscribers.push(
+      session.on("subagent.completed", (event) => {
+        const name = extractSubagentName(event.data);
+        res.write(`data: ${JSON.stringify({ type: "subagent_end", name, success: true })}\n\n`);
+      })
+    );
+
+    unsubscribers.push(
+      session.on("subagent.failed", (event) => {
+        const name = extractSubagentName(event.data);
+        const error = typeof event.data?.error === "string" ? event.data.error.slice(0, 200) : "Sub-agent failed";
+        res.write(`data: ${JSON.stringify({ type: "subagent_end", name, success: false, error })}\n\n`);
+      })
+    );
+
+    // Context compaction events
+    unsubscribers.push(
+      session.on("session.compaction_start", () => {
+        res.write(`data: ${JSON.stringify({ type: "compaction", started: true })}\n\n`);
+      })
+    );
+
+    unsubscribers.push(
+      session.on("session.compaction_complete", (event) => {
+        const tokensRemoved = typeof event.data?.tokensRemoved === "number" ? event.data.tokensRemoved : 0;
+        res.write(`data: ${JSON.stringify({ type: "compaction", started: false, tokensRemoved })}\n\n`);
+      })
+    );
+
     // Stream complete
     unsubscribers.push(
       session.on("session.idle", () => {
@@ -492,6 +711,47 @@ app.post("/api/chat/abort", async (req: Request, res: Response) => {
   } catch (err: any) {
     res.status(500).json({ error: err.message || "Failed to abort" });
   }
+});
+
+// Submit a user input response to a pending onUserInputRequest from the agent
+app.post("/api/chat/input", async (req: Request, res: Response) => {
+  const token = extractToken(req);
+  if (!token) {
+    res.status(401).json({ error: "Missing token. Provide Authorization: Bearer <token> header." });
+    return;
+  }
+
+  const { requestId, answer, wasFreeform } = req.body;
+
+  if (!requestId || typeof requestId !== "string") {
+    res.status(400).json({ error: "Missing or invalid 'requestId' field" });
+    return;
+  }
+  if (answer === undefined || answer === null || typeof answer !== "string" || answer.trim() === "") {
+    res.status(400).json({ error: "Missing or invalid 'answer' field (must be a non-empty string)" });
+    return;
+  }
+  if (typeof wasFreeform !== "boolean") {
+    res.status(400).json({ error: "Missing or invalid 'wasFreeform' field (must be a boolean)" });
+    return;
+  }
+
+  const pending = pendingInputs.get(requestId);
+  if (!pending) {
+    res.status(404).json({ error: "No pending input request found for this requestId" });
+    return;
+  }
+
+  // Verify ownership — only the user who initiated the session can answer their own question
+  const tHash = await hashToken(token);
+  if (pending.ownerTokenHash !== tHash) {
+    res.status(403).json({ error: "Forbidden: this input request does not belong to your session" });
+    return;
+  }
+
+  // wrappedResolve handles cleanup (delete from pendingInputs, inputIds, clearTimeout)
+  pending.resolve({ answer, wasFreeform });
+  res.json({ ok: true });
 });
 
 // Phase 2.5: Switch model mid-conversation
@@ -640,6 +900,85 @@ app.get("/api/goals/:id/research", async (req: Request, res: Response) => {
   }
 });
 
+// Update a research item's fields (findings, decision, status), scoped to the authenticated user
+app.patch("/api/goals/:goalId/research/:itemId", async (req: Request, res: Response) => {
+  const token = extractToken(req);
+  if (!token) {
+    res.status(401).json({ error: "Missing token. Provide Authorization: Bearer <token> header." });
+    return;
+  }
+
+  const goalId = req.params.goalId as string;
+  const itemId = req.params.itemId as string;
+  const body = req.body as Record<string, unknown>;
+
+  const updates: Partial<Omit<import("./planning-types.js").ResearchItem, "id" | "goalId">> = {};
+
+  if ("findings" in body) {
+    if (typeof body.findings !== "string") {
+      res.status(400).json({ error: "findings must be a string" });
+      return;
+    }
+    const trimmedFindings = body.findings.trim();
+    if (trimmedFindings.length > MAX_RESEARCH_FINDINGS_LENGTH) {
+      res.status(400).json({ error: `findings must be at most ${MAX_RESEARCH_FINDINGS_LENGTH} characters` });
+      return;
+    }
+    updates.findings = sanitizeResearchText(trimmedFindings);
+  }
+
+  if ("decision" in body) {
+    if (typeof body.decision !== "string") {
+      res.status(400).json({ error: "decision must be a string" });
+      return;
+    }
+    const trimmedDecision = body.decision.trim();
+    if (trimmedDecision.length > MAX_RESEARCH_DECISION_LENGTH) {
+      res.status(400).json({ error: `decision must be at most ${MAX_RESEARCH_DECISION_LENGTH} characters` });
+      return;
+    }
+    updates.decision = sanitizeResearchText(trimmedDecision);
+  }
+
+  if ("status" in body) {
+    if (!VALID_RESEARCH_STATUSES.includes(body.status as (typeof VALID_RESEARCH_STATUSES)[number])) {
+      res.status(400).json({ error: "status must be one of: open, researching, resolved" });
+      return;
+    }
+    updates.status = body.status as "open" | "researching" | "resolved";
+  }
+
+  if (Object.keys(updates).length === 0) {
+    res.status(400).json({ error: "No valid fields provided for update" });
+    return;
+  }
+
+  try {
+    const goal = await getOwnedGoal(token, goalId);
+    if (!goal) {
+      res.status(404).json({ error: "Goal not found" });
+      return;
+    }
+
+    // Verify the research item exists and belongs to the requested goal (IDOR guard)
+    const existingItem = await planningStore.getResearchItem(itemId);
+    if (!existingItem || existingItem.goalId !== goalId) {
+      res.status(404).json({ error: "Research item not found" });
+      return;
+    }
+
+    const updated = await planningStore.updateResearchItem(itemId, updates);
+    if (!updated) {
+      res.status(404).json({ error: "Research item not found" });
+      return;
+    }
+
+    res.json(updated);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Failed to update research item" });
+  }
+});
+
 // Get milestones for a specific goal, scoped to the authenticated user
 app.get("/api/goals/:id/milestones", async (req: Request, res: Response) => {
   const token = extractToken(req);
@@ -661,6 +1000,428 @@ app.get("/api/goals/:id/milestones", async (req: Request, res: Response) => {
     res.json({ milestones });
   } catch (err: any) {
     res.status(500).json({ error: err.message || "Failed to get milestones" });
+  }
+});
+
+// Get issue drafts for a specific milestone, scoped to the authenticated user
+app.get("/api/milestones/:id/issues", async (req: Request, res: Response) => {
+  const token = extractToken(req);
+  if (!token) {
+    res.status(401).json({ error: "Missing token. Provide Authorization: Bearer <token> header." });
+    return;
+  }
+
+  const milestoneId = req.params.id as string;
+
+  try {
+    const milestone = await planningStore.getMilestone(milestoneId);
+    if (!milestone) {
+      res.status(404).json({ error: "Milestone not found" });
+      return;
+    }
+
+    const goal = await getOwnedGoal(token, milestone.goalId);
+    if (!goal) {
+      res.status(404).json({ error: "Milestone not found" });
+      return;
+    }
+
+    const issues = await planningStore.listIssueDrafts(milestoneId);
+    res.json({ issues });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Failed to get issue drafts" });
+  }
+});
+
+// Update an issue draft (status, text fields) scoped to the authenticated user
+app.patch("/api/milestones/:milestoneId/issues/:issueId", async (req: Request, res: Response) => {
+  const token = extractToken(req);
+  if (!token) {
+    res.status(401).json({ error: "Missing token. Provide Authorization: Bearer <token> header." });
+    return;
+  }
+
+  const milestoneId = req.params.milestoneId as string;
+  const issueId = req.params.issueId as string;
+  const body = req.body as Record<string, unknown>;
+
+  const updates: Partial<Omit<import("./planning-types.js").IssueDraft, "id" | "milestoneId">> = {};
+
+  // Validate and sanitize text fields
+  const textFields: Array<{ key: string; max: number }> = [
+    { key: "title", max: MAX_ISSUE_TITLE_LENGTH },
+    { key: "purpose", max: MAX_ISSUE_PURPOSE_LENGTH },
+    { key: "problem", max: MAX_ISSUE_PROBLEM_LENGTH },
+    { key: "expectedOutcome", max: MAX_ISSUE_EXPECTED_OUTCOME_LENGTH },
+    { key: "scopeBoundaries", max: MAX_ISSUE_SCOPE_BOUNDARIES_LENGTH },
+    { key: "technicalContext", max: MAX_ISSUE_TECHNICAL_CONTEXT_LENGTH },
+    { key: "testingExpectations", max: MAX_ISSUE_TESTING_EXPECTATIONS_LENGTH },
+    { key: "patternReference", max: MAX_ISSUE_TECHNICAL_CONTEXT_LENGTH },
+  ];
+
+  for (const { key, max } of textFields) {
+    if (key in body) {
+      if (typeof body[key] !== "string") {
+        res.status(400).json({ error: `${key} must be a string` });
+        return;
+      }
+      const trimmed = (body[key] as string).trim();
+      if (trimmed.length > max) {
+        res.status(400).json({ error: `${key} must be at most ${max} characters` });
+        return;
+      }
+      (updates as Record<string, unknown>)[key] = sanitizeResearchText(trimmed);
+    }
+  }
+
+  // Validate string-array fields
+  const MAX_ARRAY_ITEMS = 50;
+  const MAX_ARRAY_ITEM_LENGTH = 500;
+  const stringArrayFields = ["acceptanceCriteria", "securityChecklist", "verificationCommands", "researchLinks", "dependencies"];
+  for (const key of stringArrayFields) {
+    if (key in body) {
+      if (!Array.isArray(body[key]) || !(body[key] as unknown[]).every((v) => typeof v === "string")) {
+        res.status(400).json({ error: `${key} must be an array of strings` });
+        return;
+      }
+      const arr = body[key] as string[];
+      if (arr.length > MAX_ARRAY_ITEMS) {
+        res.status(400).json({ error: `${key} must have at most ${MAX_ARRAY_ITEMS} items` });
+        return;
+      }
+      for (const item of arr) {
+        if (item.trim().length > MAX_ARRAY_ITEM_LENGTH) {
+          res.status(400).json({ error: `${key} items must be at most ${MAX_ARRAY_ITEM_LENGTH} characters each` });
+          return;
+        }
+      }
+      (updates as Record<string, unknown>)[key] = arr.map((s) => sanitizeResearchText(s.trim()));
+    }
+  }
+
+  // Validate FileRef array fields (filesToModify, filesToRead)
+  const fileRefFields = ["filesToModify", "filesToRead"];
+  for (const key of fileRefFields) {
+    if (key in body) {
+      if (!Array.isArray(body[key])) {
+        res.status(400).json({ error: `${key} must be an array` });
+        return;
+      }
+      const refs = body[key] as unknown[];
+      const validated: import("./planning-types.js").FileRef[] = [];
+      for (const ref of refs) {
+        if (typeof ref !== "object" || ref === null) {
+          res.status(400).json({ error: `${key} items must be objects with path and reason` });
+          return;
+        }
+        const r = ref as Record<string, unknown>;
+        if (typeof r.path !== "string" || typeof r.reason !== "string") {
+          res.status(400).json({ error: `${key} items must have string path and reason` });
+          return;
+        }
+        const trimmedPath = r.path.trim();
+        const trimmedReason = r.reason.trim();
+        if (trimmedPath.length === 0) {
+          res.status(400).json({ error: `${key} path must not be empty` });
+          return;
+        }
+        if (trimmedReason.length === 0) {
+          res.status(400).json({ error: `${key} reason must not be empty` });
+          return;
+        }
+        if (trimmedPath.length > MAX_ISSUE_FILE_PATH_LENGTH) {
+          res.status(400).json({ error: `${key} path must be at most ${MAX_ISSUE_FILE_PATH_LENGTH} characters` });
+          return;
+        }
+        if (trimmedReason.length > MAX_ISSUE_FILE_REASON_LENGTH) {
+          res.status(400).json({ error: `${key} reason must be at most ${MAX_ISSUE_FILE_REASON_LENGTH} characters` });
+          return;
+        }
+        validated.push({ path: sanitizeResearchText(trimmedPath), reason: sanitizeResearchText(trimmedReason) });
+      }
+      (updates as Record<string, unknown>)[key] = validated;
+    }
+  }
+
+  // Validate status
+  if ("status" in body) {
+    if (!VALID_ISSUE_DRAFT_STATUSES.includes(body.status as (typeof VALID_ISSUE_DRAFT_STATUSES)[number])) {
+      res.status(400).json({ error: "status must be one of: draft, ready, created" });
+      return;
+    }
+    updates.status = body.status as "draft" | "ready" | "created";
+  }
+
+  if (Object.keys(updates).length === 0) {
+    res.status(400).json({ error: "No valid fields provided for update" });
+    return;
+  }
+
+  try {
+    const milestone = await planningStore.getMilestone(milestoneId);
+    if (!milestone) {
+      res.status(404).json({ error: "Milestone not found" });
+      return;
+    }
+
+    const goal = await getOwnedGoal(token, milestone.goalId);
+    if (!goal) {
+      res.status(404).json({ error: "Milestone not found" });
+      return;
+    }
+
+    // Verify the issue draft exists and belongs to the requested milestone (IDOR guard)
+    const existingDraft = await planningStore.getIssueDraft(issueId);
+    if (!existingDraft || existingDraft.milestoneId !== milestoneId) {
+      res.status(404).json({ error: "Issue draft not found" });
+      return;
+    }
+
+    const updated = await planningStore.updateIssueDraft(issueId, updates);
+    if (!updated) {
+      res.status(404).json({ error: "Issue draft not found" });
+      return;
+    }
+
+    res.json(updated);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Failed to update issue draft" });
+  }
+});
+
+// Validation pattern for GitHub owner and repo names
+const GITHUB_OWNER_RE = /^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,37}[a-zA-Z0-9])?$/;
+const GITHUB_REPO_RE = /^[a-zA-Z0-9._-]{1,100}$/;
+
+// Push a single planning milestone to GitHub as a real GitHub Milestone.
+// Idempotent: if milestone already has a githubNumber, returns existing data.
+app.post("/api/milestones/:id/push-to-github", async (req: Request, res: Response) => {
+  const token = extractToken(req);
+  if (!token) {
+    res.status(401).json({ error: "Missing token. Provide Authorization: Bearer <token> header." });
+    return;
+  }
+
+  const milestoneId = req.params.id as string;
+  const body = req.body as Record<string, unknown>;
+
+  const owner = typeof body.owner === "string" ? body.owner.trim() : "";
+  const repo = typeof body.repo === "string" ? body.repo.trim() : "";
+
+  if (!owner || !GITHUB_OWNER_RE.test(owner)) {
+    res.status(400).json({ error: "owner must be a valid GitHub username or organization name" });
+    return;
+  }
+  if (!repo || !GITHUB_REPO_RE.test(repo)) {
+    res.status(400).json({ error: "repo must be a valid GitHub repository name" });
+    return;
+  }
+
+  try {
+    const milestone = await planningStore.getMilestone(milestoneId);
+    if (!milestone) {
+      res.status(404).json({ error: "Milestone not found" });
+      return;
+    }
+
+    const goal = await getOwnedGoal(token, milestone.goalId);
+    if (!goal) {
+      res.status(404).json({ error: "Milestone not found" });
+      return;
+    }
+
+    // Idempotency: if already pushed, return existing data
+    if (milestone.githubNumber !== undefined) {
+      res.json({
+        milestoneId,
+        githubNumber: milestone.githubNumber,
+        githubUrl: milestone.githubUrl,
+        alreadyExisted: true,
+      });
+      return;
+    }
+
+    const title = milestone.name;
+    const description = milestone.goal;
+
+    // Check for existing GitHub milestone with the same title (pagination)
+    let githubNumber: number | undefined;
+    let githubUrl: string | undefined;
+    let page = 1;
+    while (githubNumber === undefined) {
+      const existing = (await githubFetch(
+        token,
+        `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/milestones?state=all&per_page=100&page=${page}`
+      )) as any[];
+      const match = existing.find((m: any) => m.title === title);
+      if (match) {
+        githubNumber = match.number;
+        githubUrl = match.html_url;
+        break;
+      }
+      if (existing.length < 100) break;
+      page += 1;
+    }
+
+    if (githubNumber === undefined) {
+      const created = (await githubWrite(
+        token,
+        "POST",
+        `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/milestones`,
+        { title, description }
+      )) as any;
+      githubNumber = created.number;
+      githubUrl = created.html_url;
+    }
+
+    const updated = await planningStore.updateMilestone(milestoneId, { githubNumber, githubUrl });
+    if (!updated) {
+      res.status(404).json({ error: "Milestone not found after update" });
+      return;
+    }
+
+    res.json({ milestoneId, githubNumber, githubUrl, alreadyExisted: false });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Failed to push milestone to GitHub" });
+  }
+});
+
+// Push a single issue draft to GitHub as a real GitHub Issue.
+// Only "ready" drafts are accepted. Idempotent: if already "created", returns existing data.
+app.post("/api/milestones/:milestoneId/issues/:issueId/push-to-github", async (req: Request, res: Response) => {
+  const token = extractToken(req);
+  if (!token) {
+    res.status(401).json({ error: "Missing token. Provide Authorization: Bearer <token> header." });
+    return;
+  }
+
+  const milestoneId = req.params.milestoneId as string;
+  const issueId = req.params.issueId as string;
+  const body = req.body as Record<string, unknown>;
+
+  const owner = typeof body.owner === "string" ? body.owner.trim() : "";
+  const repo = typeof body.repo === "string" ? body.repo.trim() : "";
+
+  if (!owner || !GITHUB_OWNER_RE.test(owner)) {
+    res.status(400).json({ error: "owner must be a valid GitHub username or organization name" });
+    return;
+  }
+  if (!repo || !GITHUB_REPO_RE.test(repo)) {
+    res.status(400).json({ error: "repo must be a valid GitHub repository name" });
+    return;
+  }
+
+  // Validate optional labels array
+  let labels: string[] = [];
+  if (body.labels !== undefined) {
+    if (!Array.isArray(body.labels) || !body.labels.every((l) => typeof l === "string")) {
+      res.status(400).json({ error: "labels must be an array of strings" });
+      return;
+    }
+    labels = Array.from(
+      new Set(
+        (body.labels as string[])
+          .map((l) => l.trim())
+          .filter((l) => l.length > 0)
+      )
+    );
+  }
+
+  try {
+    const milestone = await planningStore.getMilestone(milestoneId);
+    if (!milestone) {
+      res.status(404).json({ error: "Milestone not found" });
+      return;
+    }
+
+    const goal = await getOwnedGoal(token, milestone.goalId);
+    if (!goal) {
+      res.status(404).json({ error: "Milestone not found" });
+      return;
+    }
+
+    // IDOR guard: verify the issue draft belongs to the stated milestone
+    const draft = await planningStore.getIssueDraft(issueId);
+    if (!draft || draft.milestoneId !== milestoneId) {
+      res.status(404).json({ error: "Issue draft not found" });
+      return;
+    }
+
+    // Idempotency: if already created, return existing data
+    if (draft.status === "created") {
+      if (draft.githubIssueNumber === undefined) {
+        res.status(500).json({ error: "Issue draft is in 'created' status but is missing githubIssueNumber" });
+        return;
+      }
+      res.json({
+        draftId: issueId,
+        githubIssueNumber: draft.githubIssueNumber,
+        // Use the persisted URL if available; fall back to constructing from the current request's owner/repo
+        githubIssueUrl: draft.githubIssueUrl ?? `https://github.com/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues/${draft.githubIssueNumber}`,
+        alreadyCreated: true,
+      });
+      return;
+    }
+
+    if (draft.status !== "ready") {
+      res.status(400).json({ error: `Issue draft has status '${draft.status}' — only 'ready' drafts can be pushed to GitHub` });
+      return;
+    }
+
+    // Fetch ResearchItems for the Research Context section concurrently
+    const researchItemResults = await Promise.all(
+      draft.researchLinks.map((researchId) => planningStore.getResearchItem(researchId))
+    );
+    const researchItems: import("./planning-types.js").ResearchItem[] = researchItemResults.filter(
+      (item): item is import("./planning-types.js").ResearchItem => item != null
+    );
+
+    const issueBody = buildIssueBody(draft, researchItems);
+
+    const requestBody: Record<string, unknown> = {
+      title: draft.title,
+      body: issueBody,
+    };
+
+    // Associate with GitHub Milestone if one has been created
+    if (milestone.githubNumber !== undefined) {
+      requestBody.milestone = milestone.githubNumber;
+    }
+
+    if (labels.length > 0) {
+      requestBody.labels = labels;
+    }
+
+    const created = (await githubWrite(
+      token,
+      "POST",
+      `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues`,
+      requestBody
+    )) as any;
+
+    if (!created.number || !Number.isFinite(created.number)) {
+      res.status(500).json({ error: "GitHub API response is missing a valid issue number" });
+      return;
+    }
+
+    const updatedDraft = await planningStore.updateIssueDraft(issueId, {
+      status: "created",
+      githubIssueNumber: created.number,
+      githubIssueUrl: created.html_url,
+    });
+    if (!updatedDraft) {
+      res.status(404).json({ error: "Issue draft not found after update" });
+      return;
+    }
+
+    res.json({
+      draftId: issueId,
+      githubIssueNumber: created.number,
+      githubIssueUrl: created.html_url,
+      alreadyCreated: false,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Failed to push issue to GitHub" });
   }
 });
 
@@ -776,6 +1537,69 @@ if (process.env.ENABLE_GOAL_SEED === "true") {
       res.status(500).json({ error: err.message || "Failed to seed milestone" });
     }
   });
+
+  app.post("/api/test/seed-issue-draft", async (req: Request, res: Response) => {
+    const token = extractToken(req);
+    if (!token) {
+      res.status(401).json({ error: "Missing token. Provide Authorization: Bearer <token> header." });
+      return;
+    }
+    try {
+      const draft = req.body as import("./planning-types.js").IssueDraft;
+
+      if (typeof draft.milestoneId !== "string" || draft.milestoneId.trim().length === 0) {
+        res.status(400).json({ error: "milestoneId is required and must be a string" });
+        return;
+      }
+
+      const milestone = await planningStore.getMilestone(draft.milestoneId);
+      if (!milestone) {
+        res.status(404).json({ error: "Referenced milestone does not exist" });
+        return;
+      }
+
+      const goal = await getOwnedGoal(token, milestone.goalId);
+      if (!goal) {
+        res.status(404).json({ error: "Referenced milestone does not exist or does not belong to the authenticated user" });
+        return;
+      }
+
+      try {
+        const created = await planningStore.createIssueDraft(draft);
+        res.status(201).json(created);
+      } catch (err: any) {
+        // Validation or domain errors from createIssueDraft → 400 Bad Request
+        res.status(400).json({ error: err.message || "Invalid issue draft" });
+      }
+    } catch (err: any) {
+      // Unexpected errors → 500 Internal Server Error
+      res.status(500).json({ error: err.message || "Failed to seed issue draft" });
+    }
+  });
+
+  // Seed a pending user input request (for integration tests of POST /api/chat/input roundtrip)
+  app.post("/api/test/seed-pending-input", async (req: Request, res: Response) => {
+    const token = extractToken(req);
+    if (!token) {
+      res.status(401).json({ error: "Missing token. Provide Authorization: Bearer <token> header." });
+      return;
+    }
+    const { requestId } = req.body;
+    if (!requestId || typeof requestId !== "string") {
+      res.status(400).json({ error: "Missing or invalid 'requestId' field" });
+      return;
+    }
+    if (pendingInputs.has(requestId)) {
+      res.status(409).json({ error: "A pending input with this requestId already exists" });
+      return;
+    }
+    const tHash = await hashToken(token);
+    // Create a no-op pending entry scoped to this token so the roundtrip test can resolve it
+    const wrappedResolve = (_value: UserInputResponse) => { pendingInputs.delete(requestId); };
+    const wrappedReject = (_err: Error) => { pendingInputs.delete(requestId); };
+    pendingInputs.set(requestId, { resolve: wrappedResolve, reject: wrappedReject, ownerTokenHash: tHash });
+    res.status(201).json({ ok: true, requestId });
+  });
 }
 
 // --- Start Server ---
@@ -793,6 +1617,20 @@ async function startServer() {
     }
   } else {
     console.log("Using in-memory session storage (set AZURE_STORAGE_ACCOUNT_NAME for persistence)");
+  }
+
+  // Initialize Azure planning store if configured
+  if (planningStore instanceof AzurePlanningStore) {
+    try {
+      await planningStore.initialize();
+      console.log("Azure Planning Store initialized (4 tables)");
+    } catch (err: any) {
+      console.error("Failed to initialize Azure Planning Store:", err.message);
+      console.log("Falling back to in-memory planning storage (planning data will not persist)");
+      planningStore = new InMemoryPlanningStore();
+    }
+  } else {
+    console.log("Using in-memory planning storage (set AZURE_STORAGE_ACCOUNT_NAME for persistence)");
   }
 
   const server = app.listen(PORT, () => {

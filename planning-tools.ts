@@ -5,7 +5,7 @@
 
 import type { Tool } from "@github/copilot-sdk";
 import type { PlanningStore } from "./planning-store.js";
-import type { Goal, Milestone, ResearchItem } from "./planning-types.js";
+import type { FileRef, Goal, IssueDraft, Milestone, ResearchItem } from "./planning-types.js";
 
 // --- Exported tool names for permission handler reference ---
 
@@ -14,11 +14,14 @@ export const PLANNING_TOOL_NAMES = [
   "save_goal",
   "get_goal",
   "generate_research_checklist",
+  "suggest_research",
   "update_research_item",
   "get_research",
   "create_milestone_plan",
   "update_milestone",
   "get_milestones",
+  "generate_issue_drafts",
+  "update_issue_draft",
 ] as const;
 
 // --- Max field lengths (from planning-types.ts JSDoc) ---
@@ -42,6 +45,27 @@ const MAX_CRITERIA_ITEMS = 50;
 const MAX_MILESTONES_PER_PLAN = 20;
 
 const VALID_MILESTONE_STATUSES = new Set<string>(["draft", "ready", "in-progress", "complete"]);
+const VALID_ISSUE_DRAFT_STATUSES = new Set<string>(["draft", "ready", "created"]);
+
+// --- IssueDraft field length constants ---
+
+const MAX_ISSUE_TITLE_LENGTH = 256;
+const MAX_ISSUE_PURPOSE_LENGTH = 500;
+const MAX_ISSUE_PROBLEM_LENGTH = 1000;
+const MAX_ISSUE_OUTCOME_LENGTH = 500;
+const MAX_ISSUE_SCOPE_LENGTH = 1000;
+const MAX_ISSUE_TECHNICAL_CONTEXT_LENGTH = 2000;
+const MAX_ISSUE_TESTING_EXPECTATIONS_LENGTH = 1000;
+const MAX_ISSUE_FILE_PATH_LENGTH = 256;
+const MAX_ISSUE_FILE_REASON_LENGTH = 500;
+const MAX_ISSUES_PER_MILESTONE = 50;
+
+// --- R9 Issue Quality Checklist constraints ---
+
+const R9_MIN_ACCEPTANCE_CRITERIA = 1;
+const R9_MIN_FILES_TO_MODIFY = 1;
+const R9_MAX_FILES_TO_MODIFY = 5;
+const R9_MIN_VERIFICATION_COMMANDS = 1;
 
 // --- Validation helpers ---
 
@@ -98,6 +122,28 @@ function validateUrl(value: string, fieldName: string): string | null {
  */
 function sanitizeMilestoneName(name: string): string {
   return sanitizeText(name.replace(/[\x00-\x1F\x7F]/g, " ").replace(/\s+/g, " ").trim());
+}
+
+/**
+ * Sanitizes a file path reference by stripping control characters.
+ * Does not HTML-escape to preserve path structure.
+ */
+function sanitizeFilePath(path: string): string {
+  return path.replace(/[\x00-\x1F\x7F]/g, "").trim();
+}
+
+/**
+ * Validates that a file path is a safe relative path (no path traversal).
+ * Returns an error message or null if valid.
+ */
+function validateFileRefPath(path: string, fieldName: string): string | null {
+  if (path.includes("..")) {
+    return `${fieldName}: path must not contain ".."`;
+  }
+  if (path.startsWith("/")) {
+    return `${fieldName}: path must be a relative path (must not start with "/")`;
+  }
+  return null;
 }
 
 /**
@@ -209,6 +255,249 @@ const RESEARCH_CATEGORIES: ReadonlyArray<{
   },
 ];
 
+// --- Research trigger definitions for suggest_research (module-scoped) ---
+
+/**
+ * The type of knowledge gap that triggered a research suggestion.
+ * - `external_api`: A named external service or API integration
+ * - `infrastructure`: Hosting, deployment, or scaling concerns
+ * - `security`: Authentication, encryption, or compliance requirements
+ * - `data_model`: Database, schema, or storage concerns
+ * - `scope_uncertainty`: Architectural migrations, breaking changes, or ambiguous scope
+ */
+type ResearchTriggerType =
+  | "external_api"
+  | "infrastructure"
+  | "security"
+  | "data_model"
+  | "scope_uncertainty";
+
+interface ResearchTriggerDefinition {
+  readonly pattern: RegExp;
+  readonly triggerType: ResearchTriggerType;
+  readonly category: ResearchItem["category"];
+  readonly generateQuestion: (keyword: string, goalSummary: string) => string;
+}
+
+/**
+ * Ordered list of trigger definitions. The first match per ResearchItem category
+ * wins (deduplication is done in detectResearchTriggers).
+ */
+const RESEARCH_TRIGGER_DEFINITIONS: ReadonlyArray<ResearchTriggerDefinition> = [
+  // --- External API / integration triggers ---
+  {
+    pattern: /\b(stripe|braintree|paypal|payments?|billing|invoice|subscription)\b/i,
+    triggerType: "external_api",
+    category: "integration",
+    generateQuestion: (kw, g) =>
+      `The plan mentions "${kw}" — what is the API authentication, rate-limiting, webhook flow, and SDK availability for: "${g}"?`,
+  },
+  {
+    pattern: /\b(twilio|sendgrid|mailgun|ses|emails?|sms|notifications?|push notifications?)\b/i,
+    triggerType: "external_api",
+    category: "integration",
+    generateQuestion: (kw, g) =>
+      `The plan mentions "${kw}" — what are the delivery guarantees, rate limits, and error-handling requirements for messaging in: "${g}"?`,
+  },
+  {
+    pattern: /\b(oauth|sso|openid|saml|auth0|okta|cognito|azure\s*ad)\b/i,
+    triggerType: "external_api",
+    category: "integration",
+    generateQuestion: (kw, g) =>
+      `The plan mentions "${kw}" — what is the token refresh strategy, session lifetime, and required scopes for: "${g}"?`,
+  },
+  {
+    pattern: /\b(github\s*api|gitlab\s*api|jira|confluence|slack|discord|webhooks?)\b/i,
+    triggerType: "external_api",
+    category: "integration",
+    generateQuestion: (kw, g) =>
+      `The plan mentions "${kw}" — what API version, pagination strategy, and rate limits apply to: "${g}"?`,
+  },
+  // --- Infrastructure triggers ---
+  {
+    pattern: /\b(docker|containers?|kubernetes|k8s|helm|pods?)\b/i,
+    triggerType: "infrastructure",
+    category: "infrastructure",
+    generateQuestion: (kw, g) =>
+      `The plan mentions "${kw}" — what container resource limits, health checks, and deployment strategy are required for: "${g}"?`,
+  },
+  {
+    pattern: /\b(aws|azure|gcp|cloud|serverless|lambda|function\s*app|cloud\s*run)\b/i,
+    triggerType: "infrastructure",
+    category: "infrastructure",
+    generateQuestion: (kw, g) =>
+      `The plan mentions "${kw}" — what region, pricing model, IAM policies, and scaling limits apply to: "${g}"?`,
+  },
+  {
+    pattern: /\b(scal(e|ing)|load\s*balanc\w*|high[\s-]availability|cdn|redis|memcached)\b/i,
+    triggerType: "infrastructure",
+    category: "infrastructure",
+    generateQuestion: (kw, g) =>
+      `The plan mentions "${kw}" — what are the expected load patterns, SLA targets, and caching strategy for: "${g}"?`,
+  },
+  // --- Security triggers ---
+  {
+    pattern: /\b(authent\w*|authoriz\w*|login|password|jwt|access\s*token|session|csrf|xss)\b/i,
+    triggerType: "security",
+    category: "security",
+    generateQuestion: (kw, g) =>
+      `The plan mentions "${kw}" — what is the authentication flow, token expiry policy, and privilege escalation risk for: "${g}"?`,
+  },
+  {
+    pattern: /\b(gdpr|pii|personal\s*data|privacy|compliance|hipaa|soc\s*2|audit\s*log)\b/i,
+    triggerType: "security",
+    category: "security",
+    generateQuestion: (kw, g) =>
+      `The plan mentions "${kw}" — what data retention, consent management, and compliance obligations must be addressed for: "${g}"?`,
+  },
+  {
+    pattern: /\b(encrypt\w*|secrets?|key\s*management|vault|hsm|tls|ssl|certificate)\b/i,
+    triggerType: "security",
+    category: "security",
+    generateQuestion: (kw, g) =>
+      `The plan mentions "${kw}" — what key rotation policy, secrets storage strategy, and threat model apply to: "${g}"?`,
+  },
+  // --- Data model triggers ---
+  {
+    pattern: /\b(database|sql|postgresql|mysql|mongodb|sqlite|cosmos|dynamodb|nosql|schema|migrations?)\b/i,
+    triggerType: "data_model",
+    category: "data_model",
+    generateQuestion: (kw, g) =>
+      `The plan mentions "${kw}" — what is the data schema, migration strategy, and indexing approach for: "${g}"?`,
+  },
+  {
+    pattern: /\b(blob|object\s*storage|s3|file\s*storage|media\s*upload)\b/i,
+    triggerType: "data_model",
+    category: "data_model",
+    generateQuestion: (kw, g) =>
+      `The plan mentions "${kw}" — what are the file size limits, storage lifecycle rules, and access control requirements for: "${g}"?`,
+  },
+  // --- Scope uncertainty / architectural triggers ---
+  {
+    pattern: /\b(refactor\w*|migrat\w*|upgrade|breaking[\s-]changes?|legacy)\b/i,
+    triggerType: "scope_uncertainty",
+    category: "architecture",
+    generateQuestion: (kw, g) =>
+      `The plan mentions "${kw}" — what is the rollback plan, backward compatibility strategy, and blast radius for: "${g}"?`,
+  },
+  {
+    pattern: /\b(microservices?|monolith|event[\s-]driven|cqrs|event\s*sourcing|message\s*queue|pub[\s/-]?sub)\b/i,
+    triggerType: "scope_uncertainty",
+    category: "architecture",
+    generateQuestion: (kw, g) =>
+      `The plan mentions "${kw}" — what are the service boundaries, communication contracts, and failure modes for: "${g}"?`,
+  },
+];
+
+/**
+ * Scans content text for research trigger patterns and returns targeted suggestions.
+ * At most one suggestion is returned per ResearchItem category (first match wins).
+ *
+ * @param content - Combined text to scan for trigger keywords
+ * @param goalSummary - Short goal description used in question phrasing (already sanitized)
+ * @returns Array of detected suggestions in the order they were found
+ */
+function detectResearchTriggers(
+  content: string,
+  goalSummary: string
+): Array<{
+  triggerType: ResearchTriggerType;
+  category: ResearchItem["category"];
+  question: string;
+  detectedKeyword: string;
+}> {
+  const suggestions: Array<{
+    triggerType: ResearchTriggerType;
+    category: ResearchItem["category"];
+    question: string;
+    detectedKeyword: string;
+  }> = [];
+  const seenCategories = new Set<ResearchItem["category"]>();
+
+  for (const def of RESEARCH_TRIGGER_DEFINITIONS) {
+    if (seenCategories.has(def.category)) continue;
+    const match = def.pattern.exec(content);
+    if (match) {
+      const keyword = (match[1] ?? match[0]).toLowerCase();
+      suggestions.push({
+        triggerType: def.triggerType,
+        category: def.category,
+        question: def.generateQuestion(keyword, goalSummary),
+        detectedKeyword: keyword,
+      });
+      seenCategories.add(def.category);
+    }
+  }
+
+  return suggestions;
+}
+
+// --- IssueDraft processing type (used by generate_issue_drafts handler) ---
+
+type SanitizedIssueSpec = {
+  title: string;
+  purpose: string;
+  problem: string;
+  expectedOutcome: string;
+  scopeBoundaries: string;
+  technicalContext: string;
+  acceptanceCriteria: string[];
+  testingExpectations: string;
+  filesToModify: FileRef[];
+  filesToRead: FileRef[];
+  patternReference?: string;
+  securityChecklist: string[];
+  verificationCommands: string[];
+  order: number;
+  rawDependencies: number[];
+  researchLinks: string[];
+};
+
+/**
+ * Validates and sanitizes an array of FileRef objects.
+ * Returns { result: FileRef[] } on success or { error: string } on failure.
+ */
+function validateAndSanitizeFileRefs(
+  refs: unknown,
+  fieldName: string
+): { result: FileRef[] } | { error: string } {
+  if (!Array.isArray(refs)) {
+    return { error: `${fieldName} must be an array` };
+  }
+  const sanitized: FileRef[] = [];
+  for (let k = 0; k < refs.length; k++) {
+    const ref = refs[k];
+    const refPrefix = `${fieldName}[${k}]`;
+    if (ref == null || typeof ref !== "object") {
+      return { error: `${refPrefix} must be a non-null object with path and reason` };
+    }
+    if (typeof ref.path !== "string" || ref.path.trim().length === 0) {
+      return { error: `${refPrefix}.path must be a non-empty string` };
+    }
+    // Sanitize path first, then validate on the sanitized value to prevent
+    // control-character bypass (e.g., ".\x00." → ".." after stripping).
+    const sanitizedPath = sanitizeFilePath(ref.path as string);
+    if (sanitizedPath.length === 0) {
+      return { error: `${refPrefix}.path must be a non-empty string` };
+    }
+    if (sanitizedPath.length > MAX_ISSUE_FILE_PATH_LENGTH) {
+      return { error: `${refPrefix}.path must be at most ${MAX_ISSUE_FILE_PATH_LENGTH} characters` };
+    }
+    const pathTraversalErr = validateFileRefPath(sanitizedPath, `${refPrefix}.path`);
+    if (pathTraversalErr) return { error: pathTraversalErr };
+    if (typeof ref.reason !== "string" || ref.reason.trim().length === 0) {
+      return { error: `${refPrefix}.reason must be a non-empty string` };
+    }
+    // Sanitize reason first, then re-check length on the expanded value.
+    const sanitizedReason = sanitizeText(ref.reason as string);
+    if (sanitizedReason.length > MAX_ISSUE_FILE_REASON_LENGTH) {
+      return { error: `${refPrefix}.reason must be at most ${MAX_ISSUE_FILE_REASON_LENGTH} characters` };
+    }
+    sanitized.push({ path: sanitizedPath, reason: sanitizedReason });
+  }
+  return { result: sanitized };
+}
+
 // --- Tool factory ---
 
 /**
@@ -218,7 +507,7 @@ const RESEARCH_CATEGORIES: ReadonlyArray<{
  *
  * @param token - The user's GitHub PAT (reserved for future use)
  * @param planningStore - The PlanningStore instance for persisting goals
- * @returns Array of Tool objects [defineGoal, saveGoal, getGoal, generateResearchChecklist, updateResearchItem, getResearch, createMilestonePlan, updateMilestone, getMilestones]
+ * @returns Array of Tool objects [defineGoal, saveGoal, getGoal, generateResearchChecklist, updateResearchItem, getResearch, createMilestonePlan, updateMilestone, getMilestones, generateIssueDrafts, updateIssueDraft]
  */
 export function createPlanningTools(token: string, planningStore: PlanningStore): Tool[] {
   /**
@@ -500,6 +789,124 @@ export function createPlanningTools(token: string, planningStore: PlanningStore)
       }
 
       return { items: createdItems };
+    },
+  };
+
+  /**
+   * suggest_research: Analyzes a saved goal's content for research triggers
+   * and generates targeted, specific research questions.
+   * Detects at least 3 categories of triggers: external API integrations,
+   * infrastructure concerns, security requirements, data model needs, and
+   * architectural scope uncertainty.
+   * Saves matched items to the planning store and returns them alongside
+   * a summary of which triggers were detected.
+   */
+  const suggestResearch: Tool = {
+    name: "suggest_research",
+    description:
+      "Analyze a saved goal's content for research triggers and generate targeted, specific research questions. " +
+      "Detects external API mentions (e.g. Stripe, OAuth), infrastructure concerns (e.g. Docker, AWS), " +
+      "security requirements (e.g. authentication, GDPR), data model needs (e.g. database, schema), " +
+      "and architectural scope uncertainties (e.g. refactoring, microservices). " +
+      "Saves the triggered research items to the planning store and returns them with trigger metadata. " +
+      "Use alongside generate_research_checklist for comprehensive coverage.",
+    parameters: {
+      type: "object",
+      properties: {
+        goalId: {
+          type: "string",
+          description: "The ID of the goal to analyze for research triggers.",
+        },
+        sessionId: {
+          type: "string",
+          description:
+            "The session identifier of the caller. Must match the goal's sessionId.",
+        },
+        context: {
+          type: "string",
+          description:
+            "Optional additional context text to scan (e.g. milestone goals or scope descriptions). Max 4000 chars.",
+        },
+      },
+      required: ["goalId", "sessionId"],
+    },
+    handler: async (args: any) => {
+      const goalIdErr = validateStringField(args.goalId, "goalId", 256);
+      if (goalIdErr) return { error: goalIdErr };
+
+      const sessionIdErr = validateStringField(args.sessionId, "sessionId", MAX_SESSION_ID_LENGTH);
+      if (sessionIdErr) return { error: sessionIdErr };
+
+      if (typeof args.context === "string") {
+        const trimmedContext = args.context.trim();
+        if (trimmedContext.length > 0) {
+          const contextErr = validateStringField(trimmedContext, "context", 4000);
+          if (contextErr) return { error: contextErr };
+          args.context = trimmedContext;
+        } else {
+          // Treat empty/whitespace-only context as if it were not provided.
+          args.context = undefined;
+        }
+      }
+
+      const goal = await planningStore.getGoal(args.goalId);
+      if (!goal || goal.sessionId !== args.sessionId) {
+        return { error: `Goal not found: ${args.goalId}` };
+      }
+
+      // Combine all goal text fields plus optional extra context for scanning.
+      const combinedContent = [
+        goal.intent,
+        goal.goal,
+        goal.problemStatement,
+        goal.businessValue,
+        goal.targetOutcome,
+        ...(goal.successCriteria ?? []),
+        ...(goal.assumptions ?? []),
+        ...(goal.constraints ?? []),
+        ...(goal.risks ?? []),
+        typeof args.context === "string" ? args.context : "",
+      ].join(" ");
+
+      const goalSummary = sanitizeText(goal.goal.slice(0, 100));
+      const triggered = detectResearchTriggers(combinedContent, goalSummary);
+
+      if (triggered.length === 0) {
+        return {
+          items: [],
+          triggerSummary: {},
+          message:
+            "No specific research triggers detected in the plan content. " +
+            "Consider using generate_research_checklist for comprehensive baseline coverage.",
+        };
+      }
+
+      const createdItems: ResearchItem[] = [];
+      const triggerSummary: Partial<Record<ResearchTriggerType, string[]>> = {};
+
+      for (const suggestion of triggered) {
+        const item: ResearchItem = {
+          id: crypto.randomUUID(),
+          goalId: goal.id,
+          category: suggestion.category,
+          question: suggestion.question,
+          // NOTE: trigger metadata (triggerType, detectedKeyword) is only available in the
+          // returned triggerSummary object; it is not persisted in the ResearchItem store.
+          status: "open",
+          findings: "",
+          decision: "",
+        };
+        const saved = await planningStore.createResearchItem(item);
+        createdItems.push(saved);
+
+        if (!triggerSummary[suggestion.triggerType]) {
+          triggerSummary[suggestion.triggerType] = [];
+        }
+        // Non-null assertion is safe: we just assigned an array above.
+        triggerSummary[suggestion.triggerType]!.push(suggestion.detectedKeyword);
+      }
+
+      return { items: createdItems, triggerSummary };
     },
   };
 
@@ -1161,5 +1568,777 @@ export function createPlanningTools(token: string, planningStore: PlanningStore)
     },
   };
 
-  return [defineGoal, saveGoal, getGoal, generateResearchChecklist, updateResearchItem, getResearch, createMilestonePlan, updateMilestone, getMilestones];
+  /**
+   * generate_issue_drafts: Takes a set of issue draft specs for a milestone and
+   * generates fully formed IssueDraft entities. Validates ownership (via goalId +
+   * sessionId), validates each spec against the R9 Issue Quality Checklist,
+   * detects circular dependencies, sanitizes all text fields, and persists the
+   * drafts. Returns the created drafts sorted by order.
+   */
+  const generateIssueDrafts: Tool = {
+    name: "generate_issue_drafts",
+    description:
+      "Generate implementation-ready issue drafts for a milestone. " +
+      "Accepts an array of issue specs (each with title, problem, acceptance criteria, " +
+      "file references, verification commands, and R9 quality fields) and persists them as " +
+      "IssueDraft entities. Validates R9 quality constraints: ≥1 acceptance criterion, " +
+      `≥${R9_MIN_FILES_TO_MODIFY} and ≤${R9_MAX_FILES_TO_MODIFY} files to modify, ` +
+      `≥${R9_MIN_VERIFICATION_COMMANDS} verification command. ` +
+      "Dependencies within the batch are expressed as order values (integers). " +
+      "Circular dependency detection is performed before saving. " +
+      "Returns created issue drafts ordered by position.",
+    parameters: {
+      type: "object",
+      properties: {
+        sessionId: {
+          type: "string",
+          description: "The session identifier of the caller. Must match the goal's sessionId.",
+        },
+        goalId: {
+          type: "string",
+          description: "The ID of the goal that owns this milestone.",
+        },
+        milestoneId: {
+          type: "string",
+          description: "The ID of the milestone to generate issue drafts for.",
+        },
+        issues: {
+          type: "array",
+          description: `Array of issue draft specs (max ${MAX_ISSUES_PER_MILESTONE}). Each entry defines one issue.`,
+          items: {
+            type: "object",
+            properties: {
+              title: {
+                type: "string",
+                description: `GitHub issue title. Max ${MAX_ISSUE_TITLE_LENGTH} chars.`,
+              },
+              purpose: {
+                type: "string",
+                description: `Brief description of what this issue is for. Max ${MAX_ISSUE_PURPOSE_LENGTH} chars.`,
+              },
+              problem: {
+                type: "string",
+                description: `The specific problem or gap this issue addresses. Max ${MAX_ISSUE_PROBLEM_LENGTH} chars.`,
+              },
+              expectedOutcome: {
+                type: "string",
+                description: `Desired end state once implemented. Max ${MAX_ISSUE_OUTCOME_LENGTH} chars.`,
+              },
+              scopeBoundaries: {
+                type: "string",
+                description: `What is in scope and explicitly out of scope. Max ${MAX_ISSUE_SCOPE_LENGTH} chars.`,
+              },
+              technicalContext: {
+                type: "string",
+                description: `Background information, patterns, and constraints. Max ${MAX_ISSUE_TECHNICAL_CONTEXT_LENGTH} chars.`,
+              },
+              acceptanceCriteria: {
+                type: "array",
+                items: { type: "string" },
+                description: `Conditions that must be true for the issue to be complete. Minimum ${R9_MIN_ACCEPTANCE_CRITERIA}.`,
+              },
+              testingExpectations: {
+                type: "string",
+                description: `Description of required tests and testing strategy. Max ${MAX_ISSUE_TESTING_EXPECTATIONS_LENGTH} chars.`,
+              },
+              filesToModify: {
+                type: "array",
+                description: `Files to create or modify during implementation. Min ${R9_MIN_FILES_TO_MODIFY}, max ${R9_MAX_FILES_TO_MODIFY}.`,
+                items: {
+                  type: "object",
+                  properties: {
+                    path: {
+                      type: "string",
+                      description: `Relative file path (e.g., "server.ts"). Max ${MAX_ISSUE_FILE_PATH_LENGTH} chars. Must not contain ".." or start with "/".`,
+                    },
+                    reason: {
+                      type: "string",
+                      description: `Why this file is modified. Max ${MAX_ISSUE_FILE_REASON_LENGTH} chars.`,
+                    },
+                  },
+                  required: ["path", "reason"],
+                },
+              },
+              filesToRead: {
+                type: "array",
+                description: "Files to read for context (not modified).",
+                items: {
+                  type: "object",
+                  properties: {
+                    path: {
+                      type: "string",
+                      description: `Relative file path. Max ${MAX_ISSUE_FILE_PATH_LENGTH} chars. Must not contain ".." or start with "/".`,
+                    },
+                    reason: {
+                      type: "string",
+                      description: `Why this file is read. Max ${MAX_ISSUE_FILE_REASON_LENGTH} chars.`,
+                    },
+                  },
+                  required: ["path", "reason"],
+                },
+              },
+              patternReference: {
+                type: "string",
+                description: "Optional: existing file or pattern to use as implementation reference.",
+              },
+              securityChecklist: {
+                type: "array",
+                items: { type: "string" },
+                description: "Security-specific validation rules for this issue.",
+              },
+              verificationCommands: {
+                type: "array",
+                items: { type: "string" },
+                description: `Exact commands to run for self-verification after implementation. Minimum ${R9_MIN_VERIFICATION_COMMANDS}.`,
+              },
+              order: {
+                type: "integer",
+                minimum: 1,
+                description: "Position of this issue within the milestone (1-based, must be unique within this batch).",
+              },
+              dependencies: {
+                type: "array",
+                items: { type: "integer", minimum: 1 },
+                description: "Order values of other issues in this batch that must be completed before this one.",
+              },
+              researchLinks: {
+                type: "array",
+                items: { type: "string" },
+                description: "IDs of resolved ResearchItems whose findings are relevant to this issue.",
+              },
+            },
+            required: [
+              "title",
+              "purpose",
+              "problem",
+              "expectedOutcome",
+              "scopeBoundaries",
+              "technicalContext",
+              "acceptanceCriteria",
+              "testingExpectations",
+              "filesToModify",
+              "filesToRead",
+              "securityChecklist",
+              "verificationCommands",
+              "order",
+              "dependencies",
+              "researchLinks",
+            ],
+          },
+        },
+      },
+      required: ["sessionId", "goalId", "milestoneId", "issues"],
+    },
+    handler: async (args: any) => {
+      const sessionIdErr = validateStringField(args.sessionId, "sessionId", MAX_SESSION_ID_LENGTH);
+      if (sessionIdErr) return { error: sessionIdErr };
+
+      const goalIdErr = validateStringField(args.goalId, "goalId", 256);
+      if (goalIdErr) return { error: goalIdErr };
+
+      const milestoneIdErr = validateStringField(args.milestoneId, "milestoneId", 256);
+      if (milestoneIdErr) return { error: milestoneIdErr };
+
+      // Ownership check via goal
+      const goal = await planningStore.getGoal(args.goalId);
+      if (!goal || goal.sessionId !== args.sessionId) {
+        return { error: `Goal not found: ${args.goalId}` };
+      }
+
+      // Verify milestone belongs to the stated goal
+      const milestone = await planningStore.getMilestone(args.milestoneId);
+      if (!milestone || milestone.goalId !== args.goalId) {
+        return { error: `Milestone not found: ${args.milestoneId}` };
+      }
+
+      // Validate issues array
+      if (!Array.isArray(args.issues) || args.issues.length === 0) {
+        return { error: "issues must be a non-empty array" };
+      }
+      if (args.issues.length > MAX_ISSUES_PER_MILESTONE) {
+        return { error: `issues must have at most ${MAX_ISSUES_PER_MILESTONE} entries` };
+      }
+
+      // Validate and pre-compute sanitized values for each issue spec
+      const sanitizedSpecs: SanitizedIssueSpec[] = [];
+
+      for (let i = 0; i < args.issues.length; i++) {
+        const spec = args.issues[i];
+        const prefix = `issues[${i}]`;
+
+        // Validate and sanitize required string fields
+        const titleErr = validateStringField(spec.title, `${prefix}.title`, MAX_ISSUE_TITLE_LENGTH);
+        if (titleErr) return { error: titleErr };
+        const sanitizedTitle = sanitizeText(spec.title as string);
+        if (sanitizedTitle.length > MAX_ISSUE_TITLE_LENGTH) {
+          return { error: `${prefix}.title exceeds ${MAX_ISSUE_TITLE_LENGTH} characters after sanitization` };
+        }
+
+        const purposeErr = validateStringField(spec.purpose, `${prefix}.purpose`, MAX_ISSUE_PURPOSE_LENGTH);
+        if (purposeErr) return { error: purposeErr };
+        const sanitizedPurpose = sanitizeText(spec.purpose as string);
+        if (sanitizedPurpose.length > MAX_ISSUE_PURPOSE_LENGTH) {
+          return { error: `${prefix}.purpose exceeds ${MAX_ISSUE_PURPOSE_LENGTH} characters after sanitization` };
+        }
+
+        const problemErr = validateStringField(spec.problem, `${prefix}.problem`, MAX_ISSUE_PROBLEM_LENGTH);
+        if (problemErr) return { error: problemErr };
+        const sanitizedProblem = sanitizeText(spec.problem as string);
+        if (sanitizedProblem.length > MAX_ISSUE_PROBLEM_LENGTH) {
+          return { error: `${prefix}.problem exceeds ${MAX_ISSUE_PROBLEM_LENGTH} characters after sanitization` };
+        }
+
+        const outcomeErr = validateStringField(spec.expectedOutcome, `${prefix}.expectedOutcome`, MAX_ISSUE_OUTCOME_LENGTH);
+        if (outcomeErr) return { error: outcomeErr };
+        const sanitizedOutcome = sanitizeText(spec.expectedOutcome as string);
+        if (sanitizedOutcome.length > MAX_ISSUE_OUTCOME_LENGTH) {
+          return { error: `${prefix}.expectedOutcome exceeds ${MAX_ISSUE_OUTCOME_LENGTH} characters after sanitization` };
+        }
+
+        const scopeErr = validateStringField(spec.scopeBoundaries, `${prefix}.scopeBoundaries`, MAX_ISSUE_SCOPE_LENGTH);
+        if (scopeErr) return { error: scopeErr };
+        const sanitizedScope = sanitizeText(spec.scopeBoundaries as string);
+        if (sanitizedScope.length > MAX_ISSUE_SCOPE_LENGTH) {
+          return { error: `${prefix}.scopeBoundaries exceeds ${MAX_ISSUE_SCOPE_LENGTH} characters after sanitization` };
+        }
+
+        const contextErr = validateStringField(spec.technicalContext, `${prefix}.technicalContext`, MAX_ISSUE_TECHNICAL_CONTEXT_LENGTH);
+        if (contextErr) return { error: contextErr };
+        const sanitizedContext = sanitizeText(spec.technicalContext as string);
+        if (sanitizedContext.length > MAX_ISSUE_TECHNICAL_CONTEXT_LENGTH) {
+          return { error: `${prefix}.technicalContext exceeds ${MAX_ISSUE_TECHNICAL_CONTEXT_LENGTH} characters after sanitization` };
+        }
+
+        const testingErr = validateStringField(spec.testingExpectations, `${prefix}.testingExpectations`, MAX_ISSUE_TESTING_EXPECTATIONS_LENGTH);
+        if (testingErr) return { error: testingErr };
+        const sanitizedTesting = sanitizeText(spec.testingExpectations as string);
+        if (sanitizedTesting.length > MAX_ISSUE_TESTING_EXPECTATIONS_LENGTH) {
+          return { error: `${prefix}.testingExpectations exceeds ${MAX_ISSUE_TESTING_EXPECTATIONS_LENGTH} characters after sanitization` };
+        }
+
+        // Validate order
+        if (typeof spec.order !== "number" || !Number.isInteger(spec.order) || spec.order < 1) {
+          return { error: `${prefix}.order must be a positive integer` };
+        }
+
+        // Validate dependencies
+        if (!Array.isArray(spec.dependencies)) {
+          return { error: `${prefix}.dependencies must be an array` };
+        }
+        for (let j = 0; j < spec.dependencies.length; j++) {
+          const dep = spec.dependencies[j];
+          if (typeof dep !== "number" || !Number.isInteger(dep) || dep < 1) {
+            return { error: `${prefix}.dependencies[${j}] must be a positive integer order value` };
+          }
+        }
+
+        // Validate researchLinks
+        if (!Array.isArray(spec.researchLinks)) {
+          return { error: `${prefix}.researchLinks must be an array` };
+        }
+        for (let j = 0; j < spec.researchLinks.length; j++) {
+          if (typeof spec.researchLinks[j] !== "string" || (spec.researchLinks[j] as string).trim().length === 0) {
+            return { error: `${prefix}.researchLinks[${j}] must be a non-empty string` };
+          }
+        }
+
+        // Validate and sanitize acceptanceCriteria (R9: ≥1 criterion)
+        // Validate raw array types first so non-strings produce structured errors.
+        const acErr = validateCriteriaArray(spec.acceptanceCriteria, `${prefix}.acceptanceCriteria`);
+        if (acErr) return { error: acErr };
+        if (!Array.isArray(spec.acceptanceCriteria) || spec.acceptanceCriteria.length < R9_MIN_ACCEPTANCE_CRITERIA) {
+          return { error: `${prefix}.acceptanceCriteria must have at least ${R9_MIN_ACCEPTANCE_CRITERIA} criterion` };
+        }
+        const sanitizedAcceptanceCriteria = (spec.acceptanceCriteria as string[]).map(sanitizeText);
+
+        // Validate and sanitize verificationCommands (R9: ≥1 command)
+        if (!Array.isArray(spec.verificationCommands)) {
+          return { error: `${prefix}.verificationCommands must be an array` };
+        }
+        if (spec.verificationCommands.length < R9_MIN_VERIFICATION_COMMANDS) {
+          return { error: `${prefix}.verificationCommands must have at least ${R9_MIN_VERIFICATION_COMMANDS} command` };
+        }
+        for (let j = 0; j < spec.verificationCommands.length; j++) {
+          if (typeof spec.verificationCommands[j] !== "string" || (spec.verificationCommands[j] as string).trim().length === 0) {
+            return { error: `${prefix}.verificationCommands[${j}] must be a non-empty string` };
+          }
+        }
+        const sanitizedVerificationCommands = (spec.verificationCommands as string[]).map(sanitizeText);
+
+        // Validate and sanitize securityChecklist
+        if (!Array.isArray(spec.securityChecklist)) {
+          return { error: `${prefix}.securityChecklist must be an array` };
+        }
+        for (let j = 0; j < spec.securityChecklist.length; j++) {
+          if (typeof spec.securityChecklist[j] !== "string" || (spec.securityChecklist[j] as string).trim().length === 0) {
+            return { error: `${prefix}.securityChecklist[${j}] must be a non-empty string` };
+          }
+        }
+        const sanitizedSecurityChecklist = (spec.securityChecklist as string[]).map(sanitizeText);
+
+        // Validate and sanitize filesToModify (R9: ≥1 and ≤5)
+        const modifyResult = validateAndSanitizeFileRefs(spec.filesToModify, `${prefix}.filesToModify`);
+        if ("error" in modifyResult) return { error: modifyResult.error };
+        if (modifyResult.result.length < R9_MIN_FILES_TO_MODIFY) {
+          return { error: `${prefix}.filesToModify must have at least ${R9_MIN_FILES_TO_MODIFY} file` };
+        }
+        if (modifyResult.result.length > R9_MAX_FILES_TO_MODIFY) {
+          return { error: `${prefix}.filesToModify must have at most ${R9_MAX_FILES_TO_MODIFY} files (R9 quality constraint)` };
+        }
+
+        // Validate and sanitize filesToRead
+        const readResult = validateAndSanitizeFileRefs(spec.filesToRead, `${prefix}.filesToRead`);
+        if ("error" in readResult) return { error: readResult.error };
+
+        // Validate and sanitize optional patternReference
+        let sanitizedPatternReference: string | undefined;
+        if (spec.patternReference !== undefined && spec.patternReference !== null) {
+          const prErr = validateStringField(spec.patternReference, `${prefix}.patternReference`, MAX_ISSUE_TECHNICAL_CONTEXT_LENGTH);
+          if (prErr) return { error: prErr };
+          sanitizedPatternReference = sanitizeText(spec.patternReference as string);
+          if (sanitizedPatternReference.length > MAX_ISSUE_TECHNICAL_CONTEXT_LENGTH) {
+            return { error: `${prefix}.patternReference exceeds ${MAX_ISSUE_TECHNICAL_CONTEXT_LENGTH} characters after sanitization` };
+          }
+        }
+
+        sanitizedSpecs.push({
+          title: sanitizedTitle,
+          purpose: sanitizedPurpose,
+          problem: sanitizedProblem,
+          expectedOutcome: sanitizedOutcome,
+          scopeBoundaries: sanitizedScope,
+          technicalContext: sanitizedContext,
+          acceptanceCriteria: sanitizedAcceptanceCriteria,
+          testingExpectations: sanitizedTesting,
+          filesToModify: modifyResult.result,
+          filesToRead: readResult.result,
+          patternReference: sanitizedPatternReference,
+          securityChecklist: sanitizedSecurityChecklist,
+          verificationCommands: sanitizedVerificationCommands,
+          order: spec.order as number,
+          rawDependencies: spec.dependencies as number[],
+          researchLinks: (spec.researchLinks as string[]).map((id: string) => id.trim()),
+        });
+      }
+
+      // Validate unique order values
+      const orderSet = new Set<number>();
+      for (const s of sanitizedSpecs) {
+        if (orderSet.has(s.order)) {
+          return { error: `Duplicate order value: ${s.order}` };
+        }
+        orderSet.add(s.order);
+      }
+
+      // Validate that all dependency order values reference issues in this batch
+      for (let i = 0; i < sanitizedSpecs.length; i++) {
+        for (const depOrder of sanitizedSpecs[i].rawDependencies) {
+          if (!orderSet.has(depOrder)) {
+            return { error: `issues[${i}].dependencies references unknown order: ${depOrder}` };
+          }
+        }
+      }
+
+      // Assign UUIDs and build order → id map
+      const orderToId = new Map<number, string>();
+      const issueIds: string[] = sanitizedSpecs.map((s) => {
+        const id = crypto.randomUUID();
+        orderToId.set(s.order, id);
+        return id;
+      });
+
+      // Detect circular dependencies
+      const depGraph = sanitizedSpecs.map((s, i) => ({
+        id: issueIds[i],
+        dependencyIds: s.rawDependencies.map((depOrder) => orderToId.get(depOrder)!),
+      }));
+      if (hasCircularDependencies(depGraph)) {
+        return { error: "Circular dependency detected among issues" };
+      }
+
+      // Persist issue drafts; on failure, roll back any drafts already created
+      const created: IssueDraft[] = [];
+      for (let i = 0; i < sanitizedSpecs.length; i++) {
+        const s = sanitizedSpecs[i];
+        const draft: IssueDraft = {
+          id: issueIds[i],
+          milestoneId: args.milestoneId,
+          title: s.title,
+          purpose: s.purpose,
+          problem: s.problem,
+          expectedOutcome: s.expectedOutcome,
+          scopeBoundaries: s.scopeBoundaries,
+          technicalContext: s.technicalContext,
+          dependencies: s.rawDependencies.map((depOrder) => orderToId.get(depOrder)!),
+          acceptanceCriteria: s.acceptanceCriteria,
+          testingExpectations: s.testingExpectations,
+          researchLinks: s.researchLinks,
+          order: s.order,
+          status: "draft",
+          filesToModify: s.filesToModify,
+          filesToRead: s.filesToRead,
+          patternReference: s.patternReference,
+          securityChecklist: s.securityChecklist,
+          verificationCommands: s.verificationCommands,
+        };
+        try {
+          const saved = await planningStore.createIssueDraft(draft);
+          created.push(saved);
+        } catch (err: any) {
+          // Best-effort rollback: delete any drafts created in this batch before failing
+          try {
+            if (created.length > 0) {
+              await Promise.all(created.map((d) => planningStore.deleteIssueDraft(d.id)));
+            }
+          } catch {
+            // Ignore rollback errors; report the original failure
+          }
+          return { error: err?.message ?? `Failed to create issues[${i}]` };
+        }
+      }
+
+      created.sort((a, b) => a.order - b.order);
+      return { issues: created };
+    },
+  };
+
+  /**
+   * update_issue_draft: Applies partial updates to an existing IssueDraft.
+   * Requires draftId, goalId, and sessionId for ownership verification.
+   * Validates FileRef elements and sanitizes all text fields.
+   */
+  const updateIssueDraft: Tool = {
+    name: "update_issue_draft",
+    description:
+      "Update one or more fields on an existing issue draft. " +
+      "Requires draftId, goalId, and sessionId for ownership verification. " +
+      "Supports updating core IssueDraft fields and R9 fields " +
+      "(filesToModify, filesToRead, patternReference, securityChecklist, verificationCommands). " +
+      "FileRef elements are validated (non-empty path and reason). " +
+      "All free-text fields are sanitized.",
+    parameters: {
+      type: "object",
+      properties: {
+        draftId: {
+          type: "string",
+          description: "The ID of the issue draft to update.",
+        },
+        goalId: {
+          type: "string",
+          description: "The goal ID that owns the milestone this draft belongs to (used for ownership check).",
+        },
+        sessionId: {
+          type: "string",
+          description: "The session identifier of the caller. Must match the goal's sessionId.",
+        },
+        title: {
+          type: "string",
+          description: `Updated GitHub issue title. Max ${MAX_ISSUE_TITLE_LENGTH} chars.`,
+        },
+        purpose: {
+          type: "string",
+          description: `Updated brief description. Max ${MAX_ISSUE_PURPOSE_LENGTH} chars.`,
+        },
+        problem: {
+          type: "string",
+          description: `Updated problem statement. Max ${MAX_ISSUE_PROBLEM_LENGTH} chars.`,
+        },
+        expectedOutcome: {
+          type: "string",
+          description: `Updated desired end state. Max ${MAX_ISSUE_OUTCOME_LENGTH} chars.`,
+        },
+        scopeBoundaries: {
+          type: "string",
+          description: `Updated scope boundaries. Max ${MAX_ISSUE_SCOPE_LENGTH} chars.`,
+        },
+        technicalContext: {
+          type: "string",
+          description: `Updated technical context. Max ${MAX_ISSUE_TECHNICAL_CONTEXT_LENGTH} chars.`,
+        },
+        acceptanceCriteria: {
+          type: "array",
+          items: { type: "string" },
+          description: "Updated acceptance criteria.",
+        },
+        testingExpectations: {
+          type: "string",
+          description: `Updated testing strategy. Max ${MAX_ISSUE_TESTING_EXPECTATIONS_LENGTH} chars.`,
+        },
+        filesToModify: {
+          type: "array",
+          description: "Updated list of files to create or modify during implementation.",
+          items: {
+            type: "object",
+            properties: {
+              path: {
+                type: "string",
+                description: `Relative file path. Max ${MAX_ISSUE_FILE_PATH_LENGTH} chars. Must not contain ".." or start with "/".`,
+              },
+              reason: {
+                type: "string",
+                description: `Why this file is modified. Max ${MAX_ISSUE_FILE_REASON_LENGTH} chars.`,
+              },
+            },
+            required: ["path", "reason"],
+          },
+        },
+        filesToRead: {
+          type: "array",
+          description: "Updated list of files to read for context (not modified).",
+          items: {
+            type: "object",
+            properties: {
+              path: {
+                type: "string",
+                description: `Relative file path. Max ${MAX_ISSUE_FILE_PATH_LENGTH} chars. Must not contain ".." or start with "/".`,
+              },
+              reason: {
+                type: "string",
+                description: `Why this file is read. Max ${MAX_ISSUE_FILE_REASON_LENGTH} chars.`,
+              },
+            },
+            required: ["path", "reason"],
+          },
+        },
+        patternReference: {
+          type: "string",
+          description: "Updated existing file or pattern to use as implementation reference.",
+        },
+        securityChecklist: {
+          type: "array",
+          items: { type: "string" },
+          description: "Updated security-specific validation rules.",
+        },
+        verificationCommands: {
+          type: "array",
+          items: { type: "string" },
+          description: "Updated exact commands to run for self-verification after implementation.",
+        },
+        order: {
+          type: "integer",
+          minimum: 1,
+          description: "Updated position of this issue within the milestone (1-based).",
+        },
+        status: {
+          type: "string",
+          enum: ["draft", "ready", "created"],
+          description: "Updated status of this issue draft.",
+        },
+        dependencies: {
+          type: "array",
+          items: { type: "string" },
+          description: "Updated list of IssueDraft IDs that must be completed before this one.",
+        },
+        researchLinks: {
+          type: "array",
+          items: { type: "string" },
+          description: "Updated list of resolved ResearchItem IDs relevant to this issue.",
+        },
+      },
+      required: ["draftId", "goalId", "sessionId"],
+    },
+    handler: async (args: any) => {
+      const draftIdErr = validateStringField(args.draftId, "draftId", 256);
+      if (draftIdErr) return { error: draftIdErr };
+
+      const goalIdErr = validateStringField(args.goalId, "goalId", 256);
+      if (goalIdErr) return { error: goalIdErr };
+
+      const sessionIdErr = validateStringField(args.sessionId, "sessionId", MAX_SESSION_ID_LENGTH);
+      if (sessionIdErr) return { error: sessionIdErr };
+
+      // Ownership check via goal
+      const goal = await planningStore.getGoal(args.goalId);
+      if (!goal || goal.sessionId !== args.sessionId) {
+        return { error: `Goal not found: ${args.goalId}` };
+      }
+
+      // Look up the draft and verify it belongs to a milestone under this goal
+      const existing = await planningStore.getIssueDraft(args.draftId);
+      if (!existing) {
+        return { error: `Issue draft not found: ${args.draftId}` };
+      }
+      const milestone = await planningStore.getMilestone(existing.milestoneId);
+      if (!milestone || milestone.goalId !== args.goalId) {
+        return { error: `Issue draft not found: ${args.draftId}` };
+      }
+
+      const updates: Partial<Omit<IssueDraft, "id" | "milestoneId">> = {};
+
+      if (args.title !== undefined && args.title !== null) {
+        const titleErr = validateStringField(args.title, "title", MAX_ISSUE_TITLE_LENGTH);
+        if (titleErr) return { error: titleErr };
+        const sanitizedTitle = sanitizeText(args.title as string);
+        if (sanitizedTitle.length > MAX_ISSUE_TITLE_LENGTH) {
+          return { error: `title exceeds ${MAX_ISSUE_TITLE_LENGTH} characters after sanitization` };
+        }
+        updates.title = sanitizedTitle;
+      }
+
+      if (args.purpose !== undefined && args.purpose !== null) {
+        const purposeErr = validateStringField(args.purpose, "purpose", MAX_ISSUE_PURPOSE_LENGTH);
+        if (purposeErr) return { error: purposeErr };
+        const sanitizedPurpose = sanitizeText(args.purpose as string);
+        if (sanitizedPurpose.length > MAX_ISSUE_PURPOSE_LENGTH) {
+          return { error: `purpose exceeds ${MAX_ISSUE_PURPOSE_LENGTH} characters after sanitization` };
+        }
+        updates.purpose = sanitizedPurpose;
+      }
+
+      if (args.problem !== undefined && args.problem !== null) {
+        const problemErr = validateStringField(args.problem, "problem", MAX_ISSUE_PROBLEM_LENGTH);
+        if (problemErr) return { error: problemErr };
+        const sanitizedProblem = sanitizeText(args.problem as string);
+        if (sanitizedProblem.length > MAX_ISSUE_PROBLEM_LENGTH) {
+          return { error: `problem exceeds ${MAX_ISSUE_PROBLEM_LENGTH} characters after sanitization` };
+        }
+        updates.problem = sanitizedProblem;
+      }
+
+      if (args.expectedOutcome !== undefined && args.expectedOutcome !== null) {
+        const outcomeErr = validateStringField(args.expectedOutcome, "expectedOutcome", MAX_ISSUE_OUTCOME_LENGTH);
+        if (outcomeErr) return { error: outcomeErr };
+        const sanitizedOutcome = sanitizeText(args.expectedOutcome as string);
+        if (sanitizedOutcome.length > MAX_ISSUE_OUTCOME_LENGTH) {
+          return { error: `expectedOutcome exceeds ${MAX_ISSUE_OUTCOME_LENGTH} characters after sanitization` };
+        }
+        updates.expectedOutcome = sanitizedOutcome;
+      }
+
+      if (args.scopeBoundaries !== undefined && args.scopeBoundaries !== null) {
+        const scopeErr = validateStringField(args.scopeBoundaries, "scopeBoundaries", MAX_ISSUE_SCOPE_LENGTH);
+        if (scopeErr) return { error: scopeErr };
+        const sanitizedScope = sanitizeText(args.scopeBoundaries as string);
+        if (sanitizedScope.length > MAX_ISSUE_SCOPE_LENGTH) {
+          return { error: `scopeBoundaries exceeds ${MAX_ISSUE_SCOPE_LENGTH} characters after sanitization` };
+        }
+        updates.scopeBoundaries = sanitizedScope;
+      }
+
+      if (args.technicalContext !== undefined && args.technicalContext !== null) {
+        const contextErr = validateStringField(args.technicalContext, "technicalContext", MAX_ISSUE_TECHNICAL_CONTEXT_LENGTH);
+        if (contextErr) return { error: contextErr };
+        const sanitizedContext = sanitizeText(args.technicalContext as string);
+        if (sanitizedContext.length > MAX_ISSUE_TECHNICAL_CONTEXT_LENGTH) {
+          return { error: `technicalContext exceeds ${MAX_ISSUE_TECHNICAL_CONTEXT_LENGTH} characters after sanitization` };
+        }
+        updates.technicalContext = sanitizedContext;
+      }
+
+      if (args.acceptanceCriteria !== undefined && args.acceptanceCriteria !== null) {
+        const acErrRaw = validateCriteriaArray(args.acceptanceCriteria, "acceptanceCriteria");
+        if (acErrRaw) return { error: acErrRaw };
+        const sanitizedAC = (args.acceptanceCriteria as string[]).map(sanitizeText);
+        const acErrSanitized = validateCriteriaArray(sanitizedAC, "acceptanceCriteria");
+        if (acErrSanitized) return { error: acErrSanitized };
+        updates.acceptanceCriteria = sanitizedAC;
+      }
+
+      if (args.testingExpectations !== undefined && args.testingExpectations !== null) {
+        const testingErr = validateStringField(args.testingExpectations, "testingExpectations", MAX_ISSUE_TESTING_EXPECTATIONS_LENGTH);
+        if (testingErr) return { error: testingErr };
+        const sanitizedTesting = sanitizeText(args.testingExpectations as string);
+        if (sanitizedTesting.length > MAX_ISSUE_TESTING_EXPECTATIONS_LENGTH) {
+          return { error: `testingExpectations exceeds ${MAX_ISSUE_TESTING_EXPECTATIONS_LENGTH} characters after sanitization` };
+        }
+        updates.testingExpectations = sanitizedTesting;
+      }
+
+      if (args.filesToModify !== undefined && args.filesToModify !== null) {
+        const modifyResult = validateAndSanitizeFileRefs(args.filesToModify, "filesToModify");
+        if ("error" in modifyResult) return { error: modifyResult.error };
+        updates.filesToModify = modifyResult.result;
+      }
+
+      if (args.filesToRead !== undefined && args.filesToRead !== null) {
+        const readResult = validateAndSanitizeFileRefs(args.filesToRead, "filesToRead");
+        if ("error" in readResult) return { error: readResult.error };
+        updates.filesToRead = readResult.result;
+      }
+
+      if (args.patternReference !== undefined && args.patternReference !== null) {
+        const prErr = validateStringField(args.patternReference, "patternReference", MAX_ISSUE_TECHNICAL_CONTEXT_LENGTH);
+        if (prErr) return { error: prErr };
+        const sanitizedPR = sanitizeText(args.patternReference as string);
+        if (sanitizedPR.length > MAX_ISSUE_TECHNICAL_CONTEXT_LENGTH) {
+          return { error: `patternReference exceeds ${MAX_ISSUE_TECHNICAL_CONTEXT_LENGTH} characters after sanitization` };
+        }
+        updates.patternReference = sanitizedPR;
+      }
+
+      if (args.securityChecklist !== undefined && args.securityChecklist !== null) {
+        if (!Array.isArray(args.securityChecklist)) {
+          return { error: "securityChecklist must be an array" };
+        }
+        for (let i = 0; i < args.securityChecklist.length; i++) {
+          if (typeof args.securityChecklist[i] !== "string" || (args.securityChecklist[i] as string).trim().length === 0) {
+            return { error: `securityChecklist[${i}] must be a non-empty string` };
+          }
+        }
+        updates.securityChecklist = (args.securityChecklist as string[]).map(sanitizeText);
+      }
+
+      if (args.verificationCommands !== undefined && args.verificationCommands !== null) {
+        if (!Array.isArray(args.verificationCommands)) {
+          return { error: "verificationCommands must be an array" };
+        }
+        for (let i = 0; i < args.verificationCommands.length; i++) {
+          if (typeof args.verificationCommands[i] !== "string" || (args.verificationCommands[i] as string).trim().length === 0) {
+            return { error: `verificationCommands[${i}] must be a non-empty string` };
+          }
+        }
+        updates.verificationCommands = (args.verificationCommands as string[]).map(sanitizeText);
+      }
+
+      if (args.order !== undefined && args.order !== null) {
+        if (typeof args.order !== "number" || !Number.isInteger(args.order) || args.order < 1) {
+          return { error: "order must be a positive integer" };
+        }
+        updates.order = args.order as number;
+      }
+
+      if (args.status !== undefined && args.status !== null) {
+        if (!VALID_ISSUE_DRAFT_STATUSES.has(args.status as string)) {
+          return {
+            error: `status must be one of: ${[...VALID_ISSUE_DRAFT_STATUSES].join(", ")}`,
+          };
+        }
+        updates.status = args.status as IssueDraft["status"];
+      }
+
+      if (args.dependencies !== undefined && args.dependencies !== null) {
+        if (!Array.isArray(args.dependencies)) {
+          return { error: "dependencies must be an array" };
+        }
+        for (let i = 0; i < args.dependencies.length; i++) {
+          if (typeof args.dependencies[i] !== "string" || (args.dependencies[i] as string).trim().length === 0) {
+            return { error: `dependencies[${i}] must be a non-empty issue draft ID string` };
+          }
+        }
+        updates.dependencies = args.dependencies as string[];
+      }
+
+      if (args.researchLinks !== undefined && args.researchLinks !== null) {
+        if (!Array.isArray(args.researchLinks)) {
+          return { error: "researchLinks must be an array" };
+        }
+        for (let i = 0; i < args.researchLinks.length; i++) {
+          if (typeof args.researchLinks[i] !== "string" || (args.researchLinks[i] as string).trim().length === 0) {
+            return { error: `researchLinks[${i}] must be a non-empty string` };
+          }
+        }
+        updates.researchLinks = (args.researchLinks as string[]).map((id: string) => id.trim());
+      }
+
+      try {
+        const updated = await planningStore.updateIssueDraft(args.draftId, updates);
+        if (!updated) return { error: `Issue draft not found: ${args.draftId}` };
+        return { draft: updated };
+      } catch (err: any) {
+        return { error: err.message ?? "Failed to update issue draft" };
+      }
+    },
+  };
+
+  return [defineGoal, saveGoal, getGoal, generateResearchChecklist, suggestResearch, updateResearchItem, getResearch, createMilestonePlan, updateMilestone, getMilestones, generateIssueDrafts, updateIssueDraft];
 }

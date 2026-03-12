@@ -44,12 +44,13 @@
 
 ```
 ├── server.ts              # Express backend (API routes, Copilot SDK integration)
-├── tools.ts               # GitHub API tools factory (5 tools bound to user's token)
+├── tools.ts               # GitHub API tools factory (9 tools: 5 read + 4 write, bound to user's token)
 ├── storage.ts             # Storage abstraction (Azure Table/Blob + in-memory fallback)
 ├── storage.test.ts        # Unit tests for storage module
 ├── planning-types.ts      # Planning data model interfaces (Goal, ResearchItem, Milestone, IssueDraft)
-├── planning-store.ts      # PlanningStore interface + InMemoryPlanningStore implementation
+├── planning-store.ts      # PlanningStore interface + InMemoryPlanningStore + AzurePlanningStore
 ├── planning-store.test.ts # Unit tests for planning store
+├── planning-tools.ts      # Planning tools factory (12 tools: goal, research, milestone, issue drafts)
 ├── test.ts                # Integration tests (SDK + server HTTP API)
 ├── public/                # Frontend (served as static files)
 │   ├── index.html         #   Chat UI (dark theme, session sidebar)
@@ -118,8 +119,18 @@
 | PUT | `/api/sessions/:id/messages` | Bearer token | Save chat messages for a session |
 | POST | `/api/chat` | Bearer token | SSE streaming chat |
 | POST | `/api/chat/abort` | Bearer token | Abort streaming response |
+| POST | `/api/chat/input` | Bearer token | Submit user answer to pending agent input request |
 | POST | `/api/chat/model` | Bearer token | Switch model mid-conversation |
 | GET | `/api/quota` | Bearer token | Premium request quota |
+| GET | `/api/goals` | Bearer token | List all goals for the user |
+| GET | `/api/goals/:id` | Bearer token | Get a specific goal by ID |
+| GET | `/api/goals/:id/research` | Bearer token | List research items for a goal |
+| PATCH | `/api/goals/:goalId/research/:itemId` | Bearer token | Update findings/decision/status on a research item |
+| GET | `/api/goals/:id/milestones` | Bearer token | List milestones for a goal in order |
+| GET | `/api/milestones/:id/issues` | Bearer token | List issue drafts for a milestone in order |
+| PATCH | `/api/milestones/:milestoneId/issues/:issueId` | Bearer token | Update fields/status on an issue draft |
+| POST | `/api/milestones/:id/push-to-github` | Bearer token | Push a planning milestone to GitHub (idempotent) |
+| POST | `/api/milestones/:milestoneId/issues/:issueId/push-to-github` | Bearer token | Push a ready issue draft to GitHub as a real issue (idempotent) |
 
 ## SDK Quick Reference
 

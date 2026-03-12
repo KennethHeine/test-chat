@@ -107,7 +107,7 @@ The server also accepts `COPILOT_GITHUB_TOKEN` in `.env` as a fallback (used whe
 Returns server status, connected client info, and active session count. No auth required.
 
 ```json
-{ "status": "ok", "storage": "memory", "clients": { "total": 2, "connected": 2 }, "activeSessions": 3 }
+{ "status": "ok", "storage": "memory", "planningStorage": "memory", "clients": { "total": 2, "connected": 2 }, "activeSessions": 3 }
 ```
 
 ### `GET /api/models`
@@ -170,6 +170,22 @@ Abort a streaming response. Requires `Authorization: Bearer <token>` header.
 ```json
 { "sessionId": "abc-123" }
 ```
+
+### `POST /api/chat/input`
+
+Submit the user's answer to a pending agent input request (`ask_user` tool invocation).
+Requires `Authorization: Bearer <token>` header.
+
+**Request:**
+```json
+{ "requestId": "uuid-from-sse-event", "answer": "Option A", "wasFreeform": false }
+```
+
+The `requestId` comes from the `user_input_request` SSE event emitted when the agent calls
+`ask_user`. This endpoint resolves the Promise in the `onUserInputRequest` handler so the
+agent can continue processing.
+
+**Response:** `{ "ok": true }` on success; `404` if the request has already been resolved or timed out.
 
 ### `POST /api/chat/model`
 
