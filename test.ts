@@ -1174,26 +1174,38 @@ async function testSuggestResearchContextParameterExtendsDetection(): Promise<vo
 async function testSuggestResearchNoTriggersReturnsEmptyWithMessage(): Promise<void> {
   const store = new InMemoryPlanningStore();
   const tools = createPlanningTools("test-token", store);
+  const saveGoal = tools.find((t) => t.name === "save_goal")!;
   const suggest = tools.find((t) => t.name === "suggest_research")!;
-  const goalId = await seedGoal(store); // generic goal with no specific trigger keywords
+
+  // Create a goal with no trigger keywords (no APIs, containers, auth, databases, or migrations)
+  const saved: any = await saveGoal.handler(
+    {
+      sessionId: "test-session-abc",
+      intent: "Improve the FAQ page to make it easier to navigate",
+      goal: "Redesign the FAQ page layout to improve navigation and readability",
+      problemStatement: "The FAQ page is hard to browse because all questions are listed without grouping",
+      businessValue: "Reduces support tickets by helping users find answers faster",
+      targetOutcome: "Users can find FAQ answers without contacting support",
+      successCriteria: ["FAQ items are grouped by topic", "A search box filters visible items"],
+      assumptions: ["FAQ content already exists"],
+      constraints: ["Must use the existing static site generator"],
+      risks: ["Stakeholders may disagree on grouping taxonomy"],
+    },
+    STUB_INVOCATION
+  );
+  const goalId = saved.goal.id;
 
   const result: any = await suggest.handler(
-    { goalId, sessionId: makeValidSaveGoalArgs().sessionId },
+    { goalId, sessionId: "test-session-abc" },
     STUB_INVOCATION
   );
 
   if (!result.items) throw new Error("Expected items array in result");
   if (result.items.length !== 0) {
-    // The generic seed goal may or may not trigger — just verify structure is correct
-    for (const item of result.items) {
-      if (!item.category) throw new Error("Each item must have a category");
-      if (!item.question) throw new Error("Each item must have a question");
-      if (item.status !== "open") throw new Error("Each item must have status 'open'");
-    }
-  } else {
-    if (!result.message) throw new Error("Expected message when no triggers detected");
-    if (!result.triggerSummary) throw new Error("Expected triggerSummary in result");
+    throw new Error(`Expected 0 triggered items for FAQ goal, got ${result.items.length}: ${result.items.map((i: any) => i.category).join(", ")}`);
   }
+  if (!result.message) throw new Error("Expected guidance message when no triggers detected");
+  if (typeof result.triggerSummary !== "object") throw new Error("Expected triggerSummary object in result");
 }
 
 async function testSuggestResearchUnknownGoalReturnsError(): Promise<void> {
