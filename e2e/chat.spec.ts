@@ -1490,3 +1490,445 @@ test("milestone timeline page: XSS prevention in milestone name and goal", async
   await expect(item.locator(".milestone-timeline-name")).toContainText('<script>');
   await expect(item.locator(".milestone-timeline-goal")).toContainText('<img');
 });
+
+// ─── Issue Draft Dashboard Page ────────────────────────────────
+
+const STUB_MILESTONE_ID_A = "ms-issues-a";
+const STUB_MILESTONE_ID_B = "ms-issues-b";
+
+const STUB_ISSUE_DRAFTS = [
+  {
+    id: "issue-1",
+    milestoneId: STUB_MILESTONE_ID_A,
+    title: "Setup authentication",
+    purpose: "Implement user auth",
+    problem: "No auth exists",
+    expectedOutcome: "Users can log in",
+    scopeBoundaries: "Login/logout only",
+    technicalContext: "Use JWT",
+    dependencies: [],
+    acceptanceCriteria: ["Login works", "Logout works"],
+    testingExpectations: "Unit tests for auth module",
+    researchLinks: [],
+    order: 1,
+    status: "draft",
+    filesToModify: [{ path: "server.ts", reason: "Add auth endpoints" }],
+    filesToRead: [{ path: "README.md", reason: "Follow setup pattern" }],
+    securityChecklist: ["Hash passwords"],
+    verificationCommands: ["npm test"],
+  },
+  {
+    id: "issue-2",
+    milestoneId: STUB_MILESTONE_ID_A,
+    title: "Create database schema",
+    purpose: "Set up DB tables",
+    problem: "No schema defined",
+    expectedOutcome: "Tables created",
+    scopeBoundaries: "Schema only, no data",
+    technicalContext: "Use SQLite",
+    dependencies: ["issue-1"],
+    acceptanceCriteria: ["Schema applied"],
+    testingExpectations: "Migration test",
+    researchLinks: [],
+    order: 2,
+    status: "ready",
+    filesToModify: [],
+    filesToRead: [],
+    securityChecklist: [],
+    verificationCommands: [],
+  },
+  {
+    id: "issue-3",
+    milestoneId: STUB_MILESTONE_ID_A,
+    title: "Deploy to production",
+    purpose: "Ship to users",
+    problem: "App not deployed",
+    expectedOutcome: "Live on prod",
+    scopeBoundaries: "Single region",
+    technicalContext: "Use Azure",
+    dependencies: ["issue-2"],
+    acceptanceCriteria: ["Health check passes"],
+    testingExpectations: "Smoke test",
+    researchLinks: [],
+    order: 3,
+    status: "created",
+    githubIssueNumber: 42,
+    filesToModify: [],
+    filesToRead: [],
+    securityChecklist: [],
+    verificationCommands: [],
+  },
+];
+
+/** Stubs issue draft API routes for dashboard tests. */
+async function stubIssueRoutes(page: Page) {
+  await page.route("**/api/goals", (route) => {
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        goals: [
+          {
+            id: STUB_GOAL_ID,
+            sessionId: "session-1",
+            intent: "I want to build a feature-rich dashboard.",
+            goal: "Deliver a planning dashboard",
+            problemStatement: "Users lack visibility.",
+            businessValue: "Increases throughput.",
+            targetOutcome: "Dashboard shows all data.",
+            successCriteria: [],
+            assumptions: [],
+            constraints: [],
+            risks: [],
+            createdAt: "2024-01-01T10:00:00.000Z",
+            updatedAt: "2024-01-02T10:00:00.000Z",
+          },
+        ],
+      }),
+    });
+  });
+
+  await page.route(`**/api/goals/${STUB_GOAL_ID}/milestones`, (route) => {
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        milestones: [
+          {
+            id: STUB_MILESTONE_ID_A,
+            goalId: STUB_GOAL_ID,
+            name: "Foundation",
+            goal: "Core setup",
+            scope: "Auth and data",
+            order: 1,
+            dependencies: [],
+            acceptanceCriteria: [],
+            exitCriteria: [],
+            status: "in-progress",
+          },
+          {
+            id: STUB_MILESTONE_ID_B,
+            goalId: STUB_GOAL_ID,
+            name: "Frontend",
+            goal: "UI layer",
+            scope: "Dashboard",
+            order: 2,
+            dependencies: [STUB_MILESTONE_ID_A],
+            acceptanceCriteria: [],
+            exitCriteria: [],
+            status: "draft",
+          },
+        ],
+      }),
+    });
+  });
+
+  await page.route(`**/api/milestones/${STUB_MILESTONE_ID_A}/issues`, (route) => {
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ issues: STUB_ISSUE_DRAFTS }),
+    });
+  });
+
+  await page.route(`**/api/milestones/${STUB_MILESTONE_ID_B}/issues`, (route) => {
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ issues: [] }),
+    });
+  });
+
+  await page.route("**/api/health", (route) => {
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ status: "ok", storage: "memory" }),
+    });
+  });
+}
+
+test("issue draft page: drafts rendered in correct order", async ({ page }) => {
+  await stubIssueRoutes(page);
+  await page.goto("/");
+  await page.evaluate(() => localStorage.setItem("copilot_github_token", "fake-test-token"));
+
+  await page.locator("#view-toggle-btn").click();
+  await page.locator(".dashboard-nav-item[data-page='issues']").click();
+  await expect(page.locator("#dashboard-page-issues")).toBeVisible();
+
+  await expect(page.locator(".issue-draft-item").first()).toBeVisible({ timeout: 10_000 });
+  await expect(page.locator(".issue-draft-item")).toHaveCount(3);
+
+  const items = page.locator(".issue-draft-item");
+  await expect(items.nth(0).locator(".issue-draft-order")).toHaveText("#1");
+  await expect(items.nth(1).locator(".issue-draft-order")).toHaveText("#2");
+  await expect(items.nth(2).locator(".issue-draft-order")).toHaveText("#3");
+});
+
+test("issue draft page: titles displayed correctly", async ({ page }) => {
+  await stubIssueRoutes(page);
+  await page.goto("/");
+  await page.evaluate(() => localStorage.setItem("copilot_github_token", "fake-test-token"));
+
+  await page.locator("#view-toggle-btn").click();
+  await page.locator(".dashboard-nav-item[data-page='issues']").click();
+  await expect(page.locator(".issue-draft-item").first()).toBeVisible({ timeout: 10_000 });
+
+  const items = page.locator(".issue-draft-item");
+  await expect(items.nth(0).locator(".issue-draft-title")).toHaveText("Setup authentication");
+  await expect(items.nth(1).locator(".issue-draft-title")).toHaveText("Create database schema");
+  await expect(items.nth(2).locator(".issue-draft-title")).toHaveText("Deploy to production");
+});
+
+test("issue draft page: status badges displayed correctly", async ({ page }) => {
+  await stubIssueRoutes(page);
+  await page.goto("/");
+  await page.evaluate(() => localStorage.setItem("copilot_github_token", "fake-test-token"));
+
+  await page.locator("#view-toggle-btn").click();
+  await page.locator(".dashboard-nav-item[data-page='issues']").click();
+  await expect(page.locator(".issue-draft-item").first()).toBeVisible({ timeout: 10_000 });
+
+  const items = page.locator(".issue-draft-item");
+  await expect(items.nth(0).locator(".issue-draft-status")).toHaveClass(/status-draft/);
+  await expect(items.nth(0).locator(".issue-draft-status")).toHaveText("draft");
+  await expect(items.nth(1).locator(".issue-draft-status")).toHaveClass(/status-ready/);
+  await expect(items.nth(1).locator(".issue-draft-status")).toHaveText("ready");
+  await expect(items.nth(2).locator(".issue-draft-status")).toHaveClass(/status-created/);
+  await expect(items.nth(2).locator(".issue-draft-status")).toHaveText("created");
+});
+
+test("issue draft page: summary line shows status counts", async ({ page }) => {
+  await stubIssueRoutes(page);
+  await page.goto("/");
+  await page.evaluate(() => localStorage.setItem("copilot_github_token", "fake-test-token"));
+
+  await page.locator("#view-toggle-btn").click();
+  await page.locator(".dashboard-nav-item[data-page='issues']").click();
+  await expect(page.locator(".issue-draft-summary")).toBeVisible({ timeout: 10_000 });
+
+  await expect(page.locator(".issue-draft-summary")).toContainText("Draft: 1");
+  await expect(page.locator(".issue-draft-summary")).toContainText("Ready: 1");
+  await expect(page.locator(".issue-draft-summary")).toContainText("Created: 1");
+});
+
+test("issue draft page: expand shows all fields", async ({ page }) => {
+  await stubIssueRoutes(page);
+  await page.goto("/");
+  await page.evaluate(() => localStorage.setItem("copilot_github_token", "fake-test-token"));
+
+  await page.locator("#view-toggle-btn").click();
+  await page.locator(".dashboard-nav-item[data-page='issues']").click();
+  await expect(page.locator(".issue-draft-item").first()).toBeVisible({ timeout: 10_000 });
+
+  // Expand the first item
+  await page.locator(".issue-draft-item").first().locator(".issue-draft-expand-btn").click();
+  const body = page.locator(".issue-draft-item").first().locator(".issue-draft-body");
+  await expect(body).toHaveClass(/expanded/);
+
+  // Check that field labels are present
+  const labels = body.locator(".issue-draft-field-label");
+  const labelTexts = await labels.allTextContents();
+  expect(labelTexts).toContain("Purpose");
+  expect(labelTexts).toContain("Problem");
+  expect(labelTexts).toContain("Expected Outcome");
+  expect(labelTexts).toContain("Acceptance Criteria");
+  expect(labelTexts).toContain("Files to Modify");
+  expect(labelTexts).toContain("Files to Read");
+});
+
+test("issue draft page: GitHub preview renders correctly", async ({ page }) => {
+  await stubIssueRoutes(page);
+  await page.goto("/");
+  await page.evaluate(() => localStorage.setItem("copilot_github_token", "fake-test-token"));
+
+  await page.locator("#view-toggle-btn").click();
+  await page.locator(".dashboard-nav-item[data-page='issues']").click();
+  await expect(page.locator(".issue-draft-item").first()).toBeVisible({ timeout: 10_000 });
+
+  // Expand the first item
+  await page.locator(".issue-draft-item").first().locator(".issue-draft-expand-btn").click();
+
+  // Click show preview
+  await page.locator(".issue-draft-item").first().locator(".issue-draft-preview-toggle").click();
+  const preview = page.locator(".issue-draft-item").first().locator(".issue-draft-md-preview");
+  await expect(preview).toBeVisible();
+
+  // Preview should contain section headings
+  await expect(preview.locator("h2").first()).toBeVisible();
+  await expect(preview).toContainText("Purpose");
+});
+
+test("issue draft page: approve button updates status to ready", async ({ page }) => {
+  await stubIssueRoutes(page);
+  await page.goto("/");
+  await page.evaluate(() => localStorage.setItem("copilot_github_token", "fake-test-token"));
+
+  // Stub the PATCH endpoint
+  await page.route(`**/api/milestones/${STUB_MILESTONE_ID_A}/issues/issue-1`, (route) => {
+    if (route.request().method() === "PATCH") {
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ ...STUB_ISSUE_DRAFTS[0], status: "ready" }),
+      });
+    } else {
+      route.continue();
+    }
+  });
+
+  await page.locator("#view-toggle-btn").click();
+  await page.locator(".dashboard-nav-item[data-page='issues']").click();
+  await expect(page.locator(".issue-draft-item").first()).toBeVisible({ timeout: 10_000 });
+
+  // First item is draft — click approve
+  const firstItem = page.locator(".issue-draft-item").first();
+  await expect(firstItem.locator(".issue-draft-approve-btn")).toBeVisible();
+  await firstItem.locator(".issue-draft-approve-btn").click();
+
+  // Status badge should update to "ready"
+  await expect(firstItem.locator(".issue-draft-status")).toHaveText("ready", { timeout: 5_000 });
+  await expect(firstItem.locator(".issue-draft-status")).toHaveClass(/status-ready/);
+});
+
+test("issue draft page: batch approve marks all draft/ready as ready", async ({ page }) => {
+  await stubIssueRoutes(page);
+  await page.goto("/");
+  await page.evaluate(() => localStorage.setItem("copilot_github_token", "fake-test-token"));
+
+  // Stub PATCH for both draft and ready issues
+  await page.route(`**/api/milestones/${STUB_MILESTONE_ID_A}/issues/**`, (route) => {
+    if (route.request().method() === "PATCH") {
+      const url = route.request().url();
+      const issueId = url.split("/").pop();
+      const draft = STUB_ISSUE_DRAFTS.find((d) => d.id === issueId);
+      if (draft) {
+        route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ ...draft, status: "ready" }),
+        });
+      } else {
+        route.continue();
+      }
+    } else {
+      route.continue();
+    }
+  });
+
+  await page.locator("#view-toggle-btn").click();
+  await page.locator(".dashboard-nav-item[data-page='issues']").click();
+  await expect(page.locator(".issue-draft-batch-bar")).toBeVisible({ timeout: 10_000 });
+
+  // Click batch approve
+  await page.locator(".issue-draft-batch-approve-btn").click();
+
+  // After approval, the page re-renders; batch bar should be gone (all ready now)
+  await expect(page.locator(".issue-draft-item")).toHaveCount(3, { timeout: 5_000 });
+});
+
+test("issue draft page: XSS prevention in issue title and purpose", async ({ page }) => {
+  await page.route("**/api/goals", (route) => {
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        goals: [
+          {
+            id: STUB_GOAL_ID,
+            sessionId: "session-1",
+            intent: "test",
+            goal: "test goal",
+            problemStatement: "",
+            businessValue: "",
+            targetOutcome: "",
+            successCriteria: [],
+            assumptions: [],
+            constraints: [],
+            risks: [],
+            createdAt: "2024-01-01T10:00:00.000Z",
+            updatedAt: "2024-01-02T10:00:00.000Z",
+          },
+        ],
+      }),
+    });
+  });
+
+  await page.route(`**/api/goals/${STUB_GOAL_ID}/milestones`, (route) => {
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        milestones: [{ id: "ms-xss2", goalId: STUB_GOAL_ID, name: "XSS Milestone", goal: "test", scope: "", order: 1, dependencies: [], acceptanceCriteria: [], exitCriteria: [], status: "draft" }],
+      }),
+    });
+  });
+
+  await page.route(`**/api/milestones/ms-xss2/issues`, (route) => {
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        issues: [
+          {
+            id: "xss-issue",
+            milestoneId: "ms-xss2",
+            title: '<script>alert("xss")</script>Malicious title',
+            purpose: '<img src=x onerror=alert(1)>Malicious purpose',
+            problem: "test",
+            expectedOutcome: "test",
+            scopeBoundaries: "test",
+            technicalContext: "test",
+            dependencies: [],
+            acceptanceCriteria: [],
+            testingExpectations: "",
+            researchLinks: [],
+            order: 1,
+            status: "draft",
+            filesToModify: [],
+            filesToRead: [],
+            securityChecklist: [],
+            verificationCommands: [],
+          },
+        ],
+      }),
+    });
+  });
+
+  await page.route("**/api/health", (route) => {
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ status: "ok", storage: "memory" }) });
+  });
+
+  await page.goto("/");
+  await page.evaluate(() => localStorage.setItem("copilot_github_token", "fake-test-token"));
+
+  await page.locator("#view-toggle-btn").click();
+  await page.locator(".dashboard-nav-item[data-page='issues']").click();
+  await expect(page.locator(".issue-draft-item").first()).toBeVisible({ timeout: 10_000 });
+
+  const item = page.locator(".issue-draft-item").first();
+  await expect(item.locator(".issue-draft-title")).toContainText("Malicious title");
+  await expect(item.locator(".issue-draft-title")).toContainText("<script>");
+
+  // Expand to see purpose
+  await item.locator(".issue-draft-expand-btn").click();
+  const purposeField = item.locator(".issue-draft-field").filter({ hasText: "Purpose" }).first();
+  await expect(purposeField.locator(".issue-draft-field-value")).toContainText("Malicious purpose");
+  await expect(purposeField.locator(".issue-draft-field-value")).toContainText("<img");
+});
+
+test("issue draft page: empty milestone shows correct empty state", async ({ page }) => {
+  await stubIssueRoutes(page);
+  await page.goto("/");
+  await page.evaluate(() => localStorage.setItem("copilot_github_token", "fake-test-token"));
+
+  await page.locator("#view-toggle-btn").click();
+  await page.locator(".dashboard-nav-item[data-page='issues']").click();
+  await expect(page.locator(".issue-draft-item").first()).toBeVisible({ timeout: 10_000 });
+
+  // Switch to the second milestone (empty)
+  await page.locator("#issue-milestone-select").selectOption(STUB_MILESTONE_ID_B);
+  await expect(page.locator("#issue-page-content .dashboard-empty")).toBeVisible({ timeout: 5_000 });
+  await expect(page.locator("#issue-page-content .dashboard-empty")).toContainText("No issue drafts");
+});

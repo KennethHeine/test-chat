@@ -359,6 +359,8 @@ function navigateDashboard(page) {
     loadResearchDashboard();
   } else if (page === "milestones") {
     loadMilestonesDashboard();
+  } else if (page === "issues") {
+    loadIssuesDashboard();
   }
 }
 
@@ -1276,6 +1278,771 @@ function renderMilestoneDashboardItems(milestones, issueCounts) {
   milestonePageContent.appendChild(summaryEl);
 }
 
+// --- Issue Draft Dashboard ---
+
+const issueGoalSelector = document.getElementById("issue-goal-selector");
+const issueGoalSelect = document.getElementById("issue-goal-select");
+const issueMilestoneSelector = document.getElementById("issue-milestone-selector");
+const issueMilestoneSelect = document.getElementById("issue-milestone-select");
+const issuePageContent = document.getElementById("issue-page-content");
+
+/** In-flight guard: true while loadIssuesDashboard() is fetching, to prevent duplicate calls. */
+let issuesLoadInFlight = false;
+
+/**
+ * Loads the list of goals and populates the goal selector, then loads milestones for the first goal.
+ * De-dupes concurrent calls via in-flight guard.
+ */
+async function loadIssuesDashboard() {
+  if (issuesLoadInFlight) return;
+  issuesLoadInFlight = true;
+
+  if (!getToken()) {
+    issueGoalSelector.style.display = "none";
+    issueMilestoneSelector.style.display = "none";
+    issuePageContent.innerHTML = "";
+    const empty = document.createElement("div");
+    empty.className = "dashboard-empty";
+    empty.innerHTML = '<span class="dashboard-empty-icon">🔑</span><p>Save a GitHub token to view issue drafts.</p>';
+    issuePageContent.appendChild(empty);
+    issuesLoadInFlight = false;
+    return;
+  }
+
+  issueGoalSelector.style.display = "none";
+  issueMilestoneSelector.style.display = "none";
+  issuePageContent.innerHTML = '<div class="dashboard-empty"><span class="dashboard-empty-icon" style="font-size:24px">⏳</span><p>Loading…</p></div>';
+
+  try {
+    const res = await fetch("/api/goals", { headers: authHeaders() });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      issuePageContent.innerHTML = "";
+      const empty = document.createElement("div");
+      empty.className = "dashboard-empty";
+      const p = document.createElement("p");
+      p.textContent = (err && err.error) ? err.error : "Failed to load goals.";
+      empty.appendChild(p);
+      issuePageContent.appendChild(empty);
+      return;
+    }
+    const data = await res.json();
+    const goals = Array.isArray(data.goals) ? data.goals : [];
+
+    if (goals.length === 0) {
+      issueGoalSelector.style.display = "none";
+      issueMilestoneSelector.style.display = "none";
+      issuePageContent.innerHTML = "";
+      const empty = document.createElement("div");
+      empty.className = "dashboard-empty";
+      empty.innerHTML = '<span class="dashboard-empty-icon">📋</span><p>No goals yet. Use the chat to define planning goals with Copilot.</p>';
+      issuePageContent.appendChild(empty);
+      return;
+    }
+
+    // Sort goals newest first
+    goals.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
+    // Populate goal selector
+    issueGoalSelect.innerHTML = "";
+    for (const goal of goals) {
+      const opt = document.createElement("option");
+      opt.value = typeof goal.id === "string" ? goal.id : "";
+      opt.textContent = typeof goal.goal === "string" ? goal.goal : "(untitled goal)";
+      issueGoalSelect.appendChild(opt);
+    }
+
+    if (goals.length > 1) {
+      issueGoalSelector.style.display = "block";
+    } else {
+      issueGoalSelector.style.display = "none";
+    }
+
+    // Load milestones for the first goal
+    await loadMilestonesForIssues(goals[0].id);
+  } catch (err) {
+    console.warn("Failed to load issues dashboard:", err);
+    issuePageContent.innerHTML = "";
+    const empty = document.createElement("div");
+    empty.className = "dashboard-empty";
+    const p = document.createElement("p");
+    p.textContent = "Failed to load issue drafts. Please try again.";
+    empty.appendChild(p);
+    issuePageContent.appendChild(empty);
+  } finally {
+    issuesLoadInFlight = false;
+  }
+}
+
+/**
+ * Fetches milestones for a goal and populates the milestone selector, then loads issues for the first milestone.
+ * @param {string} goalId
+ */
+async function loadMilestonesForIssues(goalId) {
+  issueMilestoneSelector.style.display = "none";
+  issuePageContent.innerHTML = '<div class="dashboard-empty"><span class="dashboard-empty-icon" style="font-size:24px">⏳</span><p>Loading milestones…</p></div>';
+
+  try {
+    const res = await fetch(`/api/goals/${encodeURIComponent(goalId)}/milestones`, { headers: authHeaders() });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      issuePageContent.innerHTML = "";
+      const empty = document.createElement("div");
+      empty.className = "dashboard-empty";
+      const p = document.createElement("p");
+      p.textContent = (err && err.error) ? err.error : "Failed to load milestones.";
+      empty.appendChild(p);
+      issuePageContent.appendChild(empty);
+      return;
+    }
+    const data = await res.json();
+    const milestones = Array.isArray(data.milestones) ? data.milestones : [];
+
+    if (milestones.length === 0) {
+      issueMilestoneSelector.style.display = "none";
+      issuePageContent.innerHTML = "";
+      const empty = document.createElement("div");
+      empty.className = "dashboard-empty";
+      empty.innerHTML = '<span class="dashboard-empty-icon">🏁</span><p>No milestones for this goal yet. Use the chat to create a milestone plan with Copilot.</p>';
+      issuePageContent.appendChild(empty);
+      return;
+    }
+
+    // Sort milestones by order ascending
+    milestones.sort((a, b) => (a.order || 0) - (b.order || 0));
+
+    // Populate milestone selector
+    issueMilestoneSelect.innerHTML = "";
+    for (const ms of milestones) {
+      const opt = document.createElement("option");
+      opt.value = typeof ms.id === "string" ? ms.id : "";
+      const label = typeof ms.name === "string" ? ms.name : "(untitled milestone)";
+      const order = typeof ms.order === "number" ? `#${ms.order} ` : "";
+      opt.textContent = `${order}${label}`;
+      issueMilestoneSelect.appendChild(opt);
+    }
+
+    issueMilestoneSelector.style.display = "block";
+
+    // Load issues for the first milestone
+    await loadIssuesForMilestone(milestones[0].id);
+  } catch (err) {
+    console.warn("Failed to load milestones for issues:", err);
+    issuePageContent.innerHTML = "";
+    const empty = document.createElement("div");
+    empty.className = "dashboard-empty";
+    const p = document.createElement("p");
+    p.textContent = "Failed to load milestones. Please try again.";
+    empty.appendChild(p);
+    issuePageContent.appendChild(empty);
+  }
+}
+
+/**
+ * Fetches issue drafts for a specific milestone and renders them.
+ * @param {string} milestoneId
+ */
+async function loadIssuesForMilestone(milestoneId) {
+  issuePageContent.innerHTML = '<div class="dashboard-empty"><span class="dashboard-empty-icon" style="font-size:24px">⏳</span><p>Loading issue drafts…</p></div>';
+
+  try {
+    const res = await fetch(`/api/milestones/${encodeURIComponent(milestoneId)}/issues`, { headers: authHeaders() });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      issuePageContent.innerHTML = "";
+      const empty = document.createElement("div");
+      empty.className = "dashboard-empty";
+      const p = document.createElement("p");
+      p.textContent = (err && err.error) ? err.error : "Failed to load issue drafts.";
+      empty.appendChild(p);
+      issuePageContent.appendChild(empty);
+      return;
+    }
+    const data = await res.json();
+    const issues = Array.isArray(data.issues) ? data.issues : [];
+    renderIssueDraftItems(issues, milestoneId);
+  } catch (err) {
+    console.warn("Failed to load issues for milestone:", err);
+    issuePageContent.innerHTML = "";
+    const empty = document.createElement("div");
+    empty.className = "dashboard-empty";
+    const p = document.createElement("p");
+    p.textContent = "Failed to load issue drafts. Please try again.";
+    empty.appendChild(p);
+    issuePageContent.appendChild(empty);
+  }
+}
+
+/**
+ * Normalizes an issue draft status value to a valid status string.
+ * Returns the input if valid, otherwise returns the default status.
+ * @param {string|undefined} status - Raw status value from the draft
+ * @returns {string} - One of "draft", "ready", or "created"
+ */
+function normalizeIssueDraftStatus(status) {
+  return typeof status === "string" && VALID_ISSUE_DRAFT_STATUSES.includes(status) ? status : DEFAULT_ISSUE_DRAFT_STATUS;
+}
+
+/**
+ * Renders issue drafts in the issue draft dashboard.
+ * All user-supplied content is inserted via textContent to prevent XSS.
+ * @param {Array} issues - Array of IssueDraft objects
+ * @param {string} milestoneId - The milestone ID these drafts belong to
+ */
+function renderIssueDraftItems(issues, milestoneId) {
+  issuePageContent.innerHTML = "";
+
+  if (issues.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "dashboard-empty";
+    empty.innerHTML = '<span class="dashboard-empty-icon">📋</span><p>No issue drafts for this milestone yet. Use the chat to generate issue drafts with Copilot.</p>';
+    issuePageContent.appendChild(empty);
+    return;
+  }
+
+  // Sort by order ascending (defensive copy)
+  const sorted = [...issues].sort((a, b) => (a.order || 0) - (b.order || 0));
+
+  // Build a map from issue ID to order for dependency display
+  /** @type {Map<string, number>} */
+  const idToOrder = new Map();
+  for (const issue of sorted) {
+    if (issue.id) idToOrder.set(issue.id, issue.order);
+  }
+
+  // Batch-approve bar
+  const hasDraftOrReady = sorted.some((d) => d.status === "draft" || d.status === "ready");
+  if (hasDraftOrReady) {
+    const batchBar = document.createElement("div");
+    batchBar.className = "issue-draft-batch-bar";
+
+    const batchApproveBtn = document.createElement("button");
+    batchApproveBtn.className = "issue-draft-batch-approve-btn";
+    batchApproveBtn.textContent = "Approve All";
+    batchBar.appendChild(batchApproveBtn);
+
+    const batchSummary = document.createElement("span");
+    batchSummary.className = "issue-draft-batch-summary";
+    const draftCount = sorted.filter((d) => d.status === "draft").length;
+    const readyCount = sorted.filter((d) => d.status === "ready").length;
+    const parts = [];
+    if (draftCount > 0) parts.push(`${draftCount} draft`);
+    if (readyCount > 0) parts.push(`${readyCount} ready`);
+    batchSummary.textContent = `Mark all as ready: ${parts.join(", ")}`;
+    batchBar.appendChild(batchSummary);
+
+    issuePageContent.appendChild(batchBar);
+
+    batchApproveBtn.addEventListener("click", async () => {
+      const toApprove = sorted.filter((d) => d.status === "draft" || d.status === "ready");
+      if (toApprove.length === 0) return;
+      batchApproveBtn.disabled = true;
+      batchApproveBtn.textContent = "Approving…";
+
+      const results = await Promise.allSettled(
+        toApprove.map((draft) =>
+          fetch(
+            `/api/milestones/${encodeURIComponent(milestoneId)}/issues/${encodeURIComponent(draft.id)}`,
+            {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json", ...authHeaders() },
+              body: JSON.stringify({ status: "ready" }),
+            }
+          ).then(async (r) => {
+            if (!r.ok) throw new Error(await r.json().then((e) => e.error || "Failed").catch(() => "Failed"));
+            draft.status = "ready";
+          })
+        )
+      );
+
+      const failCount = results.filter((r) => r.status === "rejected").length;
+      const successCount = results.filter((r) => r.status === "fulfilled").length;
+
+      if (successCount > 0) {
+        // Re-render with updated statuses
+        renderIssueDraftItems(issues, milestoneId);
+      } else {
+        batchApproveBtn.disabled = false;
+        batchApproveBtn.textContent = "Approve All";
+      }
+      if (failCount > 0) {
+        alert(`${failCount} issue draft${failCount !== 1 ? "s" : ""} could not be approved. Please try again.`);
+      }
+    });
+  }
+
+  for (const draft of sorted) {
+    issuePageContent.appendChild(buildIssueDraftItem(draft, milestoneId, idToOrder));
+  }
+
+  // Summary line
+  const draftCount = sorted.filter((d) => normalizeIssueDraftStatus(d.status) === "draft").length;
+  const readyCount = sorted.filter((d) => normalizeIssueDraftStatus(d.status) === "ready").length;
+  const createdCount = sorted.filter((d) => normalizeIssueDraftStatus(d.status) === "created").length;
+  const summaryParts = [];
+  if (draftCount > 0) summaryParts.push(`Draft: ${draftCount}`);
+  if (readyCount > 0) summaryParts.push(`Ready: ${readyCount}`);
+  if (createdCount > 0) summaryParts.push(`Created: ${createdCount}`);
+  const summaryEl = document.createElement("div");
+  summaryEl.className = "issue-draft-summary";
+  summaryEl.textContent = summaryParts.join(" · ");
+  issuePageContent.appendChild(summaryEl);
+}
+
+/**
+ * Returns an HTML string intended for insertion via `element.innerHTML`, with all
+ * user-provided text content HTML-escaped to prevent XSS (no raw user text is inserted).
+ * @param {Object} draft - IssueDraft object
+ * @returns {string} - Escaped HTML string for the preview, safe for innerHTML
+ */
+function buildIssueDraftMarkdownPreview(draft) {
+  /** Escape text for safe insertion into HTML. */
+  function esc(s) {
+    return String(s)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
+  /** Render a list of strings as an HTML unordered list. */
+  function renderList(items) {
+    if (!Array.isArray(items) || items.length === 0) return "<p><em>(none)</em></p>";
+    return "<ul>" + items.map((item) => `<li>${esc(typeof item === "string" ? item : "")}</li>`).join("") + "</ul>";
+  }
+
+  /** Render a list of FileRef objects as a table. */
+  function renderFileRefs(refs) {
+    if (!Array.isArray(refs) || refs.length === 0) return "<p><em>(none)</em></p>";
+    const rows = refs.map((r) => {
+      const path = esc(typeof r.path === "string" ? r.path : "");
+      const reason = esc(typeof r.reason === "string" ? r.reason : "");
+      return `<tr><td><code>${path}</code></td><td>${reason}</td></tr>`;
+    });
+    return `<table><thead><tr><th>File</th><th>Reason</th></tr></thead><tbody>${rows.join("")}</tbody></table>`;
+  }
+
+  const sections = [];
+
+  if (typeof draft.purpose === "string" && draft.purpose) {
+    sections.push(`<h2>Purpose</h2><p>${esc(draft.purpose)}</p>`);
+  }
+  if (typeof draft.problem === "string" && draft.problem) {
+    sections.push(`<h2>Problem</h2><p>${esc(draft.problem)}</p>`);
+  }
+  if (typeof draft.expectedOutcome === "string" && draft.expectedOutcome) {
+    sections.push(`<h2>Expected Outcome</h2><p>${esc(draft.expectedOutcome)}</p>`);
+  }
+  if (typeof draft.scopeBoundaries === "string" && draft.scopeBoundaries) {
+    sections.push(`<h2>Scope</h2><p>${esc(draft.scopeBoundaries)}</p>`);
+  }
+  if (typeof draft.technicalContext === "string" && draft.technicalContext) {
+    sections.push(`<h2>Technical Context</h2><p>${esc(draft.technicalContext)}</p>`);
+  }
+  if (Array.isArray(draft.acceptanceCriteria) && draft.acceptanceCriteria.length > 0) {
+    sections.push(`<h2>Acceptance Criteria</h2>${renderList(draft.acceptanceCriteria)}`);
+  }
+  if (typeof draft.testingExpectations === "string" && draft.testingExpectations) {
+    sections.push(`<h2>Testing Expectations</h2><p>${esc(draft.testingExpectations)}</p>`);
+  }
+  if (Array.isArray(draft.filesToModify) && draft.filesToModify.length > 0) {
+    sections.push(`<h2>Files to Modify</h2>${renderFileRefs(draft.filesToModify)}`);
+  }
+  if (Array.isArray(draft.filesToRead) && draft.filesToRead.length > 0) {
+    sections.push(`<h2>Files to Read</h2>${renderFileRefs(draft.filesToRead)}`);
+  }
+  if (typeof draft.patternReference === "string" && draft.patternReference) {
+    sections.push(`<h2>Pattern Reference</h2><p>${esc(draft.patternReference)}</p>`);
+  }
+  if (Array.isArray(draft.securityChecklist) && draft.securityChecklist.length > 0) {
+    sections.push(`<h2>Security Checklist</h2>${renderList(draft.securityChecklist)}`);
+  }
+  if (Array.isArray(draft.verificationCommands) && draft.verificationCommands.length > 0) {
+    sections.push(`<h2>Verification</h2>${renderList(draft.verificationCommands)}`);
+  }
+
+  return sections.join("\n");
+}
+
+/**
+ * Builds a single editable issue draft DOM element.
+ * All user-supplied content is inserted via textContent to prevent XSS (except preview which uses safe esc()).
+ * @param {Object} draft - IssueDraft object
+ * @param {string} milestoneId - The milestone ID this draft belongs to
+ * @param {Map<string, number>} idToOrder - Map of issue ID to order number
+ * @returns {HTMLElement}
+ */
+function buildIssueDraftItem(draft, milestoneId, idToOrder) {
+  const itemEl = document.createElement("div");
+  itemEl.className = "issue-draft-item";
+  itemEl.setAttribute("data-issue-id", typeof draft.id === "string" ? draft.id : "");
+
+  // Header row: order number, title, status badge, approve button, expand button
+  const headerEl = document.createElement("div");
+  headerEl.className = "issue-draft-item-header";
+  headerEl.setAttribute("role", "button");
+  headerEl.setAttribute("tabindex", "0");
+  headerEl.setAttribute("aria-expanded", "false");
+
+  const orderEl = document.createElement("span");
+  orderEl.className = "issue-draft-order";
+  const displayOrder = typeof draft.order === "number" && isFinite(draft.order) ? draft.order : "?";
+  orderEl.textContent = `#${displayOrder}`;
+  headerEl.appendChild(orderEl);
+
+  const titleEl = document.createElement("span");
+  titleEl.className = "issue-draft-title";
+  titleEl.textContent = typeof draft.title === "string" ? draft.title : "";
+  headerEl.appendChild(titleEl);
+
+  const rawStatus = normalizeIssueDraftStatus(draft.status);
+  const statusEl = document.createElement("span");
+  statusEl.className = "issue-draft-status status-" + rawStatus;
+  statusEl.textContent = rawStatus;
+  headerEl.appendChild(statusEl);
+
+  // Approve button (only for draft/ready statuses)
+  if (rawStatus !== "created") {
+    const approveBtn = document.createElement("button");
+    approveBtn.className = "issue-draft-approve-btn";
+    approveBtn.textContent = rawStatus === "ready" ? "✓ Ready" : "Approve";
+    approveBtn.setAttribute("aria-label", `Approve issue #${displayOrder}`);
+    approveBtn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      if (approveBtn.disabled) return;
+      approveBtn.disabled = true;
+      approveBtn.textContent = "Saving…";
+      try {
+        const res = await fetch(
+          `/api/milestones/${encodeURIComponent(milestoneId)}/issues/${encodeURIComponent(draft.id)}`,
+          {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json", ...authHeaders() },
+            body: JSON.stringify({ status: "ready" }),
+          }
+        );
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          alert((err && err.error) ? err.error : "Failed to approve issue draft.");
+          approveBtn.disabled = false;
+          approveBtn.textContent = draft.status === "ready" ? "✓ Ready" : "Approve";
+          return;
+        }
+        draft.status = "ready";
+        statusEl.className = "issue-draft-status status-ready";
+        statusEl.textContent = "ready";
+        approveBtn.textContent = "✓ Ready";
+        approveBtn.disabled = false;
+      } catch (err) {
+        console.warn("Failed to approve issue draft:", err);
+        alert("Failed to approve issue draft. Please try again.");
+        approveBtn.disabled = false;
+        approveBtn.textContent = draft.status === "ready" ? "✓ Ready" : "Approve";
+      }
+    });
+    headerEl.appendChild(approveBtn);
+  }
+
+  const expandBtn = document.createElement("button");
+  expandBtn.className = "issue-draft-expand-btn";
+  expandBtn.textContent = "▼ Expand";
+  expandBtn.setAttribute("aria-label", `Expand issue #${displayOrder}`);
+  headerEl.appendChild(expandBtn);
+
+  itemEl.appendChild(headerEl);
+
+  // Body (expandable)
+  const bodyEl = document.createElement("div");
+  bodyEl.className = "issue-draft-body";
+
+  // Helper to build an editable text field
+  function buildEditableField(label, fieldKey, currentValue, maxLen) {
+    const fieldEl = document.createElement("div");
+    fieldEl.className = "issue-draft-field";
+
+    const labelRow = document.createElement("div");
+    labelRow.style.display = "flex";
+    labelRow.style.alignItems = "center";
+
+    const labelEl = document.createElement("div");
+    labelEl.className = "issue-draft-field-label";
+    labelEl.textContent = label;
+    labelRow.appendChild(labelEl);
+
+    const editBtn = document.createElement("button");
+    editBtn.className = "issue-draft-field-edit-btn";
+    editBtn.textContent = "Edit";
+    editBtn.setAttribute("aria-label", `Edit ${label}`);
+    labelRow.appendChild(editBtn);
+
+    fieldEl.appendChild(labelRow);
+
+    const valueEl = document.createElement("div");
+    valueEl.className = "issue-draft-field-value";
+    valueEl.textContent = typeof currentValue === "string" ? currentValue : "";
+    fieldEl.appendChild(valueEl);
+
+    const editArea = document.createElement("div");
+    editArea.className = "issue-draft-field-edit-area";
+
+    const textarea = document.createElement("textarea");
+    textarea.className = "issue-draft-field-textarea";
+    textarea.value = typeof currentValue === "string" ? currentValue : "";
+    textarea.setAttribute("aria-label", label);
+    editArea.appendChild(textarea);
+
+    const actionsEl = document.createElement("div");
+    actionsEl.className = "issue-draft-field-actions";
+
+    const saveBtn = document.createElement("button");
+    saveBtn.className = "issue-draft-field-save-btn";
+    saveBtn.textContent = "Save";
+    actionsEl.appendChild(saveBtn);
+
+    const cancelBtn = document.createElement("button");
+    cancelBtn.className = "issue-draft-field-cancel-btn";
+    cancelBtn.textContent = "Cancel";
+    actionsEl.appendChild(cancelBtn);
+
+    editArea.appendChild(actionsEl);
+    fieldEl.appendChild(editArea);
+
+    editBtn.addEventListener("click", () => {
+      textarea.value = typeof draft[fieldKey] === "string" ? draft[fieldKey] : "";
+      valueEl.style.display = "none";
+      editArea.classList.add("editing");
+      editBtn.style.display = "none";
+      textarea.focus();
+    });
+
+    cancelBtn.addEventListener("click", () => {
+      editArea.classList.remove("editing");
+      valueEl.style.display = "";
+      editBtn.style.display = "";
+    });
+
+    saveBtn.addEventListener("click", async () => {
+      const newValue = textarea.value;
+      if (newValue.length > maxLen) {
+        alert(`${label} must be at most ${maxLen} characters.`);
+        return;
+      }
+      saveBtn.disabled = true;
+      saveBtn.textContent = "Saving…";
+      try {
+        const res = await fetch(
+          `/api/milestones/${encodeURIComponent(milestoneId)}/issues/${encodeURIComponent(draft.id)}`,
+          {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json", ...authHeaders() },
+            body: JSON.stringify({ [fieldKey]: newValue }),
+          }
+        );
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          alert((err && err.error) ? err.error : `Failed to save ${label}.`);
+          return;
+        }
+        const updated = await res.json();
+        draft[fieldKey] = typeof updated[fieldKey] === "string" ? updated[fieldKey] : newValue;
+        valueEl.textContent = draft[fieldKey];
+        editArea.classList.remove("editing");
+        valueEl.style.display = "";
+        editBtn.style.display = "";
+        // Refresh preview if open
+        if (previewEl.style.display !== "none") {
+          previewEl.innerHTML = buildIssueDraftMarkdownPreview(draft);
+        }
+      } catch (err) {
+        console.warn(`Failed to save ${label}:`, err);
+        alert(`Failed to save ${label}. Please try again.`);
+      } finally {
+        saveBtn.disabled = false;
+        saveBtn.textContent = "Save";
+      }
+    });
+
+    return fieldEl;
+  }
+
+  // Helper to render a view-only list field (array of strings).
+  // Complex array fields (acceptanceCriteria, securityChecklist, verificationCommands,
+  // researchLinks, dependencies) are displayed as read-only; inline editing of these
+  // fields is out of scope for the initial issue draft manager.
+  function buildListField(label, items) {
+    const fieldEl = document.createElement("div");
+    fieldEl.className = "issue-draft-field";
+
+    const labelEl = document.createElement("div");
+    labelEl.className = "issue-draft-field-label";
+    labelEl.textContent = label;
+    fieldEl.appendChild(labelEl);
+
+    if (!Array.isArray(items) || items.length === 0) {
+      const emptyEl = document.createElement("div");
+      emptyEl.className = "issue-draft-field-value";
+      emptyEl.style.color = "var(--color-text-muted)";
+      emptyEl.textContent = "(none)";
+      fieldEl.appendChild(emptyEl);
+    } else {
+      const listEl = document.createElement("ul");
+      listEl.style.margin = "0";
+      listEl.style.paddingLeft = "18px";
+      for (const item of items) {
+        const li = document.createElement("li");
+        li.className = "issue-draft-field-value";
+        li.textContent = typeof item === "string" ? item : "";
+        listEl.appendChild(li);
+      }
+      fieldEl.appendChild(listEl);
+    }
+
+    return fieldEl;
+  }
+
+  // Helper to render a view-only FileRef list (filesToModify, filesToRead).
+  // FileRef array editing is out of scope for the initial issue draft manager.
+  function buildFileRefField(label, refs) {
+    const fieldEl = document.createElement("div");
+    fieldEl.className = "issue-draft-field";
+
+    const labelEl = document.createElement("div");
+    labelEl.className = "issue-draft-field-label";
+    labelEl.textContent = label;
+    fieldEl.appendChild(labelEl);
+
+    if (!Array.isArray(refs) || refs.length === 0) {
+      const emptyEl = document.createElement("div");
+      emptyEl.className = "issue-draft-field-value";
+      emptyEl.style.color = "var(--color-text-muted)";
+      emptyEl.textContent = "(none)";
+      fieldEl.appendChild(emptyEl);
+    } else {
+      for (const ref of refs) {
+        const refEl = document.createElement("div");
+        refEl.className = "issue-draft-field-value";
+        refEl.style.marginBottom = "4px";
+        const pathEl = document.createElement("code");
+        pathEl.style.marginRight = "8px";
+        pathEl.textContent = typeof ref.path === "string" ? ref.path : "";
+        refEl.appendChild(pathEl);
+        const reasonEl = document.createTextNode(typeof ref.reason === "string" ? `— ${ref.reason}` : "");
+        refEl.appendChild(reasonEl);
+        fieldEl.appendChild(refEl);
+      }
+    }
+
+    return fieldEl;
+  }
+
+  // Helper to render dependency list using order numbers
+  function buildDependencyField(deps) {
+    const fieldEl = document.createElement("div");
+    fieldEl.className = "issue-draft-field";
+
+    const labelEl = document.createElement("div");
+    labelEl.className = "issue-draft-field-label";
+    labelEl.textContent = "Dependencies";
+    fieldEl.appendChild(labelEl);
+
+    if (!Array.isArray(deps) || deps.length === 0) {
+      const emptyEl = document.createElement("div");
+      emptyEl.className = "issue-draft-field-value";
+      emptyEl.style.color = "var(--color-text-muted)";
+      emptyEl.textContent = "(none)";
+      fieldEl.appendChild(emptyEl);
+    } else {
+      const listEl = document.createElement("ul");
+      listEl.style.margin = "0";
+      listEl.style.paddingLeft = "18px";
+      for (const depId of deps) {
+        const depOrder = idToOrder.get(depId);
+        const li = document.createElement("li");
+        li.className = "issue-draft-field-value";
+        li.textContent = depOrder !== undefined ? `#${depOrder}` : (typeof depId === "string" ? depId : "");
+        listEl.appendChild(li);
+      }
+      fieldEl.appendChild(listEl);
+    }
+
+    return fieldEl;
+  }
+
+  // Editable text fields
+  bodyEl.appendChild(buildEditableField("Title", "title", draft.title, 256));
+  bodyEl.appendChild(buildEditableField("Purpose", "purpose", draft.purpose, 500));
+  bodyEl.appendChild(buildEditableField("Problem", "problem", draft.problem, 1000));
+  bodyEl.appendChild(buildEditableField("Expected Outcome", "expectedOutcome", draft.expectedOutcome, 500));
+  bodyEl.appendChild(buildEditableField("Scope", "scopeBoundaries", draft.scopeBoundaries, 1000));
+  bodyEl.appendChild(buildEditableField("Technical Context", "technicalContext", draft.technicalContext, 2000));
+  bodyEl.appendChild(buildEditableField("Testing Expectations", "testingExpectations", draft.testingExpectations, 1000));
+
+  // List fields
+  bodyEl.appendChild(buildListField("Acceptance Criteria", draft.acceptanceCriteria));
+  bodyEl.appendChild(buildListField("Security Checklist", draft.securityChecklist));
+  bodyEl.appendChild(buildListField("Verification Commands", draft.verificationCommands));
+  bodyEl.appendChild(buildDependencyField(draft.dependencies));
+  bodyEl.appendChild(buildListField("Research Links", draft.researchLinks));
+
+  // FileRef fields
+  bodyEl.appendChild(buildFileRefField("Files to Modify", draft.filesToModify));
+  bodyEl.appendChild(buildFileRefField("Files to Read", draft.filesToRead));
+
+  if (typeof draft.patternReference === "string" && draft.patternReference) {
+    bodyEl.appendChild(buildEditableField("Pattern Reference", "patternReference", draft.patternReference, 2000));
+  }
+
+  // Markdown preview toggle
+  const previewToggleBtn = document.createElement("button");
+  previewToggleBtn.className = "issue-draft-preview-toggle";
+  previewToggleBtn.textContent = "▶ Show GitHub Preview";
+  bodyEl.appendChild(previewToggleBtn);
+
+  const previewEl = document.createElement("div");
+  previewEl.className = "issue-draft-md-preview";
+  previewEl.style.display = "none";
+  bodyEl.appendChild(previewEl);
+
+  previewToggleBtn.addEventListener("click", () => {
+    if (previewEl.style.display === "none") {
+      previewEl.innerHTML = buildIssueDraftMarkdownPreview(draft);
+      previewEl.style.display = "block";
+      previewToggleBtn.textContent = "▼ Hide GitHub Preview";
+    } else {
+      previewEl.style.display = "none";
+      previewToggleBtn.textContent = "▶ Show GitHub Preview";
+    }
+  });
+
+  itemEl.appendChild(bodyEl);
+
+  // Expand/collapse toggle
+  function toggleExpand() {
+    const isExpanded = bodyEl.classList.contains("expanded");
+    bodyEl.classList.toggle("expanded", !isExpanded);
+    expandBtn.textContent = isExpanded ? "▼ Expand" : "▲ Collapse";
+    headerEl.setAttribute("aria-expanded", String(!isExpanded));
+  }
+
+  expandBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    toggleExpand();
+  });
+
+  headerEl.addEventListener("click", () => {
+    toggleExpand();
+  });
+
+  headerEl.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      toggleExpand();
+    }
+  });
+
+  return itemEl;
+}
+
 function restoreLastSession() {
   const lastId = localStorage.getItem("copilot_last_session");
   if (!lastId) return;
@@ -1397,6 +2164,22 @@ milestoneGoalSelect.addEventListener("change", () => {
   const selectedGoalId = milestoneGoalSelect.value;
   if (selectedGoalId) {
     loadMilestonesForGoal(selectedGoalId);
+  }
+});
+
+// Issue goal selector
+issueGoalSelect.addEventListener("change", () => {
+  const selectedGoalId = issueGoalSelect.value;
+  if (selectedGoalId) {
+    loadMilestonesForIssues(selectedGoalId);
+  }
+});
+
+// Issue milestone selector
+issueMilestoneSelect.addEventListener("change", () => {
+  const selectedMilestoneId = issueMilestoneSelect.value;
+  if (selectedMilestoneId) {
+    loadIssuesForMilestone(selectedMilestoneId);
   }
 });
 
@@ -2103,6 +2886,12 @@ const VALID_MILESTONE_STATUSES = ["draft", "ready", "in-progress", "complete"];
 
 /** Default milestone status used when an unrecognized value is encountered. */
 const DEFAULT_MILESTONE_STATUS = "draft";
+
+/** Valid issue draft status values. */
+const VALID_ISSUE_DRAFT_STATUSES = ["draft", "ready", "created"];
+
+/** Default issue draft status used when an unrecognized value is encountered. */
+const DEFAULT_ISSUE_DRAFT_STATUS = "draft";
 
 /**
  * Renders a categorized research checklist card in the chat flow.

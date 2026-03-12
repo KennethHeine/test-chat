@@ -1566,6 +1566,345 @@
       margin-top: 4px;
     }
 
+    /* Issue draft dashboard page */
+    .issue-goal-select,
+    .issue-milestone-select {
+      width: 100%;
+      padding: 8px 10px;
+      background: var(--color-bg-secondary);
+      border: 1px solid var(--color-border);
+      border-radius: var(--radius);
+      color: var(--color-text);
+      font-size: 13px;
+      margin-bottom: 12px;
+      cursor: pointer;
+    }
+
+    .issue-goal-select:focus,
+    .issue-milestone-select:focus {
+      outline: 2px solid var(--color-accent);
+      outline-offset: 2px;
+    }
+
+    .issue-draft-item {
+      background: var(--color-bg-secondary);
+      border: 1px solid var(--color-border);
+      border-radius: var(--radius);
+      padding: 14px 16px;
+      margin-bottom: 10px;
+    }
+
+    .issue-draft-item-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      cursor: pointer;
+    }
+
+    .issue-draft-order {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--color-text-muted);
+      background: var(--color-bg-tertiary);
+      border: 1px solid var(--color-border);
+      border-radius: 3px;
+      padding: 1px 6px;
+      flex-shrink: 0;
+    }
+
+    .issue-draft-title {
+      flex: 1;
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--color-text);
+    }
+
+    .issue-draft-status {
+      font-size: 11px;
+      font-weight: 600;
+      border-radius: 3px;
+      padding: 2px 7px;
+      flex-shrink: 0;
+    }
+
+    .issue-draft-status.status-draft {
+      background: rgba(125, 133, 144, 0.15);
+      color: #7d8590;
+    }
+
+    .issue-draft-status.status-ready {
+      background: rgba(56, 139, 253, 0.15);
+      color: #58a6ff;
+    }
+
+    .issue-draft-status.status-created {
+      background: rgba(35, 134, 54, 0.15);
+      color: #3fb950;
+    }
+
+    .issue-draft-expand-btn {
+      background: none;
+      border: 1px solid var(--color-border);
+      border-radius: 3px;
+      color: var(--color-text-muted);
+      font-size: 11px;
+      padding: 2px 7px;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+
+    .issue-draft-expand-btn:hover {
+      background: var(--color-bg-tertiary);
+    }
+
+    .issue-draft-approve-btn {
+      background: rgba(35, 134, 54, 0.1);
+      border: 1px solid rgba(63, 185, 80, 0.4);
+      border-radius: 3px;
+      color: #3fb950;
+      font-size: 11px;
+      font-weight: 600;
+      padding: 2px 10px;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+
+    .issue-draft-approve-btn:hover:not(:disabled) {
+      background: rgba(35, 134, 54, 0.2);
+    }
+
+    .issue-draft-approve-btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .issue-draft-body {
+      margin-top: 14px;
+      display: none;
+    }
+
+    .issue-draft-body.expanded {
+      display: block;
+    }
+
+    .issue-draft-field {
+      margin-bottom: 12px;
+    }
+
+    .issue-draft-field-label {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--color-text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 4px;
+    }
+
+    .issue-draft-field-value {
+      font-size: 13px;
+      color: var(--color-text);
+      line-height: 1.5;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .issue-draft-field-edit-btn {
+      background: none;
+      border: 1px solid var(--color-border);
+      border-radius: 3px;
+      color: var(--color-text-muted);
+      font-size: 11px;
+      padding: 1px 6px;
+      cursor: pointer;
+      margin-left: 8px;
+      vertical-align: middle;
+    }
+
+    .issue-draft-field-edit-btn:hover {
+      background: var(--color-bg-tertiary);
+    }
+
+    .issue-draft-field-edit-area {
+      display: none;
+      flex-direction: column;
+      gap: 8px;
+      margin-top: 4px;
+    }
+
+    .issue-draft-field-edit-area.editing {
+      display: flex;
+    }
+
+    .issue-draft-field-textarea {
+      width: 100%;
+      min-height: 80px;
+      padding: 8px 10px;
+      background: var(--color-bg-tertiary);
+      border: 1px solid var(--color-border);
+      border-radius: var(--radius);
+      color: var(--color-text);
+      font-size: 13px;
+      font-family: inherit;
+      resize: vertical;
+      box-sizing: border-box;
+    }
+
+    .issue-draft-field-textarea:focus {
+      outline: 2px solid var(--color-accent);
+      outline-offset: 2px;
+    }
+
+    .issue-draft-field-actions {
+      display: flex;
+      gap: 8px;
+    }
+
+    .issue-draft-field-save-btn {
+      background: var(--color-accent);
+      border: none;
+      border-radius: 3px;
+      color: #fff;
+      font-size: 12px;
+      font-weight: 600;
+      padding: 4px 14px;
+      cursor: pointer;
+    }
+
+    .issue-draft-field-save-btn:hover:not(:disabled) {
+      opacity: 0.9;
+    }
+
+    .issue-draft-field-save-btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .issue-draft-field-cancel-btn {
+      background: none;
+      border: 1px solid var(--color-border);
+      border-radius: 3px;
+      color: var(--color-text-muted);
+      font-size: 12px;
+      padding: 4px 12px;
+      cursor: pointer;
+    }
+
+    .issue-draft-field-cancel-btn:hover {
+      background: var(--color-bg-tertiary);
+    }
+
+    .issue-draft-md-preview {
+      background: var(--color-bg-tertiary);
+      border: 1px solid var(--color-border);
+      border-radius: var(--radius);
+      padding: 12px 14px;
+      font-size: 13px;
+      color: var(--color-text);
+      line-height: 1.6;
+      margin-top: 8px;
+    }
+
+    .issue-draft-md-preview h1,
+    .issue-draft-md-preview h2,
+    .issue-draft-md-preview h3 {
+      margin: 10px 0 6px;
+      font-weight: 600;
+      color: var(--color-text);
+    }
+
+    .issue-draft-md-preview h2 {
+      font-size: 14px;
+      border-bottom: 1px solid var(--color-border);
+      padding-bottom: 4px;
+    }
+
+    .issue-draft-md-preview h3 {
+      font-size: 13px;
+    }
+
+    .issue-draft-md-preview p {
+      margin: 6px 0;
+    }
+
+    .issue-draft-md-preview ul,
+    .issue-draft-md-preview ol {
+      margin: 4px 0 4px 18px;
+      padding: 0;
+    }
+
+    .issue-draft-md-preview li {
+      margin-bottom: 2px;
+    }
+
+    .issue-draft-md-preview code {
+      background: rgba(110, 118, 129, 0.1);
+      border-radius: 3px;
+      padding: 1px 5px;
+      font-family: monospace;
+      font-size: 12px;
+    }
+
+    .issue-draft-preview-toggle {
+      background: none;
+      border: 1px solid var(--color-border);
+      border-radius: 3px;
+      color: var(--color-accent);
+      font-size: 11px;
+      font-weight: 500;
+      padding: 2px 9px;
+      cursor: pointer;
+      margin-top: 12px;
+    }
+
+    .issue-draft-preview-toggle:hover {
+      background: var(--color-bg-tertiary);
+    }
+
+    .issue-draft-batch-bar {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 16px;
+      padding: 10px 14px;
+      background: var(--color-bg-secondary);
+      border: 1px solid var(--color-border);
+      border-radius: var(--radius);
+    }
+
+    .issue-draft-batch-approve-btn {
+      background: rgba(35, 134, 54, 0.1);
+      border: 1px solid rgba(63, 185, 80, 0.4);
+      border-radius: 3px;
+      color: #3fb950;
+      font-size: 12px;
+      font-weight: 600;
+      padding: 5px 14px;
+      cursor: pointer;
+    }
+
+    .issue-draft-batch-approve-btn:hover:not(:disabled) {
+      background: rgba(35, 134, 54, 0.2);
+    }
+
+    .issue-draft-batch-approve-btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .issue-draft-batch-summary {
+      font-size: 12px;
+      color: var(--color-text-muted);
+    }
+
+    .issue-draft-summary {
+      font-size: 12px;
+      color: var(--color-text-muted);
+      border-top: 1px solid var(--color-border);
+      padding-top: 10px;
+      margin-top: 4px;
+    }
+
     @media (max-width: 768px) {
       #dashboard-nav {
         width: 160px;
@@ -1741,9 +2080,17 @@
             <h2>Issues</h2>
             <p>GitHub issue drafts ready for review and push</p>
           </div>
-          <div class="dashboard-empty">
-            <span class="dashboard-empty-icon">📋</span>
-            <p>No issue drafts yet. Issue drafts will appear here after milestones are planned.</p>
+          <div id="issue-goal-selector" style="display:none">
+            <select id="issue-goal-select" class="issue-goal-select" aria-label="Select goal to view issues for"></select>
+          </div>
+          <div id="issue-milestone-selector" style="display:none">
+            <select id="issue-milestone-select" class="issue-milestone-select" aria-label="Select milestone to view issues for"></select>
+          </div>
+          <div id="issue-page-content">
+            <div class="dashboard-empty">
+              <span class="dashboard-empty-icon">📋</span>
+              <p>No issue drafts yet. Issue drafts will appear here after milestones are planned.</p>
+            </div>
           </div>
         </div>
       </div>

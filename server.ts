@@ -155,6 +155,18 @@ const VALID_RESEARCH_STATUSES = ["open", "researching", "resolved"] as const;
 const MAX_RESEARCH_FINDINGS_LENGTH = 2000;
 const MAX_RESEARCH_DECISION_LENGTH = 1000;
 
+// Valid values and max lengths for issue draft updates
+const VALID_ISSUE_DRAFT_STATUSES = ["draft", "ready", "created"] as const;
+const MAX_ISSUE_TITLE_LENGTH = 256;
+const MAX_ISSUE_PURPOSE_LENGTH = 500;
+const MAX_ISSUE_PROBLEM_LENGTH = 1000;
+const MAX_ISSUE_EXPECTED_OUTCOME_LENGTH = 500;
+const MAX_ISSUE_SCOPE_BOUNDARIES_LENGTH = 1000;
+const MAX_ISSUE_TECHNICAL_CONTEXT_LENGTH = 2000;
+const MAX_ISSUE_TESTING_EXPECTATIONS_LENGTH = 1000;
+const MAX_ISSUE_FILE_PATH_LENGTH = 256;
+const MAX_ISSUE_FILE_REASON_LENGTH = 500;
+
 /**
  * HTML-escapes a string to prevent stored XSS if the value is later rendered
  * in a browser context. Mirrors the sanitizeText() helper in planning-tools.ts.
@@ -1018,6 +1030,162 @@ app.get("/api/milestones/:id/issues", async (req: Request, res: Response) => {
     res.json({ issues });
   } catch (err: any) {
     res.status(500).json({ error: err.message || "Failed to get issue drafts" });
+  }
+});
+
+// Update an issue draft (status, text fields) scoped to the authenticated user
+app.patch("/api/milestones/:milestoneId/issues/:issueId", async (req: Request, res: Response) => {
+  const token = extractToken(req);
+  if (!token) {
+    res.status(401).json({ error: "Missing token. Provide Authorization: Bearer <token> header." });
+    return;
+  }
+
+  const milestoneId = req.params.milestoneId as string;
+  const issueId = req.params.issueId as string;
+  const body = req.body as Record<string, unknown>;
+
+  const updates: Partial<Omit<import("./planning-types.js").IssueDraft, "id" | "milestoneId">> = {};
+
+  // Validate and sanitize text fields
+  const textFields: Array<{ key: string; max: number }> = [
+    { key: "title", max: MAX_ISSUE_TITLE_LENGTH },
+    { key: "purpose", max: MAX_ISSUE_PURPOSE_LENGTH },
+    { key: "problem", max: MAX_ISSUE_PROBLEM_LENGTH },
+    { key: "expectedOutcome", max: MAX_ISSUE_EXPECTED_OUTCOME_LENGTH },
+    { key: "scopeBoundaries", max: MAX_ISSUE_SCOPE_BOUNDARIES_LENGTH },
+    { key: "technicalContext", max: MAX_ISSUE_TECHNICAL_CONTEXT_LENGTH },
+    { key: "testingExpectations", max: MAX_ISSUE_TESTING_EXPECTATIONS_LENGTH },
+    { key: "patternReference", max: MAX_ISSUE_TECHNICAL_CONTEXT_LENGTH },
+  ];
+
+  for (const { key, max } of textFields) {
+    if (key in body) {
+      if (typeof body[key] !== "string") {
+        res.status(400).json({ error: `${key} must be a string` });
+        return;
+      }
+      const trimmed = (body[key] as string).trim();
+      if (trimmed.length > max) {
+        res.status(400).json({ error: `${key} must be at most ${max} characters` });
+        return;
+      }
+      (updates as Record<string, unknown>)[key] = sanitizeResearchText(trimmed);
+    }
+  }
+
+  // Validate string-array fields
+  const MAX_ARRAY_ITEMS = 50;
+  const MAX_ARRAY_ITEM_LENGTH = 500;
+  const stringArrayFields = ["acceptanceCriteria", "securityChecklist", "verificationCommands", "researchLinks", "dependencies"];
+  for (const key of stringArrayFields) {
+    if (key in body) {
+      if (!Array.isArray(body[key]) || !(body[key] as unknown[]).every((v) => typeof v === "string")) {
+        res.status(400).json({ error: `${key} must be an array of strings` });
+        return;
+      }
+      const arr = body[key] as string[];
+      if (arr.length > MAX_ARRAY_ITEMS) {
+        res.status(400).json({ error: `${key} must have at most ${MAX_ARRAY_ITEMS} items` });
+        return;
+      }
+      for (const item of arr) {
+        if (item.trim().length > MAX_ARRAY_ITEM_LENGTH) {
+          res.status(400).json({ error: `${key} items must be at most ${MAX_ARRAY_ITEM_LENGTH} characters each` });
+          return;
+        }
+      }
+      (updates as Record<string, unknown>)[key] = arr.map((s) => sanitizeResearchText(s.trim()));
+    }
+  }
+
+  // Validate FileRef array fields (filesToModify, filesToRead)
+  const fileRefFields = ["filesToModify", "filesToRead"];
+  for (const key of fileRefFields) {
+    if (key in body) {
+      if (!Array.isArray(body[key])) {
+        res.status(400).json({ error: `${key} must be an array` });
+        return;
+      }
+      const refs = body[key] as unknown[];
+      const validated: import("./planning-types.js").FileRef[] = [];
+      for (const ref of refs) {
+        if (typeof ref !== "object" || ref === null) {
+          res.status(400).json({ error: `${key} items must be objects with path and reason` });
+          return;
+        }
+        const r = ref as Record<string, unknown>;
+        if (typeof r.path !== "string" || typeof r.reason !== "string") {
+          res.status(400).json({ error: `${key} items must have string path and reason` });
+          return;
+        }
+        const trimmedPath = r.path.trim();
+        const trimmedReason = r.reason.trim();
+        if (trimmedPath.length === 0) {
+          res.status(400).json({ error: `${key} path must not be empty` });
+          return;
+        }
+        if (trimmedReason.length === 0) {
+          res.status(400).json({ error: `${key} reason must not be empty` });
+          return;
+        }
+        if (trimmedPath.length > MAX_ISSUE_FILE_PATH_LENGTH) {
+          res.status(400).json({ error: `${key} path must be at most ${MAX_ISSUE_FILE_PATH_LENGTH} characters` });
+          return;
+        }
+        if (trimmedReason.length > MAX_ISSUE_FILE_REASON_LENGTH) {
+          res.status(400).json({ error: `${key} reason must be at most ${MAX_ISSUE_FILE_REASON_LENGTH} characters` });
+          return;
+        }
+        validated.push({ path: sanitizeResearchText(trimmedPath), reason: sanitizeResearchText(trimmedReason) });
+      }
+      (updates as Record<string, unknown>)[key] = validated;
+    }
+  }
+
+  // Validate status
+  if ("status" in body) {
+    if (!VALID_ISSUE_DRAFT_STATUSES.includes(body.status as (typeof VALID_ISSUE_DRAFT_STATUSES)[number])) {
+      res.status(400).json({ error: "status must be one of: draft, ready, created" });
+      return;
+    }
+    updates.status = body.status as "draft" | "ready" | "created";
+  }
+
+  if (Object.keys(updates).length === 0) {
+    res.status(400).json({ error: "No valid fields provided for update" });
+    return;
+  }
+
+  try {
+    const milestone = await planningStore.getMilestone(milestoneId);
+    if (!milestone) {
+      res.status(404).json({ error: "Milestone not found" });
+      return;
+    }
+
+    const goal = await getOwnedGoal(token, milestone.goalId);
+    if (!goal) {
+      res.status(404).json({ error: "Milestone not found" });
+      return;
+    }
+
+    // Verify the issue draft exists and belongs to the requested milestone (IDOR guard)
+    const existingDraft = await planningStore.getIssueDraft(issueId);
+    if (!existingDraft || existingDraft.milestoneId !== milestoneId) {
+      res.status(404).json({ error: "Issue draft not found" });
+      return;
+    }
+
+    const updated = await planningStore.updateIssueDraft(issueId, updates);
+    if (!updated) {
+      res.status(404).json({ error: "Issue draft not found" });
+      return;
+    }
+
+    res.json(updated);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Failed to update issue draft" });
   }
 });
 
