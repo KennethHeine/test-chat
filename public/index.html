@@ -4,25 +4,34 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Copilot Agent Orchestrator</title>
+  <!-- IBM Plex Sans + IBM Plex Mono — Developer-Focused typography pairing (Spark App Template) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
     :root {
-      --color-bg: #0d1117;
-      --color-bg-secondary: #161b22;
-      --color-bg-tertiary: #21262d;
-      --color-border: #30363d;
-      --color-text: #e6edf3;
-      --color-text-muted: #8b949e;
-      --color-accent: #58a6ff;
-      --color-accent-emphasis: #1f6feb;
-      --color-success: #3fb950;
-      --color-danger: #f85149;
-      --color-user-bubble: #1f6feb;
-      --color-assistant-bubble: #161b22;
-      --font-mono: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
-      --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif;
+      /* OKLCH color system — Spark App Template design principles */
+      --color-bg: oklch(0.14 0.01 250);
+      --color-bg-secondary: oklch(0.18 0.01 250);
+      --color-bg-tertiary: oklch(0.23 0.01 250);
+      --color-border: oklch(0.30 0.01 250);
+      --color-text: oklch(0.93 0.01 250);
+      --color-text-muted: oklch(0.62 0.02 250);
+      --color-accent: oklch(0.70 0.14 250);
+      --color-accent-emphasis: oklch(0.55 0.18 255);
+      --color-success: oklch(0.66 0.17 145);
+      --color-danger: oklch(0.63 0.22 25);
+      --color-warning: oklch(0.72 0.16 85);
+      --color-user-bubble: oklch(0.55 0.18 255);
+      --color-assistant-bubble: oklch(0.18 0.01 250);
+      /* Developer-Focused typography — IBM Plex family (Spark pairing #4) */
+      --font-mono: 'IBM Plex Mono', 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+      --font-sans: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif;
       --radius: 6px;
+      --transition-fast: 0.15s ease;
+      --transition-normal: 0.2s ease;
     }
 
     body {
@@ -81,7 +90,7 @@
     }
 
     select:hover { border-color: var(--color-text-muted); }
-    select:focus { border-color: var(--color-accent); box-shadow: 0 0 0 2px rgba(31, 111, 235, 0.3); }
+    select:focus { border-color: var(--color-accent); box-shadow: 0 0 0 2px oklch(0.55 0.18 255 / 0.3); }
 
     #token-input {
       width: 260px;
@@ -101,10 +110,11 @@
       background: var(--color-bg-tertiary);
       color: var(--color-text);
       font-weight: 500;
-      transition: background 0.15s;
+      transition: background var(--transition-fast), transform var(--transition-fast), box-shadow var(--transition-fast);
     }
 
-    .btn:hover { background: var(--color-border); }
+    .btn:hover { background: var(--color-border); transform: translateY(-1px); }
+    .btn:active { transform: translateY(0); }
 
     .btn-primary {
       background: var(--color-accent-emphasis);
@@ -112,8 +122,8 @@
       color: #fff;
     }
 
-    .btn-primary:hover { background: #388bfd; }
-    .btn-primary:disabled { opacity: 0.5; cursor: default; }
+    .btn-primary:hover { background: oklch(0.58 0.18 255); transform: translateY(-1px); }
+    .btn-primary:disabled { opacity: 0.5; cursor: default; transform: none; }
 
     .btn-danger {
       background: var(--color-danger);
@@ -123,7 +133,7 @@
       font-weight: 500;
     }
 
-    .btn-danger:hover { background: #da3633; }
+    .btn-danger:hover { background: oklch(0.58 0.22 25); transform: translateY(-1px); }
 
     /* Messages area */
     #messages {
@@ -165,7 +175,7 @@
 
     .message.error {
       align-self: center;
-      background: rgba(248, 81, 73, 0.15);
+      background: oklch(0.63 0.22 25 / 0.15);
       border: 1px solid var(--color-danger);
       color: var(--color-danger);
       font-size: 13px;
@@ -220,7 +230,7 @@
     }
 
     #input-area textarea::placeholder { color: var(--color-text-muted); }
-    #input-area textarea:focus { border-color: var(--color-accent); box-shadow: 0 0 0 2px rgba(31, 111, 235, 0.3); }
+    #input-area textarea:focus { border-color: var(--color-accent); box-shadow: 0 0 0 2px oklch(0.55 0.18 255 / 0.3); }
 
     /* Status bar */
     #status-bar {
@@ -318,7 +328,7 @@
       cursor: pointer;
       font-size: 13px;
       color: var(--color-text);
-      transition: background 0.15s;
+      transition: background var(--transition-fast), border-color var(--transition-fast);
       position: relative;
     }
 
@@ -362,7 +372,7 @@
 
     .session-item-delete:hover {
       color: var(--color-danger);
-      background: rgba(248, 81, 73, 0.15);
+      background: oklch(0.63 0.22 25 / 0.15);
     }
 
     .session-empty {
@@ -392,9 +402,10 @@
       display: flex;
       align-items: center;
       justify-content: center;
+      transition: background var(--transition-fast), transform var(--transition-fast);
     }
 
-    .btn-icon:hover { background: var(--color-border); }
+    .btn-icon:hover { background: var(--color-border); transform: translateY(-1px); }
 
     #toggle-sidebar-btn {
       font-size: 18px;
@@ -405,7 +416,7 @@
       display: none;
       position: fixed;
       inset: 0;
-      background: rgba(0, 0, 0, 0.5);
+      background: oklch(0 0 0 / 0.5);
       z-index: 99;
     }
 
@@ -689,13 +700,13 @@
     }
 
     .research-item-status.status-researching {
-      background: rgba(88, 166, 255, 0.15);
+      background: oklch(0.70 0.14 250 / 0.15);
       color: var(--color-accent);
       border: 1px solid var(--color-accent);
     }
 
     .research-item-status.status-resolved {
-      background: rgba(63, 185, 80, 0.15);
+      background: oklch(0.66 0.17 145 / 0.15);
       color: var(--color-success);
       border: 1px solid var(--color-success);
     }
@@ -802,19 +813,19 @@
     }
 
     .milestone-status.status-ready {
-      background: rgba(88, 166, 255, 0.15);
+      background: oklch(0.70 0.14 250 / 0.15);
       color: var(--color-accent);
       border: 1px solid var(--color-accent);
     }
 
     .milestone-status.status-in-progress {
-      background: rgba(210, 153, 34, 0.15);
-      color: #d29922;
-      border: 1px solid #d29922;
+      background: oklch(0.72 0.16 85 / 0.15);
+      color: var(--color-warning);
+      border: 1px solid var(--color-warning);
     }
 
     .milestone-status.status-complete {
-      background: rgba(63, 185, 80, 0.15);
+      background: oklch(0.66 0.17 145 / 0.15);
       color: var(--color-success);
       border: 1px solid var(--color-success);
     }
@@ -869,7 +880,7 @@
     }
 
     .user-input-request-header {
-      background: rgba(31, 111, 235, 0.15);
+      background: oklch(0.55 0.18 255 / 0.15);
       padding: 8px 12px;
       font-size: 12px;
       font-weight: 600;
@@ -908,12 +919,12 @@
       font-size: 13px;
       text-align: left;
       cursor: pointer;
-      transition: border-color 0.1s, background 0.1s;
+      transition: border-color var(--transition-fast), background var(--transition-fast);
     }
 
     .user-input-choice-btn:hover {
       border-color: var(--color-accent);
-      background: rgba(88, 166, 255, 0.08);
+      background: oklch(0.70 0.14 250 / 0.08);
     }
 
     .user-input-freeform {
@@ -939,7 +950,7 @@
 
     .user-input-freeform-text:focus {
       border-color: var(--color-accent);
-      box-shadow: 0 0 0 2px rgba(31, 111, 235, 0.3);
+      box-shadow: 0 0 0 2px oklch(0.55 0.18 255 / 0.3);
     }
 
     .user-input-submit-btn {
@@ -954,7 +965,7 @@
     }
 
     .user-input-submit-btn:hover {
-      background: #388bfd;
+      background: oklch(0.58 0.18 255);
     }
 
     .user-input-answered {
@@ -1017,7 +1028,7 @@
       cursor: pointer;
       font-size: 13px;
       color: var(--color-text);
-      transition: background 0.15s;
+      transition: background var(--transition-fast), color var(--transition-fast);
       border: none;
       background: none;
       text-align: left;
@@ -1115,12 +1126,14 @@
       border-radius: var(--radius);
       padding: 14px 16px;
       cursor: pointer;
-      transition: border-color 0.15s, background 0.15s;
+      transition: border-color var(--transition-fast), background var(--transition-fast), transform var(--transition-fast), box-shadow var(--transition-fast);
     }
 
     .goal-list-item:hover {
       border-color: var(--color-accent);
       background: var(--color-bg-tertiary);
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px oklch(0 0 0 / 0.2);
     }
 
     .goal-list-item:focus-visible {
@@ -1334,11 +1347,11 @@
       border-radius: var(--radius);
       padding: 2px 8px;
       cursor: pointer;
-      transition: background 0.15s;
+      transition: background var(--transition-fast);
     }
 
     .research-tracker-edit-btn:hover {
-      background: rgba(88, 166, 255, 0.1);
+      background: oklch(0.70 0.14 250 / 0.1);
     }
 
     .research-tracker-findings {
@@ -1495,23 +1508,23 @@
     }
 
     .milestone-timeline-status.status-draft {
-      background: rgba(125, 133, 144, 0.15);
-      color: #7d8590;
+      background: oklch(0.55 0.02 250 / 0.15);
+      color: oklch(0.55 0.02 250);
     }
 
     .milestone-timeline-status.status-ready {
-      background: rgba(56, 139, 253, 0.15);
-      color: #58a6ff;
+      background: oklch(0.70 0.14 250 / 0.15);
+      color: var(--color-accent);
     }
 
     .milestone-timeline-status.status-in-progress {
-      background: rgba(187, 128, 9, 0.15);
-      color: #d29922;
+      background: oklch(0.72 0.16 85 / 0.15);
+      color: var(--color-warning);
     }
 
     .milestone-timeline-status.status-complete {
-      background: rgba(35, 134, 54, 0.15);
-      color: #3fb950;
+      background: oklch(0.66 0.17 145 / 0.15);
+      color: var(--color-success);
     }
 
     .milestone-timeline-issue-count {
@@ -1552,8 +1565,8 @@
     .milestone-timeline-dep-tag {
       font-size: 11px;
       color: var(--color-accent);
-      background: rgba(88, 166, 255, 0.1);
-      border: 1px solid rgba(88, 166, 255, 0.3);
+      background: oklch(0.70 0.14 250 / 0.1);
+      border: 1px solid oklch(0.70 0.14 250 / 0.3);
       border-radius: 3px;
       padding: 1px 6px;
     }
@@ -1629,18 +1642,18 @@
     }
 
     .issue-draft-status.status-draft {
-      background: rgba(125, 133, 144, 0.15);
-      color: #7d8590;
+      background: oklch(0.55 0.02 250 / 0.15);
+      color: oklch(0.55 0.02 250);
     }
 
     .issue-draft-status.status-ready {
-      background: rgba(56, 139, 253, 0.15);
-      color: #58a6ff;
+      background: oklch(0.70 0.14 250 / 0.15);
+      color: var(--color-accent);
     }
 
     .issue-draft-status.status-created {
-      background: rgba(35, 134, 54, 0.15);
-      color: #3fb950;
+      background: oklch(0.66 0.17 145 / 0.15);
+      color: var(--color-success);
     }
 
     .issue-draft-expand-btn {
@@ -1659,10 +1672,10 @@
     }
 
     .issue-draft-approve-btn {
-      background: rgba(35, 134, 54, 0.1);
-      border: 1px solid rgba(63, 185, 80, 0.4);
+      background: oklch(0.66 0.17 145 / 0.1);
+      border: 1px solid oklch(0.66 0.17 145 / 0.4);
       border-radius: 3px;
-      color: #3fb950;
+      color: var(--color-success);
       font-size: 11px;
       font-weight: 600;
       padding: 2px 10px;
@@ -1671,7 +1684,7 @@
     }
 
     .issue-draft-approve-btn:hover:not(:disabled) {
-      background: rgba(35, 134, 54, 0.2);
+      background: oklch(0.66 0.17 145 / 0.2);
     }
 
     .issue-draft-approve-btn:disabled {
@@ -1838,10 +1851,10 @@
     }
 
     .issue-draft-md-preview code {
-      background: rgba(110, 118, 129, 0.1);
+      background: oklch(0.50 0.01 250 / 0.1);
       border-radius: 3px;
       padding: 1px 5px;
-      font-family: monospace;
+      font-family: var(--font-mono);
       font-size: 12px;
     }
 
@@ -1873,10 +1886,10 @@
     }
 
     .issue-draft-batch-approve-btn {
-      background: rgba(35, 134, 54, 0.1);
-      border: 1px solid rgba(63, 185, 80, 0.4);
+      background: oklch(0.66 0.17 145 / 0.1);
+      border: 1px solid oklch(0.66 0.17 145 / 0.4);
       border-radius: 3px;
-      color: #3fb950;
+      color: var(--color-success);
       font-size: 12px;
       font-weight: 600;
       padding: 5px 14px;
@@ -1884,7 +1897,7 @@
     }
 
     .issue-draft-batch-approve-btn:hover:not(:disabled) {
-      background: rgba(35, 134, 54, 0.2);
+      background: oklch(0.66 0.17 145 / 0.2);
     }
 
     .issue-draft-batch-approve-btn:disabled {
@@ -1957,26 +1970,27 @@
     }
 
     .push-to-github-btn {
-      background: rgba(35, 134, 54, 0.12);
-      border: 1px solid rgba(63, 185, 80, 0.4);
+      background: oklch(0.66 0.17 145 / 0.12);
+      border: 1px solid oklch(0.66 0.17 145 / 0.4);
       border-radius: 6px;
-      color: #3fb950;
+      color: var(--color-success);
       font-size: 13px;
       font-weight: 600;
       padding: 7px 16px;
       cursor: pointer;
       white-space: nowrap;
       flex-shrink: 0;
+      transition: background var(--transition-fast);
     }
 
     .push-to-github-btn:hover {
-      background: rgba(35, 134, 54, 0.22);
+      background: oklch(0.66 0.17 145 / 0.22);
     }
 
     .push-modal-overlay {
       position: fixed;
       inset: 0;
-      background: rgba(0, 0, 0, 0.65);
+      background: oklch(0 0 0 / 0.65);
       display: flex;
       align-items: center;
       justify-content: center;
@@ -2141,13 +2155,13 @@
     }
 
     .push-mutation-badge.new {
-      background: rgba(56, 139, 253, 0.15);
-      color: #58a6ff;
-      border: 1px solid rgba(56, 139, 253, 0.3);
+      background: oklch(0.70 0.14 250 / 0.15);
+      color: var(--color-accent);
+      border: 1px solid oklch(0.70 0.14 250 / 0.3);
     }
 
     .push-mutation-badge.exists {
-      background: rgba(110, 118, 129, 0.1);
+      background: oklch(0.50 0.01 250 / 0.1);
       color: var(--color-text-muted);
       border: 1px solid var(--color-border);
     }
@@ -2169,10 +2183,10 @@
     }
 
     .push-confirm-btn {
-      background: rgba(35, 134, 54, 0.12);
-      border: 1px solid rgba(63, 185, 80, 0.4);
+      background: oklch(0.66 0.17 145 / 0.12);
+      border: 1px solid oklch(0.66 0.17 145 / 0.4);
       border-radius: 6px;
-      color: #3fb950;
+      color: var(--color-success);
       font-size: 13px;
       font-weight: 600;
       padding: 8px 18px;
@@ -2180,7 +2194,7 @@
     }
 
     .push-confirm-btn:hover:not(:disabled) {
-      background: rgba(35, 134, 54, 0.22);
+      background: oklch(0.66 0.17 145 / 0.22);
     }
 
     .push-confirm-btn:disabled {
@@ -2218,7 +2232,7 @@
 
     .push-progress-bar {
       height: 100%;
-      background: #3fb950;
+      background: var(--color-success);
       border-radius: 3px;
       transition: width 0.3s ease;
     }
@@ -2271,7 +2285,7 @@
 
     .push-progress-item-error {
       font-size: 11px;
-      color: #f85149;
+      color: var(--color-danger);
       flex: 1;
       min-width: 0;
     }
@@ -2284,15 +2298,15 @@
     }
 
     .push-results-summary.all-success {
-      color: #3fb950;
+      color: var(--color-success);
     }
 
     .push-results-summary.partial-failure {
-      color: #f0883e;
+      color: var(--color-warning);
     }
 
     .push-results-summary.all-failure {
-      color: #f85149;
+      color: var(--color-danger);
     }
 
     .push-results-list {
@@ -2349,7 +2363,7 @@
 
     .push-results-item-error {
       font-size: 12px;
-      color: #f85149;
+      color: var(--color-danger);
       margin-top: 3px;
     }
 
@@ -2373,6 +2387,30 @@
       font-size: 13px;
       padding: 20px 0 8px;
       text-align: center;
+    }
+
+    /* Accessibility: Respect reduced motion preference */
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+      }
+    }
+
+    /* Accessibility: Enhanced focus indicators for keyboard navigation */
+    :focus-visible {
+      outline: 2px solid var(--color-accent);
+      outline-offset: 2px;
+    }
+
+    button:focus-visible,
+    select:focus-visible,
+    input:focus-visible,
+    textarea:focus-visible {
+      outline: 2px solid var(--color-accent);
+      outline-offset: 2px;
+      box-shadow: 0 0 0 4px oklch(0.55 0.18 255 / 0.15);
     }
   </style>
 </head>

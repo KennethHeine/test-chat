@@ -33,7 +33,17 @@ The frontend is vanilla HTML, CSS, and JavaScript — no frameworks, no build st
 └─────────────────────────────────────────────────────────┘
 ```
 
-**Theme:** GitHub dark mode (`#0d1117` background, `#e6edf3` text).
+**Theme:** Dark mode using OKLCH color system, inspired by the [Spark App Template](https://github.com/github/copilot-plugins/tree/main/plugins/spark/skills/spark-app-template) design principles. Background `oklch(0.14 0.01 250)`, text `oklch(0.93 0.01 250)`.
+
+### Design System
+
+The frontend styling follows design principles adapted from the Spark App Template skill:
+
+- **Color System:** All CSS custom properties use the [OKLCH color format](https://oklch.com/) for perceptually uniform color manipulation. OKLCH provides better gamut coverage and predictable contrast compared to hex/RGB.
+- **Typography:** [IBM Plex Sans](https://fonts.google.com/specimen/IBM+Plex+Sans) for UI text and [IBM Plex Mono](https://fonts.google.com/specimen/IBM+Plex+Mono) for code — the "Developer-Focused" pairing from Spark (pairing #4). Loaded via Google Fonts with `font-display: swap`.
+- **Micro-interactions:** Buttons and cards use `transform: translateY()` on hover for a subtle lift effect. Transitions use CSS custom properties (`--transition-fast`, `--transition-normal`) for consistency.
+- **Accessibility:** `prefers-reduced-motion` media query disables all animations for users who prefer reduced motion. Enhanced `:focus-visible` indicators with accent-colored outlines and box shadows for keyboard navigation.
+- **Semantic tokens:** Colors are defined as semantic variables (`--color-accent`, `--color-success`, `--color-danger`, `--color-warning`) so components reference intent, not raw color values.
 
 ### Key UI Components
 
