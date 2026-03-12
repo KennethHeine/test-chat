@@ -1,6 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
 import type { ChatItem, GoalData, ResearchItem, MilestoneData } from '../utils/types';
-import { escHtml } from '../utils/api';
 import GitHubIcon from './GitHubIcon';
 
 interface ChatAreaProps {
@@ -177,7 +176,7 @@ function ResearchCard({ items }: { items: ResearchItem[] }) {
                   <span className="research-item-findings">{item.findings}</span>
                 )}
                 {item.decision && (
-                  <span className="research-item-decision">{escHtml(item.decision)}</span>
+                  <span className="research-item-decision">{item.decision}</span>
                 )}
               </div>
             ))}

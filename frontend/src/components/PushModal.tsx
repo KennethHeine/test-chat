@@ -1,6 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
 import type { IssueDraft, MilestoneData } from '../utils/types';
-import { escHtml } from '../utils/api';
 
 interface PushModalProps {
   visible: boolean;
@@ -180,12 +179,12 @@ export default function PushModal({ visible, onClose, token, goalId: _goalId, mi
           </div>
           <div id="push-mutation-list" className="push-mutation-list">
             {mutations.length === 0 ? (
-              <div className="push-empty">No mutations to push. All items are already created.</div>
+              <div className="push-no-mutations">No mutations to push. All items are already created.</div>
             ) : (
               mutations.map(mut => (
                 <div key={`${mut.type}-${mut.id}`} className="push-mutation-item">
-                  <span className="push-mutation-type">{mut.type === 'milestone' ? '🏁' : '📋'}</span>
-                  <span className="push-mutation-label">{mut.label}</span>
+                  <span className="push-mutation-icon">{mut.type === 'milestone' ? '🏁' : '📋'}</span>
+                  <span className="push-mutation-name">{mut.label}</span>
                 </div>
               ))
             )}
@@ -232,12 +231,12 @@ export default function PushModal({ visible, onClose, token, goalId: _goalId, mi
           </div>
           <div id="push-results-list" className="push-results-list">
             {results.map((item, i) => (
-              <div key={i} className={`push-result-item ${item.success ? 'success' : 'error'}`}>
+              <div key={i} className={`push-results-item ${item.success ? 'success' : 'error'}`}>
                 {item.success ? '✅' : '❌'} {item.label}
                 {item.url && (
-                  <a href={item.url} target="_blank" rel="noopener noreferrer" className="push-result-link">{item.url}</a>
+                  <a href={item.url} target="_blank" rel="noopener noreferrer" className="push-results-item-link">{item.url}</a>
                 )}
-                {item.error && <span className="push-result-error">{escHtml(item.error)}</span>}
+                {item.error && <span className="push-results-item-error">{item.error}</span>}
               </div>
             ))}
           </div>

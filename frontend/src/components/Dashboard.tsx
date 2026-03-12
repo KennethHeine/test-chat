@@ -198,26 +198,26 @@ function GoalDetailView({ goal, visible, counts, onBack }: {
 
       <div className="goal-detail-fields">
         {goal.problemStatement && (
-          <div className="goal-detail-field">
-            <span className="goal-detail-label">Problem Statement</span>
-            <span className="goal-detail-value">{goal.problemStatement}</span>
+          <div className="goal-detail-section">
+            <span className="goal-detail-section-label">Problem Statement</span>
+            <span className="goal-detail-section-value">{goal.problemStatement}</span>
           </div>
         )}
         {goal.businessValue && (
-          <div className="goal-detail-field">
-            <span className="goal-detail-label">Business Value</span>
-            <span className="goal-detail-value">{goal.businessValue}</span>
+          <div className="goal-detail-section">
+            <span className="goal-detail-section-label">Business Value</span>
+            <span className="goal-detail-section-value">{goal.businessValue}</span>
           </div>
         )}
         {goal.targetOutcome && (
-          <div className="goal-detail-field">
-            <span className="goal-detail-label">Target Outcome</span>
-            <span className="goal-detail-value">{goal.targetOutcome}</span>
+          <div className="goal-detail-section">
+            <span className="goal-detail-section-label">Target Outcome</span>
+            <span className="goal-detail-section-value">{goal.targetOutcome}</span>
           </div>
         )}
         {goal.successCriteria && goal.successCriteria.length > 0 && (
-          <div className="goal-detail-field">
-            <span className="goal-detail-label">Success Criteria</span>
+          <div className="goal-detail-section">
+            <span className="goal-detail-section-label">Success Criteria</span>
             <ul>{goal.successCriteria.map((c, i) => <li key={i}>{c}</li>)}</ul>
           </div>
         )}
@@ -313,7 +313,7 @@ function ResearchPage({ visible, goals, token, selectedGoalId, onGoalSelect }: R
                 </div>
                 {categoryItems.map(item => (
                   <div key={item.id} className="research-tracker-item">
-                    <div className="research-tracker-header">
+                    <div className="research-tracker-item-header">
                       <span className={`research-item-status status-${item.status}`}>{item.status}</span>
                       <span className="research-tracker-question">{item.question}</span>
                       <button
@@ -440,9 +440,11 @@ function MilestonesPage({ visible, goals, token, selectedGoalId, onGoalSelect }:
           <>
             {sorted.map(ms => (
               <div key={ms.id} className="milestone-timeline-item">
-                <span className="milestone-timeline-order">#{ms.order}</span>
-                <span className="milestone-timeline-name">{ms.name}</span>
-                <span className={`milestone-timeline-status status-${ms.status}`}>{ms.status}</span>
+                <div className="milestone-timeline-item-header">
+                  <span className="milestone-timeline-order">#{ms.order}</span>
+                  <span className="milestone-timeline-name">{ms.name}</span>
+                  <span className={`milestone-timeline-status status-${ms.status}`}>{ms.status}</span>
+                </div>
                 <span className="milestone-timeline-goal">{ms.goal}</span>
                 <span className="milestone-timeline-issue-count">
                   {(issueCounts[ms.id] ?? 0) === 1
@@ -648,7 +650,7 @@ function IssuesPage({ visible, goals, token, selectedGoalId, onGoalSelect, onOpe
 
               return (
                 <div key={issue.id} className="issue-draft-item">
-                  <div className="issue-draft-header">
+                  <div className="issue-draft-item-header">
                     <span className="issue-draft-order">#{issue.order}</span>
                     <span className="issue-draft-title">{issue.title}</span>
                     <span className={`issue-draft-status status-${status}`}>{status}</span>

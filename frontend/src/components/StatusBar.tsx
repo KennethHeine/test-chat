@@ -25,7 +25,7 @@ export default function StatusBar({
 }: StatusBarProps) {
   return (
     <div id="status-bar">
-      <span className={`status-dot${statusConnected ? ' connected' : ''}`} id="status-dot" />
+      <span className={`status-dot${statusConnected ? '' : ' disconnected'}`} id="status-dot" />
       <span id="status-text">{statusText}</span>
       <span
         id="tool-activity"

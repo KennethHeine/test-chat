@@ -29,6 +29,15 @@ export default function Sidebar({ sessions, currentSessionId, visible, onSession
               key={s.id}
               className={`session-item${s.id === currentSessionId ? ' active' : ''}`}
               onClick={() => onSessionSwitch(s.id)}
+              role="button"
+              tabIndex={0}
+              onKeyDown={e => {
+                if (e.currentTarget !== e.target) return;
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  onSessionSwitch(s.id);
+                }
+              }}
             >
               <div className="session-item-text">{s.title}</div>
               <div className="session-item-meta">

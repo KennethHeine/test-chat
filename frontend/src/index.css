@@ -454,6 +454,11 @@
         transform: translateX(-100%);
       }
 
+      /* Show backdrop when sidebar is open on mobile */
+      #sidebar-backdrop.visible {
+        display: block;
+      }
+
       /* Message bubbles wider on mobile */
       .message {
         max-width: 92%;

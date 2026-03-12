@@ -53,7 +53,7 @@ The frontend is a React 19 + TypeScript application built with Vite. Source live
 └─────────────────────────────────────────────────────────┘
 ```
 
-**Theme:** GitHub dark mode (`#0d1117` background, `#e6edf3` text). CSS uses OKLCH color format via custom properties.
+**Theme:** GitHub dark mode (`#0d1117` background, `#e6edf3` text), implemented using CSS custom properties with hex color values.
 
 ### Key UI Components
 
