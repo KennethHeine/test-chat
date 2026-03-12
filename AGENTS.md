@@ -127,6 +127,7 @@
 | PATCH | `/api/goals/:goalId/research/:itemId` | Bearer token | Update findings/decision/status on a research item |
 | GET | `/api/goals/:id/milestones` | Bearer token | List milestones for a goal in order |
 | GET | `/api/milestones/:id/issues` | Bearer token | List issue drafts for a milestone in order |
+| PATCH | `/api/milestones/:milestoneId/issues/:issueId` | Bearer token | Update fields/status on an issue draft |
 
 ## SDK Quick Reference
 
