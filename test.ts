@@ -4581,10 +4581,26 @@ async function testPushIssueInvalidLabels(): Promise<void> {
 //
 // Usage: TEST_GITHUB_REPO=KennethHeine/test-chat npm test
 
-function skipRealApiTests(): boolean {
-  if (!REAL_API_REPO || !REAL_API_TOKEN) return true;
+/**
+ * Returns a human-readable reason why real GitHub API tests are skipped,
+ * or null if they should run.
+ */
+function realApiSkipReason(): string | null {
+  if (!REAL_API_REPO) {
+    return "TEST_GITHUB_REPO not set; skipping real GitHub API integration tests.";
+  }
+  if (!REAL_API_TOKEN) {
+    return "COPILOT_GITHUB_TOKEN not set; skipping real GitHub API integration tests.";
+  }
   const parts = REAL_API_REPO.split("/");
-  return parts.length !== 2 || !parts[0] || !parts[1];
+  if (parts.length !== 2 || !parts[0] || !parts[1]) {
+    return `TEST_GITHUB_REPO is malformed ("${REAL_API_REPO}"); expected "owner/repo". Skipping real GitHub API integration tests.`;
+  }
+  return null;
+}
+
+function skipRealApiTests(): boolean {
+  return realApiSkipReason() !== null;
 }
 
 function realOwner(): string {
@@ -4635,8 +4651,9 @@ async function cleanupGithubLabel(labelName: string): Promise<void> {
 // ─── create_github_milestone — real API ──────────────────────
 
 async function testRealApiCreateGithubMilestoneCreatesAndDeletes(): Promise<void> {
-  if (skipRealApiTests()) {
-    log("  ", "Skipped (TEST_GITHUB_REPO not set)");
+  const skipReason = realApiSkipReason();
+  if (skipReason) {
+    log("  ", skipReason);
     return;
   }
   const store = new InMemoryPlanningStore();
@@ -4686,8 +4703,9 @@ async function testRealApiCreateGithubMilestoneCreatesAndDeletes(): Promise<void
 }
 
 async function testRealApiCreateGithubMilestoneIdempotentWhenExists(): Promise<void> {
-  if (skipRealApiTests()) {
-    log("  ", "Skipped (TEST_GITHUB_REPO not set)");
+  const skipReason = realApiSkipReason();
+  if (skipReason) {
+    log("  ", skipReason);
     return;
   }
   const store = new InMemoryPlanningStore();
@@ -4731,8 +4749,9 @@ async function testRealApiCreateGithubMilestoneIdempotentWhenExists(): Promise<v
 // ─── create_github_issue — real API ──────────────────────────
 
 async function testRealApiCreateGithubIssueCreatesAndCloses(): Promise<void> {
-  if (skipRealApiTests()) {
-    log("  ", "Skipped (TEST_GITHUB_REPO not set)");
+  const skipReason = realApiSkipReason();
+  if (skipReason) {
+    log("  ", skipReason);
     return;
   }
   const store = new InMemoryPlanningStore();
@@ -4787,8 +4806,9 @@ async function testRealApiCreateGithubIssueCreatesAndCloses(): Promise<void> {
 }
 
 async function testRealApiCreateGithubIssueIdempotentWhenAlreadyCreated(): Promise<void> {
-  if (skipRealApiTests()) {
-    log("  ", "Skipped (TEST_GITHUB_REPO not set)");
+  const skipReason = realApiSkipReason();
+  if (skipReason) {
+    log("  ", skipReason);
     return;
   }
   const store = new InMemoryPlanningStore();
@@ -4834,8 +4854,9 @@ async function testRealApiCreateGithubIssueIdempotentWhenAlreadyCreated(): Promi
 // ─── create_github_branch — real API ─────────────────────────
 
 async function testRealApiCreateGithubBranchCreatesAndDeletes(): Promise<void> {
-  if (skipRealApiTests()) {
-    log("  ", "Skipped (TEST_GITHUB_REPO not set)");
+  const skipReason = realApiSkipReason();
+  if (skipReason) {
+    log("  ", skipReason);
     return;
   }
   const tools = createGitHubTools(REAL_API_TOKEN);
@@ -4890,8 +4911,9 @@ async function testRealApiCreateGithubBranchCreatesAndDeletes(): Promise<void> {
 }
 
 async function testRealApiCreateGithubBranchIdempotentWhenExists(): Promise<void> {
-  if (skipRealApiTests()) {
-    log("  ", "Skipped (TEST_GITHUB_REPO not set)");
+  const skipReason = realApiSkipReason();
+  if (skipReason) {
+    log("  ", skipReason);
     return;
   }
   const tools = createGitHubTools(REAL_API_TOKEN);
@@ -4945,8 +4967,9 @@ async function testRealApiCreateGithubBranchIdempotentWhenExists(): Promise<void
 // ─── manage_github_labels — real API ─────────────────────────
 
 async function testRealApiManageGithubLabelsCreatesAndDeletes(): Promise<void> {
-  if (skipRealApiTests()) {
-    log("  ", "Skipped (TEST_GITHUB_REPO not set)");
+  const skipReason = realApiSkipReason();
+  if (skipReason) {
+    log("  ", skipReason);
     return;
   }
   const tools = createGitHubTools(REAL_API_TOKEN);
@@ -4993,8 +5016,9 @@ async function testRealApiManageGithubLabelsCreatesAndDeletes(): Promise<void> {
 }
 
 async function testRealApiManageGithubLabelsIdempotentWhenExists(): Promise<void> {
-  if (skipRealApiTests()) {
-    log("  ", "Skipped (TEST_GITHUB_REPO not set)");
+  const skipReason = realApiSkipReason();
+  if (skipReason) {
+    log("  ", skipReason);
     return;
   }
   const tools = createGitHubTools(REAL_API_TOKEN);
@@ -5314,8 +5338,9 @@ async function main() {
 
   // --- GitHub Write Tools — Real API integration tests ---
   console.log("\n── GitHub Write Tools — Real API Integration Tests ──\n");
-  if (skipRealApiTests()) {
-    console.log("  (Skipping real API tests — set TEST_GITHUB_REPO=owner/repo to enable)\n");
+  const realApiBannerReason = realApiSkipReason();
+  if (realApiBannerReason) {
+    console.log(`  (${realApiBannerReason})\n`);
   }
 
   await run("create_github_milestone (real API): creates milestone and verifies via GET", testRealApiCreateGithubMilestoneCreatesAndDeletes);
