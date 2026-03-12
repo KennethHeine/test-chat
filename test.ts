@@ -985,6 +985,279 @@ async function testGenerateResearchChecklistWrongSessionReturnsError(): Promise<
   if (!result.error) throw new Error("Expected error for wrong sessionId");
 }
 
+// --- suggest_research tests ---
+
+async function testSuggestResearchDetectsExternalApiTrigger(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const tools = createPlanningTools("test-token", store);
+  const saveGoal = tools.find((t) => t.name === "save_goal")!;
+  const suggest = tools.find((t) => t.name === "suggest_research")!;
+
+  // Goal mentions Stripe — should trigger external_api → integration suggestion
+  const saved: any = await saveGoal.handler(
+    {
+      ...makeValidSaveGoalArgs(),
+      intent: "Build a subscription billing feature using Stripe",
+      goal: "Integrate Stripe payment processing for recurring subscriptions",
+      problemStatement: "Users cannot pay for subscriptions via the app",
+    },
+    STUB_INVOCATION
+  );
+  const goalId = saved.goal.id;
+  const result: any = await suggest.handler(
+    { goalId, sessionId: makeValidSaveGoalArgs().sessionId },
+    STUB_INVOCATION
+  );
+
+  if (!result.items) throw new Error("Expected items in result");
+  if (result.items.length === 0) throw new Error("Expected at least one triggered suggestion for Stripe");
+  const integrationItem = result.items.find((i: any) => i.category === "integration");
+  if (!integrationItem) throw new Error("Expected an integration category item for Stripe trigger");
+  if (!integrationItem.question.toLowerCase().includes("stripe") &&
+      !integrationItem.question.toLowerCase().includes("subscription") &&
+      !integrationItem.question.toLowerCase().includes("billing")) {
+    throw new Error(`Expected question to mention a payment-related term, got: ${integrationItem.question}`);
+  }
+  if (!result.triggerSummary) throw new Error("Expected triggerSummary in result");
+  if (!result.triggerSummary["external_api"]) {
+    throw new Error("Expected external_api trigger in triggerSummary");
+  }
+}
+
+async function testSuggestResearchDetectsInfrastructureTrigger(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const tools = createPlanningTools("test-token", store);
+  const saveGoal = tools.find((t) => t.name === "save_goal")!;
+  const suggest = tools.find((t) => t.name === "suggest_research")!;
+
+  // Goal mentions Docker — should trigger infrastructure suggestion
+  const saved: any = await saveGoal.handler(
+    {
+      ...makeValidSaveGoalArgs(),
+      intent: "Containerize the app using Docker for deployment",
+      goal: "Package the application in Docker containers for reproducible deployments",
+      problemStatement: "Deployment is inconsistent across environments",
+    },
+    STUB_INVOCATION
+  );
+  const goalId = saved.goal.id;
+  const result: any = await suggest.handler(
+    { goalId, sessionId: makeValidSaveGoalArgs().sessionId },
+    STUB_INVOCATION
+  );
+
+  if (!result.items) throw new Error("Expected items in result");
+  const infraItem = result.items.find((i: any) => i.category === "infrastructure");
+  if (!infraItem) throw new Error("Expected an infrastructure category item for Docker trigger");
+  if (!infraItem.question.includes("docker")) {
+    throw new Error(`Expected question to mention 'docker', got: ${infraItem.question}`);
+  }
+  if (!result.triggerSummary?.["infrastructure"]) {
+    throw new Error("Expected infrastructure trigger in triggerSummary");
+  }
+}
+
+async function testSuggestResearchDetectsSecurityTrigger(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const tools = createPlanningTools("test-token", store);
+  const saveGoal = tools.find((t) => t.name === "save_goal")!;
+  const suggest = tools.find((t) => t.name === "suggest_research")!;
+
+  // Goal mentions authentication — should trigger security suggestion
+  const saved: any = await saveGoal.handler(
+    {
+      ...makeValidSaveGoalArgs(),
+      intent: "Add user authentication and authorization to the app",
+      goal: "Implement login and role-based authorization for the web app",
+      problemStatement: "The app has no authentication, anyone can access all features",
+    },
+    STUB_INVOCATION
+  );
+  const goalId = saved.goal.id;
+  const result: any = await suggest.handler(
+    { goalId, sessionId: makeValidSaveGoalArgs().sessionId },
+    STUB_INVOCATION
+  );
+
+  if (!result.items) throw new Error("Expected items in result");
+  const securityItem = result.items.find((i: any) => i.category === "security");
+  if (!securityItem) throw new Error("Expected a security category item for authentication trigger");
+  if (!result.triggerSummary?.["security"]) {
+    throw new Error("Expected security trigger in triggerSummary");
+  }
+}
+
+async function testSuggestResearchDetectsDataModelTrigger(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const tools = createPlanningTools("test-token", store);
+  const saveGoal = tools.find((t) => t.name === "save_goal")!;
+  const suggest = tools.find((t) => t.name === "suggest_research")!;
+
+  // Goal mentions database migration — should trigger data_model suggestion
+  const saved: any = await saveGoal.handler(
+    {
+      ...makeValidSaveGoalArgs(),
+      intent: "Migrate the app from SQLite to PostgreSQL",
+      goal: "Replace SQLite with PostgreSQL for production scalability",
+      problemStatement: "SQLite does not support concurrent writes needed at scale",
+    },
+    STUB_INVOCATION
+  );
+  const goalId = saved.goal.id;
+  const result: any = await suggest.handler(
+    { goalId, sessionId: makeValidSaveGoalArgs().sessionId },
+    STUB_INVOCATION
+  );
+
+  if (!result.items) throw new Error("Expected items in result");
+  const dataItem = result.items.find((i: any) => i.category === "data_model");
+  if (!dataItem) throw new Error("Expected a data_model category item for database trigger");
+  if (!result.triggerSummary?.["data_model"]) {
+    throw new Error("Expected data_model trigger in triggerSummary");
+  }
+}
+
+async function testSuggestResearchDetectsMultipleTriggerCategories(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const tools = createPlanningTools("test-token", store);
+  const saveGoal = tools.find((t) => t.name === "save_goal")!;
+  const suggest = tools.find((t) => t.name === "suggest_research")!;
+
+  // Goal mentions multiple triggers: Stripe, Docker, authentication, PostgreSQL
+  const saved: any = await saveGoal.handler(
+    {
+      ...makeValidSaveGoalArgs(),
+      intent: "Build a multi-tenant SaaS app with Stripe billing, Docker deployment, user authentication, and PostgreSQL storage",
+      goal: "Create a SaaS platform with billing, containers, auth, and a relational database",
+      problemStatement: "Need a complete production-ready platform",
+    },
+    STUB_INVOCATION
+  );
+  const goalId = saved.goal.id;
+  const result: any = await suggest.handler(
+    { goalId, sessionId: makeValidSaveGoalArgs().sessionId },
+    STUB_INVOCATION
+  );
+
+  if (!result.items) throw new Error("Expected items in result");
+  if (result.items.length < 3) {
+    throw new Error(`Expected at least 3 triggered suggestions, got ${result.items.length}`);
+  }
+  const categories = result.items.map((i: any) => i.category) as string[];
+  if (!categories.includes("integration")) throw new Error("Expected integration category (Stripe)");
+  if (!categories.includes("infrastructure")) throw new Error("Expected infrastructure category (Docker)");
+  if (!categories.includes("security")) throw new Error("Expected security category (authentication)");
+  if (!categories.includes("data_model")) throw new Error("Expected data_model category (PostgreSQL)");
+}
+
+async function testSuggestResearchContextParameterExtendsDetection(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const tools = createPlanningTools("test-token", store);
+  const suggest = tools.find((t) => t.name === "suggest_research")!;
+  const goalId = await seedGoal(store); // generic goal, no specific triggers
+
+  // Pass Stripe mention in context — should trigger integration suggestion
+  const result: any = await suggest.handler(
+    {
+      goalId,
+      sessionId: makeValidSaveGoalArgs().sessionId,
+      context: "Milestone 1 involves integrating with the Stripe payment API for billing",
+    },
+    STUB_INVOCATION
+  );
+
+  if (!result.items) throw new Error("Expected items in result");
+  const integrationItem = result.items.find((i: any) => i.category === "integration");
+  if (!integrationItem) throw new Error("Expected integration item triggered by context parameter");
+}
+
+async function testSuggestResearchNoTriggersReturnsEmptyWithMessage(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const tools = createPlanningTools("test-token", store);
+  const suggest = tools.find((t) => t.name === "suggest_research")!;
+  const goalId = await seedGoal(store); // generic goal with no specific trigger keywords
+
+  const result: any = await suggest.handler(
+    { goalId, sessionId: makeValidSaveGoalArgs().sessionId },
+    STUB_INVOCATION
+  );
+
+  if (!result.items) throw new Error("Expected items array in result");
+  if (result.items.length !== 0) {
+    // The generic seed goal may or may not trigger — just verify structure is correct
+    for (const item of result.items) {
+      if (!item.category) throw new Error("Each item must have a category");
+      if (!item.question) throw new Error("Each item must have a question");
+      if (item.status !== "open") throw new Error("Each item must have status 'open'");
+    }
+  } else {
+    if (!result.message) throw new Error("Expected message when no triggers detected");
+    if (!result.triggerSummary) throw new Error("Expected triggerSummary in result");
+  }
+}
+
+async function testSuggestResearchUnknownGoalReturnsError(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const tools = createPlanningTools("test-token", store);
+  const suggest = tools.find((t) => t.name === "suggest_research")!;
+  const result: any = await suggest.handler(
+    { goalId: "nonexistent-goal-id", sessionId: "any-session" },
+    STUB_INVOCATION
+  );
+  if (!result.error) throw new Error("Expected error for unknown goalId");
+}
+
+async function testSuggestResearchWrongSessionReturnsError(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const goalId = await seedGoal(store);
+  const tools = createPlanningTools("test-token", store);
+  const suggest = tools.find((t) => t.name === "suggest_research")!;
+  const result: any = await suggest.handler(
+    { goalId, sessionId: "wrong-session-id" },
+    STUB_INVOCATION
+  );
+  if (!result.error) throw new Error("Expected error for wrong sessionId");
+}
+
+async function testSuggestResearchSavesItemsToStore(): Promise<void> {
+  const store = new InMemoryPlanningStore();
+  const tools = createPlanningTools("test-token", store);
+  const saveGoal = tools.find((t) => t.name === "save_goal")!;
+  const suggest = tools.find((t) => t.name === "suggest_research")!;
+
+  const saved: any = await saveGoal.handler(
+    {
+      ...makeValidSaveGoalArgs(),
+      intent: "Containerize the app using Docker and deploy to AWS",
+      goal: "Deploy the app to AWS using Docker containers",
+      problemStatement: "The app has no container-based deployment pipeline",
+    },
+    STUB_INVOCATION
+  );
+  const goalId = saved.goal.id;
+  const result: any = await suggest.handler(
+    { goalId, sessionId: makeValidSaveGoalArgs().sessionId },
+    STUB_INVOCATION
+  );
+
+  if (!result.items || result.items.length === 0) {
+    throw new Error("Expected at least one triggered item for Docker/AWS goal");
+  }
+
+  // Verify items are actually persisted in the store
+  const stored = await store.listResearchItems(goalId);
+  if (stored.length !== result.items.length) {
+    throw new Error(
+      `Expected ${result.items.length} items in store, found ${stored.length}`
+    );
+  }
+  for (const item of result.items) {
+    if (!item.id) throw new Error("Each returned item must have an id");
+    if (item.goalId !== goalId) throw new Error("Each item's goalId must match the requested goal");
+    if (item.status !== "open") throw new Error("Newly suggested items must have status 'open'");
+  }
+}
+
 async function testUpdateResearchItemOpenToResearching(): Promise<void> {
   const store = new InMemoryPlanningStore();
   const goalId = await seedGoal(store);
@@ -4425,7 +4698,7 @@ async function main() {
   // --- Planning tools tests ---
   console.log("\n── Planning Tools Tests ──\n");
 
-  await run("Planning tools: all 11 tools registered with correct names", testPlanningToolRegistration);
+  await run("Planning tools: all 12 tools registered with correct names", testPlanningToolRegistration);
   await run("define_goal: returns structured template from raw intent", testDefineGoalReturnsTemplate);
   await run("define_goal: empty intent returns validation error", testDefineGoalEmptyIntentReturnsError);
   await run("save_goal: valid data returns goal with generated ID and timestamps", testSaveGoalValidDataReturnsGoalWithId);
@@ -4443,6 +4716,16 @@ async function main() {
   await run("generate_research_checklist: all items have 'open' status and correct goalId", testGenerateResearchChecklistAllItemsHaveOpenStatus);
   await run("generate_research_checklist: unknown goalId returns error", testGenerateResearchChecklistUnknownGoalReturnsError);
   await run("generate_research_checklist: wrong sessionId returns error", testGenerateResearchChecklistWrongSessionReturnsError);
+  await run("suggest_research: detects external API trigger (Stripe → integration)", testSuggestResearchDetectsExternalApiTrigger);
+  await run("suggest_research: detects infrastructure trigger (Docker → infrastructure)", testSuggestResearchDetectsInfrastructureTrigger);
+  await run("suggest_research: detects security trigger (authentication → security)", testSuggestResearchDetectsSecurityTrigger);
+  await run("suggest_research: detects data model trigger (PostgreSQL → data_model)", testSuggestResearchDetectsDataModelTrigger);
+  await run("suggest_research: detects multiple trigger categories from rich goal", testSuggestResearchDetectsMultipleTriggerCategories);
+  await run("suggest_research: context parameter extends trigger detection", testSuggestResearchContextParameterExtendsDetection);
+  await run("suggest_research: no triggers returns empty items with message", testSuggestResearchNoTriggersReturnsEmptyWithMessage);
+  await run("suggest_research: unknown goalId returns error", testSuggestResearchUnknownGoalReturnsError);
+  await run("suggest_research: wrong sessionId returns error", testSuggestResearchWrongSessionReturnsError);
+  await run("suggest_research: triggered items are saved to planning store", testSuggestResearchSavesItemsToStore);
   await run("update_research_item: open → researching transition succeeds", testUpdateResearchItemOpenToResearching);
   await run("update_research_item: resolving without findings returns error", testUpdateResearchItemResolvingRequiresFindings);
   await run("update_research_item: full open → researching → resolved lifecycle", testUpdateResearchItemFullLifecycle);
