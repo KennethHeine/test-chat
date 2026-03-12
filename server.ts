@@ -42,7 +42,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const app = express();
 app.use(express.json());
-app.use(express.static(path.join(__dirname, "public")));
+app.use(express.static(path.join(__dirname, "frontend", "dist")));
 
 const PORT = parseInt(process.env.PORT || "3000", 10);
 
@@ -1601,6 +1601,12 @@ if (process.env.ENABLE_GOAL_SEED === "true") {
     res.status(201).json({ ok: true, requestId });
   });
 }
+
+// --- SPA Fallback ---
+// Serve index.html for all non-API routes (client-side routing support)
+app.get("/{*path}", (_req: Request, res: Response) => {
+  res.sendFile(path.join(__dirname, "frontend", "dist", "index.html"));
+});
 
 // --- Start Server ---
 

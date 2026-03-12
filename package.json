@@ -6,6 +6,8 @@
   "type": "module",
   "scripts": {
     "start": "npx tsx server.ts",
+    "build:frontend": "cd frontend && npm ci && npm run build",
+    "dev:frontend": "cd frontend && npm run dev",
     "test": "npx tsx test.ts",
     "test:storage": "npx tsx storage.test.ts",
     "test:e2e": "npx playwright test",
