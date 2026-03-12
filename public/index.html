@@ -16,13 +16,19 @@
       --color-text-muted: #8b949e;
       --color-accent: #58a6ff;
       --color-accent-emphasis: #1f6feb;
+      --color-accent-hover: #388bfd;
       --color-success: #3fb950;
       --color-danger: #f85149;
+      --color-danger-hover: #da3633;
+      --color-white: #ffffff;
       --color-user-bubble: #1f6feb;
       --color-assistant-bubble: #161b22;
       --font-mono: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
       --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif;
       --radius: 6px;
+      --radius-lg: 12px;
+      --sidebar-width: 260px;
+      --focus-ring: 0 0 0 2px rgba(31, 111, 235, 0.3);
     }
 
     body {
@@ -81,7 +87,7 @@
     }
 
     select:hover { border-color: var(--color-text-muted); }
-    select:focus { border-color: var(--color-accent); box-shadow: 0 0 0 2px rgba(31, 111, 235, 0.3); }
+    select:focus { border-color: var(--color-accent); box-shadow: var(--focus-ring); }
 
     #token-input {
       width: 260px;
@@ -109,21 +115,21 @@
     .btn-primary {
       background: var(--color-accent-emphasis);
       border-color: var(--color-accent-emphasis);
-      color: #fff;
+      color: var(--color-white);
     }
 
-    .btn-primary:hover { background: #388bfd; }
+    .btn-primary:hover { background: var(--color-accent-hover); }
     .btn-primary:disabled { opacity: 0.5; cursor: default; }
 
     .btn-danger {
       background: var(--color-danger);
       border-color: var(--color-danger);
-      color: #fff;
+      color: var(--color-white);
       padding: 5px 12px;
       font-weight: 500;
     }
 
-    .btn-danger:hover { background: #da3633; }
+    .btn-danger:hover { background: var(--color-danger-hover); }
 
     /* Messages area */
     #messages {
@@ -133,6 +139,8 @@
       display: flex;
       flex-direction: column;
       gap: 12px;
+      scrollbar-width: thin;
+      scrollbar-color: var(--color-border) transparent;
     }
 
     #messages::-webkit-scrollbar { width: 8px; }
@@ -142,7 +150,7 @@
     .message {
       max-width: 80%;
       padding: 10px 14px;
-      border-radius: 12px;
+      border-radius: var(--radius-lg);
       line-height: 1.5;
       font-size: 14px;
       word-wrap: break-word;
@@ -152,7 +160,7 @@
     .message.user {
       align-self: flex-end;
       background: var(--color-user-bubble);
-      color: #fff;
+      color: var(--color-white);
       border-bottom-right-radius: 4px;
     }
 
@@ -180,7 +188,7 @@
       color: var(--color-text-muted);
     }
 
-    .message.user .label { color: rgba(255,255,255,0.7); }
+    .message.user .label { color: rgba(255, 255, 255, 0.7); }
 
     .typing-indicator::after {
       content: '▊';
@@ -190,6 +198,37 @@
     @keyframes blink {
       0%, 100% { opacity: 1; }
       50% { opacity: 0; }
+    }
+
+    /* Keyboard focus indicator (Spark a11y) */
+    :focus-visible {
+      outline: 2px solid var(--color-accent);
+      outline-offset: 2px;
+    }
+
+    /* Reduce motion for accessibility */
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+      }
+    }
+
+    /* CSS loading spinner */
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    .spinner {
+      display: inline-block;
+      width: 16px;
+      height: 16px;
+      border: 2px solid var(--color-border);
+      border-top-color: var(--color-accent);
+      border-radius: 50%;
+      animation: spin 0.6s linear infinite;
+      vertical-align: middle;
     }
 
     /* Input area */
@@ -220,7 +259,7 @@
     }
 
     #input-area textarea::placeholder { color: var(--color-text-muted); }
-    #input-area textarea:focus { border-color: var(--color-accent); box-shadow: 0 0 0 2px rgba(31, 111, 235, 0.3); }
+    #input-area textarea:focus { border-color: var(--color-accent); box-shadow: var(--focus-ring); }
 
     /* Status bar */
     #status-bar {
@@ -259,6 +298,35 @@
     .welcome h2 { font-size: 20px; color: var(--color-text); font-weight: 600; }
     .welcome p { font-size: 14px; }
 
+    .welcome-prompts {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      justify-content: center;
+      margin-top: 8px;
+      max-width: 600px;
+      padding: 0 16px;
+    }
+
+    .welcome-prompt-btn {
+      background: var(--color-bg-tertiary);
+      color: var(--color-text);
+      border: 1px solid var(--color-border);
+      border-radius: var(--radius);
+      padding: 8px 14px;
+      font-size: 13px;
+      font-family: var(--font-sans);
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s;
+      text-align: left;
+      line-height: 1.4;
+    }
+
+    .welcome-prompt-btn:hover {
+      background: var(--color-border);
+      border-color: var(--color-text-muted);
+    }
+
     /* Main layout with sidebar */
     #app-body {
       display: flex;
@@ -268,8 +336,8 @@
 
     /* Session sidebar */
     #session-sidebar {
-      width: 260px;
-      min-width: 260px;
+      width: var(--sidebar-width);
+      min-width: var(--sidebar-width);
       background: var(--color-bg-secondary);
       border-right: 1px solid var(--color-border);
       display: flex;
@@ -303,6 +371,8 @@
       flex: 1;
       overflow-y: auto;
       padding: 8px;
+      scrollbar-width: thin;
+      scrollbar-color: var(--color-border) transparent;
     }
 
     #session-list::-webkit-scrollbar { width: 6px; }
@@ -451,8 +521,8 @@
         left: 0;
         bottom: 0;
         z-index: 100;
-        width: 280px;
-        min-width: 280px;
+        width: var(--sidebar-width);
+        min-width: var(--sidebar-width);
         transform: translateX(0);
         transition: transform 0.2s ease;
       }
@@ -524,6 +594,16 @@
         font-size: 12px;
         padding: 0 16px;
         text-align: center;
+      }
+
+      .welcome-prompts {
+        flex-direction: column;
+        max-width: 100%;
+      }
+
+      .welcome-prompt-btn {
+        font-size: 12px;
+        padding: 6px 10px;
       }
 
       #status-bar {
@@ -2377,9 +2457,9 @@
   </style>
 </head>
 <body>
-  <header>
+  <header role="banner">
     <div class="logo">
-      <svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
+      <svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
         <path d="M8 0c4.42 0 8 3.58 8 8a8.013 8.013 0 0 1-5.45 7.59c-.4.08-.55-.17-.55-.38 0-.27.01-1.13.01-2.2 0-.75-.25-1.23-.54-1.48 1.78-.2 3.65-.88 3.65-3.95 0-.88-.31-1.59-.82-2.15.08-.2.36-1.02-.08-2.12 0 0-.67-.22-2.2.82-.64-.18-1.32-.27-2-.27-.68 0-1.36.09-2 .27-1.53-1.03-2.2-.82-2.2-.82-.44 1.1-.16 1.92-.08 2.12-.51.56-.82 1.28-.82 2.15 0 3.06 1.86 3.75 3.64 3.95-.23.2-.44.55-.51 1.07-.46.21-1.61.55-2.33-.66-.15-.24-.6-.83-1.23-.82-.67.01-.27.38.01.53.34.19.73.9.82 1.13.16.45.68 1.31 2.69.94 0 .67.01 1.3.01 1.49 0 .21-.15.45-.55.38A7.995 7.995 0 0 1 0 8c0-4.42 3.58-8 8-8Z"/>
       </svg>
       <span>Copilot Agent Orchestrator</span>
@@ -2404,7 +2484,7 @@
 
   <div id="app-body">
     <div id="sidebar-backdrop"></div>
-    <div id="session-sidebar">
+    <div id="session-sidebar" role="complementary" aria-label="Chat sessions">
       <div id="session-sidebar-header">
         <h3>Sessions</h3>
       </div>
@@ -2413,14 +2493,20 @@
       </div>
     </div>
 
-    <div id="chat-area">
+    <div id="chat-area" role="main">
       <div id="messages">
         <div class="welcome" id="welcome">
-          <svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
+          <svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
             <path d="M8 0c4.42 0 8 3.58 8 8a8.013 8.013 0 0 1-5.45 7.59c-.4.08-.55-.17-.55-.38 0-.27.01-1.13.01-2.2 0-.75-.25-1.23-.54-1.48 1.78-.2 3.65-.88 3.65-3.95 0-.88-.31-1.59-.82-2.15.08-.2.36-1.02-.08-2.12 0 0-.67-.22-2.2.82-.64-.18-1.32-.27-2-.27-.68 0-1.36.09-2 .27-1.53-1.03-2.2-.82-2.2-.82-.44 1.1-.16 1.92-.08 2.12-.51.56-.82 1.28-.82 2.15 0 3.06 1.86 3.75 3.64 3.95-.23.2-.44.55-.51 1.07-.46.21-1.61.55-2.33-.66-.15-.24-.6-.83-1.23-.82-.67.01-.27.38.01.53.34.19.73.9.82 1.13.16.45.68 1.31 2.69.94 0 .67.01 1.3.01 1.49 0 .21-.15.45-.55.38A7.995 7.995 0 0 1 0 8c0-4.42 3.58-8 8-8Z"/>
           </svg>
           <h2>Copilot Agent Orchestrator</h2>
           <p>Research codebases, plan coding tasks, and orchestrate agents</p>
+          <div class="welcome-prompts" id="welcome-prompts">
+            <button class="welcome-prompt-btn" data-prompt="Research the structure and architecture of a GitHub repo">🔍 Research a repo</button>
+            <button class="welcome-prompt-btn" data-prompt="Help me plan a new feature with milestones and issues">📋 Plan a feature</button>
+            <button class="welcome-prompt-btn" data-prompt="Explore the codebase and explain how key components work">🧭 Explore code</button>
+            <button class="welcome-prompt-btn" data-prompt="Create a goal with research questions and milestone plan">🎯 Define a goal</button>
+          </div>
         </div>
       </div>
 
@@ -2432,24 +2518,24 @@
     </div>
 
     <div id="dashboard-view">
-      <nav id="dashboard-nav">
+      <nav id="dashboard-nav" aria-label="Dashboard navigation">
         <div id="dashboard-nav-header">
           <h3>Dashboard</h3>
         </div>
-        <button class="dashboard-nav-item active" data-page="goals">
-          <span class="dashboard-nav-icon">🎯</span>
+        <button class="dashboard-nav-item active" data-page="goals" aria-label="Goals page">
+          <span class="dashboard-nav-icon" aria-hidden="true">🎯</span>
           <span class="dashboard-nav-label">Goals</span>
         </button>
-        <button class="dashboard-nav-item" data-page="research">
-          <span class="dashboard-nav-icon">🔬</span>
+        <button class="dashboard-nav-item" data-page="research" aria-label="Research page">
+          <span class="dashboard-nav-icon" aria-hidden="true">🔬</span>
           <span class="dashboard-nav-label">Research</span>
         </button>
-        <button class="dashboard-nav-item" data-page="milestones">
-          <span class="dashboard-nav-icon">🏁</span>
+        <button class="dashboard-nav-item" data-page="milestones" aria-label="Milestones page">
+          <span class="dashboard-nav-icon" aria-hidden="true">🏁</span>
           <span class="dashboard-nav-label">Milestones</span>
         </button>
-        <button class="dashboard-nav-item" data-page="issues">
-          <span class="dashboard-nav-icon">📋</span>
+        <button class="dashboard-nav-item" data-page="issues" aria-label="Issues page">
+          <span class="dashboard-nav-icon" aria-hidden="true">📋</span>
           <span class="dashboard-nav-label">Issues</span>
         </button>
       </nav>
@@ -2532,8 +2618,8 @@
     </div>
   </div>
 
-  <div id="status-bar">
-    <span class="status-dot" id="status-dot"></span>
+  <div id="status-bar" role="status" aria-live="polite">
+    <span class="status-dot" id="status-dot" aria-hidden="true"></span>
     <span id="status-text">Checking connection...</span>
     <span id="tool-activity" style="display: none; margin-left: auto; color: var(--color-accent);">
       <span id="tool-activity-text"></span>
@@ -2570,7 +2656,7 @@
           </div>
         </div>
         <div id="push-mutation-list" class="push-mutation-list">
-          <div class="push-loading">⏳ Loading planned mutations…</div>
+          <div class="push-loading"><span class="spinner" aria-label="Loading"></span> Loading planned mutations…</div>
         </div>
         <div class="push-modal-footer">
           <span id="push-mutation-count" class="push-mutation-count"></span>
