@@ -14,6 +14,7 @@ export const PLANNING_TOOL_NAMES = [
   "save_goal",
   "get_goal",
   "generate_research_checklist",
+  "suggest_research",
   "update_research_item",
   "get_research",
   "create_milestone_plan",
@@ -253,6 +254,183 @@ const RESEARCH_CATEGORIES: ReadonlyArray<{
       `What user experience, accessibility, or interface design considerations apply to: "${g}"?`,
   },
 ];
+
+// --- Research trigger definitions for suggest_research (module-scoped) ---
+
+/**
+ * The type of knowledge gap that triggered a research suggestion.
+ * - `external_api`: A named external service or API integration
+ * - `infrastructure`: Hosting, deployment, or scaling concerns
+ * - `security`: Authentication, encryption, or compliance requirements
+ * - `data_model`: Database, schema, or storage concerns
+ * - `scope_uncertainty`: Architectural migrations, breaking changes, or ambiguous scope
+ */
+type ResearchTriggerType =
+  | "external_api"
+  | "infrastructure"
+  | "security"
+  | "data_model"
+  | "scope_uncertainty";
+
+interface ResearchTriggerDefinition {
+  readonly pattern: RegExp;
+  readonly triggerType: ResearchTriggerType;
+  readonly category: ResearchItem["category"];
+  readonly generateQuestion: (keyword: string, goalSummary: string) => string;
+}
+
+/**
+ * Ordered list of trigger definitions. The first match per ResearchItem category
+ * wins (deduplication is done in detectResearchTriggers).
+ */
+const RESEARCH_TRIGGER_DEFINITIONS: ReadonlyArray<ResearchTriggerDefinition> = [
+  // --- External API / integration triggers ---
+  {
+    pattern: /\b(stripe|braintree|paypal|payments?|billing|invoice|subscription)\b/i,
+    triggerType: "external_api",
+    category: "integration",
+    generateQuestion: (kw, g) =>
+      `The plan mentions "${kw}" — what is the API authentication, rate-limiting, webhook flow, and SDK availability for: "${g}"?`,
+  },
+  {
+    pattern: /\b(twilio|sendgrid|mailgun|ses|emails?|sms|notifications?|push notifications?)\b/i,
+    triggerType: "external_api",
+    category: "integration",
+    generateQuestion: (kw, g) =>
+      `The plan mentions "${kw}" — what are the delivery guarantees, rate limits, and error-handling requirements for messaging in: "${g}"?`,
+  },
+  {
+    pattern: /\b(oauth|sso|openid|saml|auth0|okta|cognito|azure\s*ad)\b/i,
+    triggerType: "external_api",
+    category: "integration",
+    generateQuestion: (kw, g) =>
+      `The plan mentions "${kw}" — what is the token refresh strategy, session lifetime, and required scopes for: "${g}"?`,
+  },
+  {
+    pattern: /\b(github\s*api|gitlab\s*api|jira|confluence|slack|discord|webhooks?)\b/i,
+    triggerType: "external_api",
+    category: "integration",
+    generateQuestion: (kw, g) =>
+      `The plan mentions "${kw}" — what API version, pagination strategy, and rate limits apply to: "${g}"?`,
+  },
+  // --- Infrastructure triggers ---
+  {
+    pattern: /\b(docker|containers?|kubernetes|k8s|helm|pods?)\b/i,
+    triggerType: "infrastructure",
+    category: "infrastructure",
+    generateQuestion: (kw, g) =>
+      `The plan mentions "${kw}" — what container resource limits, health checks, and deployment strategy are required for: "${g}"?`,
+  },
+  {
+    pattern: /\b(aws|azure|gcp|cloud|serverless|lambda|function\s*app|cloud\s*run)\b/i,
+    triggerType: "infrastructure",
+    category: "infrastructure",
+    generateQuestion: (kw, g) =>
+      `The plan mentions "${kw}" — what region, pricing model, IAM policies, and scaling limits apply to: "${g}"?`,
+  },
+  {
+    pattern: /\b(scal(e|ing)|load\s*balanc\w*|high[\s-]availability|cdn|redis|memcached)\b/i,
+    triggerType: "infrastructure",
+    category: "infrastructure",
+    generateQuestion: (kw, g) =>
+      `The plan mentions "${kw}" — what are the expected load patterns, SLA targets, and caching strategy for: "${g}"?`,
+  },
+  // --- Security triggers ---
+  {
+    pattern: /\b(authent\w*|authoriz\w*|login|password|jwt|access\s*token|session|csrf|xss)\b/i,
+    triggerType: "security",
+    category: "security",
+    generateQuestion: (kw, g) =>
+      `The plan mentions "${kw}" — what is the authentication flow, token expiry policy, and privilege escalation risk for: "${g}"?`,
+  },
+  {
+    pattern: /\b(gdpr|pii|personal\s*data|privacy|compliance|hipaa|soc\s*2|audit\s*log)\b/i,
+    triggerType: "security",
+    category: "security",
+    generateQuestion: (kw, g) =>
+      `The plan mentions "${kw}" — what data retention, consent management, and compliance obligations must be addressed for: "${g}"?`,
+  },
+  {
+    pattern: /\b(encrypt\w*|secrets?|key\s*management|vault|hsm|tls|ssl|certificate)\b/i,
+    triggerType: "security",
+    category: "security",
+    generateQuestion: (kw, g) =>
+      `The plan mentions "${kw}" — what key rotation policy, secrets storage strategy, and threat model apply to: "${g}"?`,
+  },
+  // --- Data model triggers ---
+  {
+    pattern: /\b(database|sql|postgresql|mysql|mongodb|sqlite|cosmos|dynamodb|nosql|schema|migrations?)\b/i,
+    triggerType: "data_model",
+    category: "data_model",
+    generateQuestion: (kw, g) =>
+      `The plan mentions "${kw}" — what is the data schema, migration strategy, and indexing approach for: "${g}"?`,
+  },
+  {
+    pattern: /\b(blob|object\s*storage|s3|file\s*storage|media\s*upload)\b/i,
+    triggerType: "data_model",
+    category: "data_model",
+    generateQuestion: (kw, g) =>
+      `The plan mentions "${kw}" — what are the file size limits, storage lifecycle rules, and access control requirements for: "${g}"?`,
+  },
+  // --- Scope uncertainty / architectural triggers ---
+  {
+    pattern: /\b(refactor\w*|migrat\w*|upgrade|breaking[\s-]changes?|legacy)\b/i,
+    triggerType: "scope_uncertainty",
+    category: "architecture",
+    generateQuestion: (kw, g) =>
+      `The plan mentions "${kw}" — what is the rollback plan, backward compatibility strategy, and blast radius for: "${g}"?`,
+  },
+  {
+    pattern: /\b(microservices?|monolith|event[\s-]driven|cqrs|event\s*sourcing|message\s*queue|pub[\s/-]?sub)\b/i,
+    triggerType: "scope_uncertainty",
+    category: "architecture",
+    generateQuestion: (kw, g) =>
+      `The plan mentions "${kw}" — what are the service boundaries, communication contracts, and failure modes for: "${g}"?`,
+  },
+];
+
+/**
+ * Scans content text for research trigger patterns and returns targeted suggestions.
+ * At most one suggestion is returned per ResearchItem category (first match wins).
+ *
+ * @param content - Combined text to scan for trigger keywords
+ * @param goalSummary - Short goal description used in question phrasing (already sanitized)
+ * @returns Array of detected suggestions in the order they were found
+ */
+function detectResearchTriggers(
+  content: string,
+  goalSummary: string
+): Array<{
+  triggerType: ResearchTriggerType;
+  category: ResearchItem["category"];
+  question: string;
+  detectedKeyword: string;
+}> {
+  const suggestions: Array<{
+    triggerType: ResearchTriggerType;
+    category: ResearchItem["category"];
+    question: string;
+    detectedKeyword: string;
+  }> = [];
+  const seenCategories = new Set<ResearchItem["category"]>();
+
+  for (const def of RESEARCH_TRIGGER_DEFINITIONS) {
+    if (seenCategories.has(def.category)) continue;
+    const match = def.pattern.exec(content);
+    if (match) {
+      const keyword = (match[1] ?? match[0]).toLowerCase();
+      suggestions.push({
+        triggerType: def.triggerType,
+        category: def.category,
+        question: def.generateQuestion(keyword, goalSummary),
+        detectedKeyword: keyword,
+      });
+      seenCategories.add(def.category);
+    }
+  }
+
+  return suggestions;
+}
 
 // --- IssueDraft processing type (used by generate_issue_drafts handler) ---
 
@@ -611,6 +789,124 @@ export function createPlanningTools(token: string, planningStore: PlanningStore)
       }
 
       return { items: createdItems };
+    },
+  };
+
+  /**
+   * suggest_research: Analyzes a saved goal's content for research triggers
+   * and generates targeted, specific research questions.
+   * Detects at least 3 categories of triggers: external API integrations,
+   * infrastructure concerns, security requirements, data model needs, and
+   * architectural scope uncertainty.
+   * Saves matched items to the planning store and returns them alongside
+   * a summary of which triggers were detected.
+   */
+  const suggestResearch: Tool = {
+    name: "suggest_research",
+    description:
+      "Analyze a saved goal's content for research triggers and generate targeted, specific research questions. " +
+      "Detects external API mentions (e.g. Stripe, OAuth), infrastructure concerns (e.g. Docker, AWS), " +
+      "security requirements (e.g. authentication, GDPR), data model needs (e.g. database, schema), " +
+      "and architectural scope uncertainties (e.g. refactoring, microservices). " +
+      "Saves the triggered research items to the planning store and returns them with trigger metadata. " +
+      "Use alongside generate_research_checklist for comprehensive coverage.",
+    parameters: {
+      type: "object",
+      properties: {
+        goalId: {
+          type: "string",
+          description: "The ID of the goal to analyze for research triggers.",
+        },
+        sessionId: {
+          type: "string",
+          description:
+            "The session identifier of the caller. Must match the goal's sessionId.",
+        },
+        context: {
+          type: "string",
+          description:
+            "Optional additional context text to scan (e.g. milestone goals or scope descriptions). Max 4000 chars.",
+        },
+      },
+      required: ["goalId", "sessionId"],
+    },
+    handler: async (args: any) => {
+      const goalIdErr = validateStringField(args.goalId, "goalId", 256);
+      if (goalIdErr) return { error: goalIdErr };
+
+      const sessionIdErr = validateStringField(args.sessionId, "sessionId", MAX_SESSION_ID_LENGTH);
+      if (sessionIdErr) return { error: sessionIdErr };
+
+      if (typeof args.context === "string") {
+        const trimmedContext = args.context.trim();
+        if (trimmedContext.length > 0) {
+          const contextErr = validateStringField(trimmedContext, "context", 4000);
+          if (contextErr) return { error: contextErr };
+          args.context = trimmedContext;
+        } else {
+          // Treat empty/whitespace-only context as if it were not provided.
+          args.context = undefined;
+        }
+      }
+
+      const goal = await planningStore.getGoal(args.goalId);
+      if (!goal || goal.sessionId !== args.sessionId) {
+        return { error: `Goal not found: ${args.goalId}` };
+      }
+
+      // Combine all goal text fields plus optional extra context for scanning.
+      const combinedContent = [
+        goal.intent,
+        goal.goal,
+        goal.problemStatement,
+        goal.businessValue,
+        goal.targetOutcome,
+        ...(goal.successCriteria ?? []),
+        ...(goal.assumptions ?? []),
+        ...(goal.constraints ?? []),
+        ...(goal.risks ?? []),
+        typeof args.context === "string" ? args.context : "",
+      ].join(" ");
+
+      const goalSummary = sanitizeText(goal.goal.slice(0, 100));
+      const triggered = detectResearchTriggers(combinedContent, goalSummary);
+
+      if (triggered.length === 0) {
+        return {
+          items: [],
+          triggerSummary: {},
+          message:
+            "No specific research triggers detected in the plan content. " +
+            "Consider using generate_research_checklist for comprehensive baseline coverage.",
+        };
+      }
+
+      const createdItems: ResearchItem[] = [];
+      const triggerSummary: Partial<Record<ResearchTriggerType, string[]>> = {};
+
+      for (const suggestion of triggered) {
+        const item: ResearchItem = {
+          id: crypto.randomUUID(),
+          goalId: goal.id,
+          category: suggestion.category,
+          question: suggestion.question,
+          // NOTE: trigger metadata (triggerType, detectedKeyword) is only available in the
+          // returned triggerSummary object; it is not persisted in the ResearchItem store.
+          status: "open",
+          findings: "",
+          decision: "",
+        };
+        const saved = await planningStore.createResearchItem(item);
+        createdItems.push(saved);
+
+        if (!triggerSummary[suggestion.triggerType]) {
+          triggerSummary[suggestion.triggerType] = [];
+        }
+        // Non-null assertion is safe: we just assigned an array above.
+        triggerSummary[suggestion.triggerType]!.push(suggestion.detectedKeyword);
+      }
+
+      return { items: createdItems, triggerSummary };
     },
   };
 
@@ -2044,5 +2340,5 @@ export function createPlanningTools(token: string, planningStore: PlanningStore)
     },
   };
 
-  return [defineGoal, saveGoal, getGoal, generateResearchChecklist, updateResearchItem, getResearch, createMilestonePlan, updateMilestone, getMilestones, generateIssueDrafts, updateIssueDraft];
+  return [defineGoal, saveGoal, getGoal, generateResearchChecklist, suggestResearch, updateResearchItem, getResearch, createMilestonePlan, updateMilestone, getMilestones, generateIssueDrafts, updateIssueDraft];
 }
