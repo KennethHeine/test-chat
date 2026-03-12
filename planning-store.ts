@@ -583,6 +583,15 @@ function issueDraftToEntity(draft: IssueDraft): TableEntity<Record<string, unkno
   };
 }
 
+function safeJsonParse<T>(value: string | undefined | null, fallback: T): T {
+  if (!value) return fallback;
+  try {
+    return JSON.parse(value) as T;
+  } catch {
+    return fallback;
+  }
+}
+
 function entityToIssueDraft(entity: any): IssueDraft {
   const draft: IssueDraft = {
     id: entity.rowKey as string,
@@ -593,16 +602,16 @@ function entityToIssueDraft(entity: any): IssueDraft {
     expectedOutcome: entity.expectedOutcome as string,
     scopeBoundaries: entity.scopeBoundaries as string,
     technicalContext: entity.technicalContext as string,
-    dependencies: JSON.parse(entity.dependencies as string) as string[],
-    acceptanceCriteria: JSON.parse(entity.acceptanceCriteria as string) as string[],
+    dependencies: safeJsonParse(entity.dependencies as string, []),
+    acceptanceCriteria: safeJsonParse(entity.acceptanceCriteria as string, []),
     testingExpectations: entity.testingExpectations as string,
-    researchLinks: JSON.parse(entity.researchLinks as string) as string[],
+    researchLinks: safeJsonParse(entity.researchLinks as string, []),
     order: entity.order as number,
     status: entity.status as IssueDraft["status"],
-    filesToModify: JSON.parse(entity.filesToModify as string) as FileRef[],
-    filesToRead: JSON.parse(entity.filesToRead as string) as FileRef[],
-    securityChecklist: JSON.parse(entity.securityChecklist as string) as string[],
-    verificationCommands: JSON.parse(entity.verificationCommands as string) as string[],
+    filesToModify: safeJsonParse(entity.filesToModify as string, []),
+    filesToRead: safeJsonParse(entity.filesToRead as string, []),
+    securityChecklist: safeJsonParse(entity.securityChecklist as string, []),
+    verificationCommands: safeJsonParse(entity.verificationCommands as string, []),
   };
   if (entity.githubIssueNumber !== 0) draft.githubIssueNumber = entity.githubIssueNumber as number;
   if (entity.githubIssueUrl !== "") draft.githubIssueUrl = entity.githubIssueUrl as string;

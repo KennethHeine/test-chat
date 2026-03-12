@@ -28,13 +28,19 @@ function assert(condition: boolean, message: string) {
 }
 
 // ============================================================
+// Per-run unique prefix to avoid Azure Table Storage collisions
+// ============================================================
+
+const RUN_ID = `t${Date.now().toString(36)}`;
+
+// ============================================================
 // Fixtures
 // ============================================================
 
 function makeGoal(overrides: Partial<Goal> = {}): Goal {
   return {
-    id: "goal-1",
-    sessionId: "session-1",
+    id: `${RUN_ID}-goal-1`,
+    sessionId: `${RUN_ID}-session-1`,
     intent: "Build a great product",
     goal: "Deliver a working MVP",
     problemStatement: "There is no current solution",
@@ -52,8 +58,8 @@ function makeGoal(overrides: Partial<Goal> = {}): Goal {
 
 function makeResearchItem(overrides: Partial<ResearchItem> = {}): ResearchItem {
   return {
-    id: "ri-1",
-    goalId: "goal-1",
+    id: `${RUN_ID}-ri-1`,
+    goalId: `${RUN_ID}-goal-1`,
     category: "architecture",
     question: "What framework should we use?",
     status: "open",
@@ -65,8 +71,8 @@ function makeResearchItem(overrides: Partial<ResearchItem> = {}): ResearchItem {
 
 function makeMilestone(overrides: Partial<Milestone> = {}): Milestone {
   return {
-    id: "ms-1",
-    goalId: "goal-1",
+    id: `${RUN_ID}-ms-1`,
+    goalId: `${RUN_ID}-goal-1`,
     name: "Milestone 1",
     goal: "Get the first feature shipped",
     scope: "Only includes auth, excludes payments",
@@ -81,8 +87,8 @@ function makeMilestone(overrides: Partial<Milestone> = {}): Milestone {
 
 function makeIssueDraft(overrides: Partial<IssueDraft> = {}): IssueDraft {
   return {
-    id: "draft-1",
-    milestoneId: "ms-1",
+    id: `${RUN_ID}-draft-1`,
+    milestoneId: `${RUN_ID}-ms-1`,
     title: "Implement login endpoint",
     purpose: "Allow users to authenticate",
     problem: "No authentication exists",
@@ -111,8 +117,8 @@ async function testGoalCreateAndGet(storeFactory: () => PlanningStore): Promise<
   const store = storeFactory();
   const goal = makeGoal();
   const created = await store.createGoal(goal);
-  assert(created.id === "goal-1", "Created goal ID should match");
-  const fetched = await store.getGoal("goal-1");
+  assert(created.id === `${RUN_ID}-goal-1`, "Created goal ID should match");
+  const fetched = await store.getGoal(`${RUN_ID}-goal-1`);
   assert(fetched !== null, "Should find the goal");
   assert(fetched!.intent === goal.intent, "Intent should match");
 }
@@ -125,26 +131,26 @@ async function testGoalGetNotFound(storeFactory: () => PlanningStore): Promise<v
 
 async function testGoalListEmpty(storeFactory: () => PlanningStore): Promise<void> {
   const store = storeFactory();
-  const goals = await store.listGoals("session-1");
+  const goals = await store.listGoals(`${RUN_ID}-session-1`);
   assert(Array.isArray(goals), "Should return an array");
   assert(goals.length === 0, "Should be empty for new store");
 }
 
 async function testGoalCreateAndList(storeFactory: () => PlanningStore): Promise<void> {
   const store = storeFactory();
-  await store.createGoal(makeGoal({ id: "g1" }));
-  const goals = await store.listGoals("session-1");
+  await store.createGoal(makeGoal({ id: `${RUN_ID}-g1` }));
+  const goals = await store.listGoals(`${RUN_ID}-session-1`);
   assert(goals.length === 1, "Should have 1 goal");
-  assert(goals[0].id === "g1", "Listed goal should match created");
+  assert(goals[0].id === `${RUN_ID}-g1`, "Listed goal should match created");
 }
 
 async function testGoalUpdate(storeFactory: () => PlanningStore): Promise<void> {
   const store = storeFactory();
   await store.createGoal(makeGoal());
-  const updated = await store.updateGoal("goal-1", { intent: "New intent", updatedAt: "2025-06-01T00:00:00Z" });
+  const updated = await store.updateGoal(`${RUN_ID}-goal-1`, { intent: "New intent", updatedAt: "2025-06-01T00:00:00Z" });
   assert(updated !== null, "Update should succeed");
   assert(updated!.intent === "New intent", "Intent should be updated");
-  assert(updated!.id === "goal-1", "ID should be unchanged");
+  assert(updated!.id === `${RUN_ID}-goal-1`, "ID should be unchanged");
   assert(updated!.createdAt === "2025-01-01T00:00:00Z", "createdAt should be unchanged");
 }
 
@@ -157,34 +163,34 @@ async function testGoalUpdateNotFound(storeFactory: () => PlanningStore): Promis
 async function testGoalDelete(storeFactory: () => PlanningStore): Promise<void> {
   const store = storeFactory();
   await store.createGoal(makeGoal());
-  const first = await store.deleteGoal("goal-1");
+  const first = await store.deleteGoal(`${RUN_ID}-goal-1`);
   assert(first === true, "First delete should return true");
-  const second = await store.deleteGoal("goal-1");
+  const second = await store.deleteGoal(`${RUN_ID}-goal-1`);
   assert(second === false, "Second delete should return false");
-  const fetched = await store.getGoal("goal-1");
+  const fetched = await store.getGoal(`${RUN_ID}-goal-1`);
   assert(fetched === null, "Goal should be gone after delete");
 }
 
 async function testGoalListScoping(storeFactory: () => PlanningStore): Promise<void> {
   const store = storeFactory();
-  await store.createGoal(makeGoal({ id: "g1", sessionId: "session-A" }));
-  await store.createGoal(makeGoal({ id: "g2", sessionId: "session-B" }));
-  const sessionA = await store.listGoals("session-A");
-  const sessionB = await store.listGoals("session-B");
+  await store.createGoal(makeGoal({ id: `${RUN_ID}-g1`, sessionId: `${RUN_ID}-session-A` }));
+  await store.createGoal(makeGoal({ id: `${RUN_ID}-g2`, sessionId: `${RUN_ID}-session-B` }));
+  const sessionA = await store.listGoals(`${RUN_ID}-session-A`);
+  const sessionB = await store.listGoals(`${RUN_ID}-session-B`);
   assert(sessionA.length === 1, "Session A should have 1 goal");
-  assert(sessionA[0].id === "g1", "Session A goal should be g1");
+  assert(sessionA[0].id === `${RUN_ID}-g1`, "Session A goal should be g1");
   assert(sessionB.length === 1, "Session B should have 1 goal");
-  assert(sessionB[0].id === "g2", "Session B goal should be g2");
+  assert(sessionB[0].id === `${RUN_ID}-g2`, "Session B goal should be g2");
 }
 
 async function testGoalListOrdering(storeFactory: () => PlanningStore): Promise<void> {
   const store = storeFactory();
   // Create in reverse order; list should sort by createdAt ascending
-  await store.createGoal(makeGoal({ id: "g-late", sessionId: "s1", createdAt: "2025-06-01T00:00:00Z", updatedAt: "2025-06-01T00:00:00Z" }));
-  await store.createGoal(makeGoal({ id: "g-early", sessionId: "s1", createdAt: "2025-01-01T00:00:00Z", updatedAt: "2025-01-01T00:00:00Z" }));
-  const goals = await store.listGoals("s1");
-  assert(goals[0].id === "g-early", "Earlier goal should be first");
-  assert(goals[1].id === "g-late", "Later goal should be last");
+  await store.createGoal(makeGoal({ id: `${RUN_ID}-g-late`, sessionId: `${RUN_ID}-s1`, createdAt: "2025-06-01T00:00:00Z", updatedAt: "2025-06-01T00:00:00Z" }));
+  await store.createGoal(makeGoal({ id: `${RUN_ID}-g-early`, sessionId: `${RUN_ID}-s1`, createdAt: "2025-01-01T00:00:00Z", updatedAt: "2025-01-01T00:00:00Z" }));
+  const goals = await store.listGoals(`${RUN_ID}-s1`);
+  assert(goals[0].id === `${RUN_ID}-g-early`, "Earlier goal should be first");
+  assert(goals[1].id === `${RUN_ID}-g-late`, "Later goal should be last");
 }
 
 // Validation
@@ -229,7 +235,7 @@ async function testResearchItemCreateAndGet(storeFactory: () => PlanningStore): 
   const store = storeFactory();
   const item = makeResearchItem();
   await store.createResearchItem(item);
-  const fetched = await store.getResearchItem("ri-1");
+  const fetched = await store.getResearchItem(`${RUN_ID}-ri-1`);
   assert(fetched !== null, "Should find the research item");
   assert(fetched!.question === item.question, "Question should match");
 }
@@ -242,7 +248,7 @@ async function testResearchItemGetNotFound(storeFactory: () => PlanningStore): P
 
 async function testResearchItemListEmpty(storeFactory: () => PlanningStore): Promise<void> {
   const store = storeFactory();
-  const items = await store.listResearchItems("goal-1");
+  const items = await store.listResearchItems(`${RUN_ID}-goal-1`);
   assert(Array.isArray(items), "Should return an array");
   assert(items.length === 0, "Should be empty for new store");
 }
@@ -250,19 +256,19 @@ async function testResearchItemListEmpty(storeFactory: () => PlanningStore): Pro
 async function testResearchItemCreateAndList(storeFactory: () => PlanningStore): Promise<void> {
   const store = storeFactory();
   await store.createResearchItem(makeResearchItem());
-  const items = await store.listResearchItems("goal-1");
+  const items = await store.listResearchItems(`${RUN_ID}-goal-1`);
   assert(items.length === 1, "Should have 1 item");
 }
 
 async function testResearchItemUpdate(storeFactory: () => PlanningStore): Promise<void> {
   const store = storeFactory();
   await store.createResearchItem(makeResearchItem());
-  const updated = await store.updateResearchItem("ri-1", { status: "resolved", findings: "Found it" });
+  const updated = await store.updateResearchItem(`${RUN_ID}-ri-1`, { status: "resolved", findings: "Found it" });
   assert(updated !== null, "Update should succeed");
   assert(updated!.status === "resolved", "Status should be updated");
   assert(updated!.findings === "Found it", "Findings should be updated");
-  assert(updated!.id === "ri-1", "ID should be unchanged");
-  assert(updated!.goalId === "goal-1", "goalId should be unchanged");
+  assert(updated!.id === `${RUN_ID}-ri-1`, "ID should be unchanged");
+  assert(updated!.goalId === `${RUN_ID}-goal-1`, "goalId should be unchanged");
 }
 
 async function testResearchItemUpdateNotFound(storeFactory: () => PlanningStore): Promise<void> {
@@ -274,20 +280,20 @@ async function testResearchItemUpdateNotFound(storeFactory: () => PlanningStore)
 async function testResearchItemDelete(storeFactory: () => PlanningStore): Promise<void> {
   const store = storeFactory();
   await store.createResearchItem(makeResearchItem());
-  const first = await store.deleteResearchItem("ri-1");
+  const first = await store.deleteResearchItem(`${RUN_ID}-ri-1`);
   assert(first === true, "First delete should return true");
-  const second = await store.deleteResearchItem("ri-1");
+  const second = await store.deleteResearchItem(`${RUN_ID}-ri-1`);
   assert(second === false, "Second delete should return false");
 }
 
 async function testResearchItemListScoping(storeFactory: () => PlanningStore): Promise<void> {
   const store = storeFactory();
-  await store.createResearchItem(makeResearchItem({ id: "ri-a", goalId: "goal-A" }));
-  await store.createResearchItem(makeResearchItem({ id: "ri-b", goalId: "goal-B" }));
-  const itemsA = await store.listResearchItems("goal-A");
-  const itemsB = await store.listResearchItems("goal-B");
-  assert(itemsA.length === 1 && itemsA[0].id === "ri-a", "Goal A should only see its item");
-  assert(itemsB.length === 1 && itemsB[0].id === "ri-b", "Goal B should only see its item");
+  await store.createResearchItem(makeResearchItem({ id: `${RUN_ID}-ri-a`, goalId: `${RUN_ID}-goal-A` }));
+  await store.createResearchItem(makeResearchItem({ id: `${RUN_ID}-ri-b`, goalId: `${RUN_ID}-goal-B` }));
+  const itemsA = await store.listResearchItems(`${RUN_ID}-goal-A`);
+  const itemsB = await store.listResearchItems(`${RUN_ID}-goal-B`);
+  assert(itemsA.length === 1 && itemsA[0].id === `${RUN_ID}-ri-a`, "Goal A should only see its item");
+  assert(itemsB.length === 1 && itemsB[0].id === `${RUN_ID}-ri-b`, "Goal B should only see its item");
 }
 
 // Validation
@@ -318,7 +324,7 @@ async function testResearchItemUpdateInvalidStatus(storeFactory: () => PlanningS
   await store.createResearchItem(makeResearchItem());
   let threw = false;
   try {
-    await store.updateResearchItem("ri-1", { status: "bad" as any });
+    await store.updateResearchItem(`${RUN_ID}-ri-1`, { status: "bad" as any });
   } catch {
     threw = true;
   }
@@ -332,7 +338,7 @@ async function testResearchItemUpdateInvalidStatus(storeFactory: () => PlanningS
 async function testMilestoneCreateAndGet(storeFactory: () => PlanningStore): Promise<void> {
   const store = storeFactory();
   await store.createMilestone(makeMilestone());
-  const fetched = await store.getMilestone("ms-1");
+  const fetched = await store.getMilestone(`${RUN_ID}-ms-1`);
   assert(fetched !== null, "Should find the milestone");
   assert(fetched!.name === "Milestone 1", "Name should match");
 }
@@ -345,7 +351,7 @@ async function testMilestoneGetNotFound(storeFactory: () => PlanningStore): Prom
 
 async function testMilestoneListEmpty(storeFactory: () => PlanningStore): Promise<void> {
   const store = storeFactory();
-  const milestones = await store.listMilestones("goal-1");
+  const milestones = await store.listMilestones(`${RUN_ID}-goal-1`);
   assert(Array.isArray(milestones), "Should return an array");
   assert(milestones.length === 0, "Should be empty for new store");
 }
@@ -353,19 +359,19 @@ async function testMilestoneListEmpty(storeFactory: () => PlanningStore): Promis
 async function testMilestoneCreateAndList(storeFactory: () => PlanningStore): Promise<void> {
   const store = storeFactory();
   await store.createMilestone(makeMilestone());
-  const milestones = await store.listMilestones("goal-1");
+  const milestones = await store.listMilestones(`${RUN_ID}-goal-1`);
   assert(milestones.length === 1, "Should have 1 milestone");
 }
 
 async function testMilestoneUpdate(storeFactory: () => PlanningStore): Promise<void> {
   const store = storeFactory();
   await store.createMilestone(makeMilestone());
-  const updated = await store.updateMilestone("ms-1", { status: "ready", name: "Updated name" });
+  const updated = await store.updateMilestone(`${RUN_ID}-ms-1`, { status: "ready", name: "Updated name" });
   assert(updated !== null, "Update should succeed");
   assert(updated!.status === "ready", "Status should be updated");
   assert(updated!.name === "Updated name", "Name should be updated");
-  assert(updated!.id === "ms-1", "ID should be unchanged");
-  assert(updated!.goalId === "goal-1", "goalId should be unchanged");
+  assert(updated!.id === `${RUN_ID}-ms-1`, "ID should be unchanged");
+  assert(updated!.goalId === `${RUN_ID}-goal-1`, "goalId should be unchanged");
 }
 
 async function testMilestoneUpdateNotFound(storeFactory: () => PlanningStore): Promise<void> {
@@ -377,30 +383,30 @@ async function testMilestoneUpdateNotFound(storeFactory: () => PlanningStore): P
 async function testMilestoneDelete(storeFactory: () => PlanningStore): Promise<void> {
   const store = storeFactory();
   await store.createMilestone(makeMilestone());
-  const first = await store.deleteMilestone("ms-1");
+  const first = await store.deleteMilestone(`${RUN_ID}-ms-1`);
   assert(first === true, "First delete should return true");
-  const second = await store.deleteMilestone("ms-1");
+  const second = await store.deleteMilestone(`${RUN_ID}-ms-1`);
   assert(second === false, "Second delete should return false");
-  const fetched = await store.getMilestone("ms-1");
+  const fetched = await store.getMilestone(`${RUN_ID}-ms-1`);
   assert(fetched === null, "Milestone should be gone after delete");
 }
 
 async function testMilestoneListScoping(storeFactory: () => PlanningStore): Promise<void> {
   const store = storeFactory();
-  await store.createMilestone(makeMilestone({ id: "ms-a", goalId: "goal-A" }));
-  await store.createMilestone(makeMilestone({ id: "ms-b", goalId: "goal-B" }));
-  const milestonesA = await store.listMilestones("goal-A");
-  const milestonesB = await store.listMilestones("goal-B");
-  assert(milestonesA.length === 1 && milestonesA[0].id === "ms-a", "Goal A should only see its milestone");
-  assert(milestonesB.length === 1 && milestonesB[0].id === "ms-b", "Goal B should only see its milestone");
+  await store.createMilestone(makeMilestone({ id: `${RUN_ID}-ms-a`, goalId: `${RUN_ID}-goal-A` }));
+  await store.createMilestone(makeMilestone({ id: `${RUN_ID}-ms-b`, goalId: `${RUN_ID}-goal-B` }));
+  const milestonesA = await store.listMilestones(`${RUN_ID}-goal-A`);
+  const milestonesB = await store.listMilestones(`${RUN_ID}-goal-B`);
+  assert(milestonesA.length === 1 && milestonesA[0].id === `${RUN_ID}-ms-a`, "Goal A should only see its milestone");
+  assert(milestonesB.length === 1 && milestonesB[0].id === `${RUN_ID}-ms-b`, "Goal B should only see its milestone");
 }
 
 async function testMilestoneListOrdering(storeFactory: () => PlanningStore): Promise<void> {
   const store = storeFactory();
-  await store.createMilestone(makeMilestone({ id: "ms-3", goalId: "g1", order: 3 }));
-  await store.createMilestone(makeMilestone({ id: "ms-1", goalId: "g1", order: 1 }));
-  await store.createMilestone(makeMilestone({ id: "ms-2", goalId: "g1", order: 2 }));
-  const milestones = await store.listMilestones("g1");
+  await store.createMilestone(makeMilestone({ id: `${RUN_ID}-ms-3`, goalId: `${RUN_ID}-g1`, order: 3 }));
+  await store.createMilestone(makeMilestone({ id: `${RUN_ID}-ms-o1`, goalId: `${RUN_ID}-g1`, order: 1 }));
+  await store.createMilestone(makeMilestone({ id: `${RUN_ID}-ms-2`, goalId: `${RUN_ID}-g1`, order: 2 }));
+  const milestones = await store.listMilestones(`${RUN_ID}-g1`);
   assert(milestones[0].order === 1, "First milestone should have order 1");
   assert(milestones[1].order === 2, "Second milestone should have order 2");
   assert(milestones[2].order === 3, "Third milestone should have order 3");
@@ -442,7 +448,7 @@ async function testMilestoneUpdateInvalidStatus(storeFactory: () => PlanningStor
   await store.createMilestone(makeMilestone());
   let threw = false;
   try {
-    await store.updateMilestone("ms-1", { status: "invalid" as any });
+    await store.updateMilestone(`${RUN_ID}-ms-1`, { status: "invalid" as any });
   } catch {
     threw = true;
   }
@@ -456,7 +462,7 @@ async function testMilestoneUpdateInvalidStatus(storeFactory: () => PlanningStor
 async function testIssueDraftCreateAndGet(storeFactory: () => PlanningStore): Promise<void> {
   const store = storeFactory();
   await store.createIssueDraft(makeIssueDraft());
-  const fetched = await store.getIssueDraft("draft-1");
+  const fetched = await store.getIssueDraft(`${RUN_ID}-draft-1`);
   assert(fetched !== null, "Should find the issue draft");
   assert(fetched!.title === "Implement login endpoint", "Title should match");
 }
@@ -469,7 +475,7 @@ async function testIssueDraftGetNotFound(storeFactory: () => PlanningStore): Pro
 
 async function testIssueDraftListEmpty(storeFactory: () => PlanningStore): Promise<void> {
   const store = storeFactory();
-  const drafts = await store.listIssueDrafts("ms-1");
+  const drafts = await store.listIssueDrafts(`${RUN_ID}-ms-1`);
   assert(Array.isArray(drafts), "Should return an array");
   assert(drafts.length === 0, "Should be empty for new store");
 }
@@ -477,19 +483,19 @@ async function testIssueDraftListEmpty(storeFactory: () => PlanningStore): Promi
 async function testIssueDraftCreateAndList(storeFactory: () => PlanningStore): Promise<void> {
   const store = storeFactory();
   await store.createIssueDraft(makeIssueDraft());
-  const drafts = await store.listIssueDrafts("ms-1");
+  const drafts = await store.listIssueDrafts(`${RUN_ID}-ms-1`);
   assert(drafts.length === 1, "Should have 1 draft");
 }
 
 async function testIssueDraftUpdate(storeFactory: () => PlanningStore): Promise<void> {
   const store = storeFactory();
   await store.createIssueDraft(makeIssueDraft());
-  const updated = await store.updateIssueDraft("draft-1", { status: "ready", title: "Updated title" });
+  const updated = await store.updateIssueDraft(`${RUN_ID}-draft-1`, { status: "ready", title: "Updated title" });
   assert(updated !== null, "Update should succeed");
   assert(updated!.status === "ready", "Status should be updated");
   assert(updated!.title === "Updated title", "Title should be updated");
-  assert(updated!.id === "draft-1", "ID should be unchanged");
-  assert(updated!.milestoneId === "ms-1", "milestoneId should be unchanged");
+  assert(updated!.id === `${RUN_ID}-draft-1`, "ID should be unchanged");
+  assert(updated!.milestoneId === `${RUN_ID}-ms-1`, "milestoneId should be unchanged");
 }
 
 async function testIssueDraftUpdateNotFound(storeFactory: () => PlanningStore): Promise<void> {
@@ -501,30 +507,30 @@ async function testIssueDraftUpdateNotFound(storeFactory: () => PlanningStore): 
 async function testIssueDraftDelete(storeFactory: () => PlanningStore): Promise<void> {
   const store = storeFactory();
   await store.createIssueDraft(makeIssueDraft());
-  const first = await store.deleteIssueDraft("draft-1");
+  const first = await store.deleteIssueDraft(`${RUN_ID}-draft-1`);
   assert(first === true, "First delete should return true");
-  const second = await store.deleteIssueDraft("draft-1");
+  const second = await store.deleteIssueDraft(`${RUN_ID}-draft-1`);
   assert(second === false, "Second delete should return false");
-  const fetched = await store.getIssueDraft("draft-1");
+  const fetched = await store.getIssueDraft(`${RUN_ID}-draft-1`);
   assert(fetched === null, "Draft should be gone after delete");
 }
 
 async function testIssueDraftListScoping(storeFactory: () => PlanningStore): Promise<void> {
   const store = storeFactory();
-  await store.createIssueDraft(makeIssueDraft({ id: "d-a", milestoneId: "ms-A" }));
-  await store.createIssueDraft(makeIssueDraft({ id: "d-b", milestoneId: "ms-B" }));
-  const draftsA = await store.listIssueDrafts("ms-A");
-  const draftsB = await store.listIssueDrafts("ms-B");
-  assert(draftsA.length === 1 && draftsA[0].id === "d-a", "Milestone A should only see its draft");
-  assert(draftsB.length === 1 && draftsB[0].id === "d-b", "Milestone B should only see its draft");
+  await store.createIssueDraft(makeIssueDraft({ id: `${RUN_ID}-d-a`, milestoneId: `${RUN_ID}-ms-A` }));
+  await store.createIssueDraft(makeIssueDraft({ id: `${RUN_ID}-d-b`, milestoneId: `${RUN_ID}-ms-B` }));
+  const draftsA = await store.listIssueDrafts(`${RUN_ID}-ms-A`);
+  const draftsB = await store.listIssueDrafts(`${RUN_ID}-ms-B`);
+  assert(draftsA.length === 1 && draftsA[0].id === `${RUN_ID}-d-a`, "Milestone A should only see its draft");
+  assert(draftsB.length === 1 && draftsB[0].id === `${RUN_ID}-d-b`, "Milestone B should only see its draft");
 }
 
 async function testIssueDraftListOrdering(storeFactory: () => PlanningStore): Promise<void> {
   const store = storeFactory();
-  await store.createIssueDraft(makeIssueDraft({ id: "d-3", milestoneId: "ms-1", order: 3 }));
-  await store.createIssueDraft(makeIssueDraft({ id: "d-1", milestoneId: "ms-1", order: 1 }));
-  await store.createIssueDraft(makeIssueDraft({ id: "d-2", milestoneId: "ms-1", order: 2 }));
-  const drafts = await store.listIssueDrafts("ms-1");
+  await store.createIssueDraft(makeIssueDraft({ id: `${RUN_ID}-d-3`, milestoneId: `${RUN_ID}-ms-o1`, order: 3 }));
+  await store.createIssueDraft(makeIssueDraft({ id: `${RUN_ID}-d-1`, milestoneId: `${RUN_ID}-ms-o1`, order: 1 }));
+  await store.createIssueDraft(makeIssueDraft({ id: `${RUN_ID}-d-2`, milestoneId: `${RUN_ID}-ms-o1`, order: 2 }));
+  const drafts = await store.listIssueDrafts(`${RUN_ID}-ms-o1`);
   assert(drafts[0].order === 1, "First draft should have order 1");
   assert(drafts[1].order === 2, "Second draft should have order 2");
   assert(drafts[2].order === 3, "Third draft should have order 3");
@@ -566,7 +572,7 @@ async function testIssueDraftUpdateInvalidStatus(storeFactory: () => PlanningSto
   await store.createIssueDraft(makeIssueDraft());
   let threw = false;
   try {
-    await store.updateIssueDraft("draft-1", { status: "invalid" as any });
+    await store.updateIssueDraft(`${RUN_ID}-draft-1`, { status: "invalid" as any });
   } catch {
     threw = true;
   }
@@ -717,7 +723,7 @@ async function testIssueDraftUpdateFileRefValidation(storeFactory: () => Plannin
   await store.createIssueDraft(makeIssueDraft());
   let threw = false;
   try {
-    await store.updateIssueDraft("draft-1", {
+    await store.updateIssueDraft(`${RUN_ID}-draft-1`, {
       filesToModify: [{ path: "", reason: "reason" }],
     });
   } catch {
@@ -731,7 +737,7 @@ async function testIssueDraftUpdateFilesToReadNotArray(storeFactory: () => Plann
   await store.createIssueDraft(makeIssueDraft());
   let threw = false;
   try {
-    await store.updateIssueDraft("draft-1", {
+    await store.updateIssueDraft(`${RUN_ID}-draft-1`, {
       filesToRead: null as unknown as FileRef[],
     });
   } catch {
@@ -750,11 +756,11 @@ async function testGoalArrayIsolation(storeFactory: () => PlanningStore): Promis
   const created = await store.createGoal(goal);
   // Mutating the returned copy should not affect stored state
   created.successCriteria.push("injected");
-  const fetched = await store.getGoal("goal-1");
+  const fetched = await store.getGoal(`${RUN_ID}-goal-1`);
   assert(fetched!.successCriteria.length === 1, "Stored successCriteria should not be mutated via returned copy");
   // Mutating the original input should also not affect stored state
   goal.assumptions.push("injected");
-  const fetched2 = await store.getGoal("goal-1");
+  const fetched2 = await store.getGoal(`${RUN_ID}-goal-1`);
   assert(fetched2!.assumptions.length === 0, "Stored assumptions should not be mutated via input reference");
 }
 
@@ -763,7 +769,7 @@ async function testMilestoneArrayIsolation(storeFactory: () => PlanningStore): P
   const milestone = makeMilestone({ acceptanceCriteria: ["criterion 1"], dependencies: [] });
   const created = await store.createMilestone(milestone);
   created.acceptanceCriteria.push("injected");
-  const fetched = await store.getMilestone("ms-1");
+  const fetched = await store.getMilestone(`${RUN_ID}-ms-1`);
   assert(fetched!.acceptanceCriteria.length === 1, "Stored acceptanceCriteria should not be mutated via returned copy");
 }
 
@@ -772,7 +778,7 @@ async function testIssueDraftArrayIsolation(storeFactory: () => PlanningStore): 
   const draft = makeIssueDraft({ dependencies: [], acceptanceCriteria: ["ac1"] });
   const created = await store.createIssueDraft(draft);
   created.dependencies.push("injected");
-  const fetched = await store.getIssueDraft("draft-1");
+  const fetched = await store.getIssueDraft(`${RUN_ID}-draft-1`);
   assert(fetched!.dependencies.length === 0, "Stored dependencies should not be mutated via returned copy");
 }
 

@@ -479,14 +479,14 @@ export function createGitHubTools(token: string, planningStore?: PlanningStore):
       const title = milestone.name;
       const description = milestone.goal;
 
-      // Idempotency: paginate all open GitHub milestones to find a title match
+      // Idempotency: paginate all GitHub milestones (open + closed) to find a title match
       let githubNumber: number | undefined;
       let githubUrl: string | undefined;
       let page = 1;
       while (githubNumber === undefined) {
         const existing = (await githubFetch(
           token,
-          `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/milestones?state=open&per_page=100&page=${page}`
+          `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/milestones?state=all&per_page=100&page=${page}`
         )) as any[];
 
         const match = existing.find((m: any) => m.title === title);
@@ -633,6 +633,7 @@ export function createGitHubTools(token: string, planningStore?: PlanningStore):
         return {
           draftId: args.draftId,
           githubIssueNumber: draft.githubIssueNumber,
+          githubIssueUrl: draft.githubIssueUrl,
           alreadyCreated: true,
         };
       }
@@ -705,10 +706,11 @@ export function createGitHubTools(token: string, planningStore?: PlanningStore):
         warnings.push(`Milestone association may have been dropped (expected ${milestone.githubNumber}, got ${created.milestone?.number})`);
       }
 
-      // Update IssueDraft status to 'created' and store the GitHub issue number
+      // Update IssueDraft status to 'created' and store the GitHub issue number and URL
       const updatedDraft = await planningStore.updateIssueDraft(args.draftId, {
         status: "created",
         githubIssueNumber: created.number,
+        githubIssueUrl: created.html_url,
       });
       if (!updatedDraft) {
         throw new Error(`Issue draft not found after update: ${args.draftId}`);
@@ -801,43 +803,23 @@ export function createGitHubTools(token: string, planningStore?: PlanningStore):
           alreadyExists: false,
         };
       } catch (err: any) {
-        // Handle duplicate: 422 with already_exists code
+        // Handle duplicate branches: GitHub returns 422 when the ref already exists.
+        // Instead of parsing JSON from a potentially truncated error message, do a follow-up GET.
         const msg: string = err?.message ?? "";
         if (msg.includes("422")) {
-          let alreadyExists = false;
           try {
-            const jsonStart = msg.indexOf("{");
-            if (jsonStart !== -1) {
-              const parsed = JSON.parse(msg.slice(jsonStart));
-              alreadyExists =
-                Array.isArray(parsed.errors) &&
-                parsed.errors.some((e: any) => e.code === "already_exists");
-            }
+            const existingRef = (await githubFetch(
+              token,
+              `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/ref/heads/${encodeURIComponent(sanitizedName)}`
+            )) as any;
+            return {
+              branchName: sanitizedName,
+              ref: existingRef?.ref ?? ref,
+              sha: existingRef?.object?.sha ?? null,
+              alreadyExists: true,
+            };
           } catch {
-            // JSON parse failed; re-throw the original error rather than masking it
-          }
-          if (alreadyExists) {
-            // Fetch the actual ref so we return the current SHA, not the caller's baseSha
-            try {
-              const existingRef = (await githubFetch(
-                token,
-                `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/ref/heads/${encodeURIComponent(sanitizedName)}`
-              )) as any;
-              return {
-                branchName: sanitizedName,
-                ref: existingRef?.ref ?? ref,
-                sha: existingRef?.object?.sha ?? null,
-                alreadyExists: true,
-              };
-            } catch {
-              // If we can't retrieve the existing ref, avoid returning a potentially inaccurate SHA
-              return {
-                branchName: sanitizedName,
-                ref,
-                sha: null,
-                alreadyExists: true,
-              };
-            }
+            // If we can't retrieve the existing ref, the 422 was for a different reason — re-throw original
           }
         }
         throw err;

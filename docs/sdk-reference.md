@@ -1650,7 +1650,7 @@ const session = await client.createSession({
 });
 ```
 
-**Currently used?** ❌ The backend accepts `reasoningEffort` in `buildSessionConfig()` but no UI element currently exposes it. Requires a conditional dropdown in the frontend for models that support reasoning (e.g., `o4-mini`).
+**Currently used?** ✅ Yes. The backend accepts `reasoningEffort` in `buildSessionConfig()`, and the chat UI exposes it via the reasoning-effort dropdown (`#reasoning-effort-select`). The frontend only sends a `reasoningEffort` value for models that support reasoning (e.g., `o4-mini`), and the backend passes it through to the SDK.
 
 ### 8.13 Additional Unused Events
 
