@@ -55,12 +55,14 @@ The frontend is vanilla HTML, CSS, and JavaScript — no frameworks, no build st
 
 ## Application State
 
-The frontend manages minimal state in two variables:
+The frontend manages view and conversation state across several variables:
 
 | Variable | Type | Purpose |
 |----------|------|---------|
 | `sessionId` | `string \| null` | Current session ID for multi-turn conversations. Reset to `null` on "New Chat". |
 | `isStreaming` | `boolean` | Prevents double-sending while a response is being streamed. |
+| `currentView` | `string` | Active top-level view: `"chat"` or `"dashboard"`. Persisted in `localStorage["copilot_current_view"]`. |
+| `currentDashboardPage` | `string` | Active dashboard page: `"goals"`, `"research"`, `"milestones"`, or `"issues"`. Persisted in `localStorage["copilot_dashboard_page"]`. |
 
 ## Token Management
 
@@ -122,8 +124,19 @@ Buffering handles partial lines that may arrive split across network chunks.
 | `subagent_start` | Shows sub-agent name and active count in agent status indicator |
 | `subagent_end` | Decrements active sub-agent counter; hides indicator when all complete |
 | `compaction` | Shows "🔄 Optimizing context..." when started; hides when complete |
+| `user_input_request` | Renders an inline question card for agent input requests (choices + optional freeform field) |
 | `done` | Stores `sessionId`, removes typing indicator, enables send button, clears agent status |
 | `error` | Displays error message to user |
+
+#### `user_input_request` Details
+
+When the agent needs clarification, a `user_input_request` SSE event blocks the stream until the user responds. The frontend renders a question card with:
+
+- The agent's question text
+- Selectable choice buttons (if `choices` is non-empty)
+- A freeform text input (if `allowFreeform` is true)
+
+On submission, the frontend calls `POST /api/chat/input` with `{ requestId, answer, wasFreeform }`. Requests time out after 2 minutes if unanswered. When the SSE connection closes, all pending input requests from that connection are automatically rejected.
 
 ## Model Switching
 
@@ -136,6 +149,71 @@ A reasoning effort dropdown (`#reasoning-effort-select`) appears conditionally n
 ## Quota Display
 
 Premium request quota is fetched via `GET /api/quota` and displayed in the status bar. This helps users monitor their remaining Copilot usage.
+
+## Planning Dashboard
+
+The dashboard is a second top-level view alongside the chat. It provides a read-only window into all planning data (goals, research, milestones, issue drafts) created by the planning tools during chat sessions.
+
+### Navigation
+
+| Function | Description |
+|----------|-------------|
+| `switchView(view)` | Toggle between `"chat"` and `"dashboard"` views. Persists the selection to `localStorage`. |
+| `navigateDashboard(page)` | Navigate between the four dashboard pages. Persists to `localStorage`. |
+
+A "Dashboard" button in the header switches to dashboard view. A nav bar at the top of the dashboard switches between pages. Both selections are restored on page load.
+
+### Dashboard Pages
+
+#### Goals Page
+
+Loaded by `loadGoalsDashboard()`. Fetches goals from `GET /api/goals` and displays them sorted newest-first. Each goal card shows:
+
+- Goal statement, problem statement, business value
+- Counts of research items, milestones, and issue drafts (fetched via `fetchGoalCounts(goalId)`)
+- Click to drill into goal detail
+
+Clicking a goal navigates to a detail view (`showGoalDetail(goalId)`) that shows the full goal object and provides links to view its research items and milestones.
+
+#### Research Page
+
+Loaded by `loadResearchDashboard()`. Fetches all goals and their research items (via `GET /api/goals/:id/research`). Each research item card shows:
+
+- Category badge (`domain`, `architecture`, `security`, `infrastructure`, `integration`, `data_model`, `operational`, `ux`)
+- Question text
+- Status badge (`open`, `researching`, `resolved`)
+- Findings and decision (when resolved), with source URL link
+
+#### Milestones Page
+
+Loaded by `loadMilestonesDashboard()`. Fetches all goals and their milestones (via `GET /api/goals/:id/milestones`). Each milestone card shows:
+
+- Order number and milestone name
+- Status badge (`draft`, `ready`, `in-progress`, `complete`)
+- GitHub milestone link (when pushed to GitHub)
+- Acceptance criteria
+
+#### Issues Page
+
+Loaded by `loadIssuesDashboard()`. Fetches all goals → milestones → issue drafts (via `GET /api/milestones/:id/issues`). Each issue draft card shows:
+
+- Title and order number
+- Status badge (`draft`, `ready`, `created`)
+- GitHub issue link (when pushed to GitHub)
+- Purpose and expected outcome
+
+### Push Approval Workflow
+
+When the planning agent creates milestones or issue drafts with `status: "ready"`, a **Push to GitHub** action becomes available in the dashboard. The workflow:
+
+1. Agent marks a `Milestone` or `IssueDraft` as `status: "ready"` via `update_milestone` / `update_issue_draft`
+2. User reviews the item in the Milestones or Issues dashboard page
+3. User triggers "Push to GitHub" → frontend calls `POST /api/milestones/:id/push-to-github` or `POST /api/milestones/:milestoneId/issues/:issueId/push-to-github`
+4. Server calls the `create_github_milestone` / `create_github_issue` tool (idempotent)
+5. On success, the record is updated with `githubNumber` / `githubIssueNumber` and status changes to `"created"`
+6. Dashboard card updates to show the GitHub link
+
+Both push endpoints are idempotent — re-triggering a push for an already-created item returns the existing GitHub data without creating duplicates.
 
 ## Related Documentation
 

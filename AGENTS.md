@@ -44,12 +44,13 @@
 
 ```
 ├── server.ts              # Express backend (API routes, Copilot SDK integration)
-├── tools.ts               # GitHub API tools factory (5 tools bound to user's token)
+├── tools.ts               # GitHub API tools factory (9 tools: 5 read + 4 write, bound to user's token)
 ├── storage.ts             # Storage abstraction (Azure Table/Blob + in-memory fallback)
 ├── storage.test.ts        # Unit tests for storage module
 ├── planning-types.ts      # Planning data model interfaces (Goal, ResearchItem, Milestone, IssueDraft)
-├── planning-store.ts      # PlanningStore interface + InMemoryPlanningStore implementation
+├── planning-store.ts      # PlanningStore interface + InMemoryPlanningStore + AzurePlanningStore
 ├── planning-store.test.ts # Unit tests for planning store
+├── planning-tools.ts      # Planning tools factory (12 tools: goal, research, milestone, issue drafts)
 ├── test.ts                # Integration tests (SDK + server HTTP API)
 ├── public/                # Frontend (served as static files)
 │   ├── index.html         #   Chat UI (dark theme, session sidebar)
