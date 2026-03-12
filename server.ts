@@ -4,6 +4,7 @@ import type { SessionConfig, PermissionHandler } from "@github/copilot-sdk";
 import { fileURLToPath } from "url";
 import { config } from "dotenv";
 import path from "path";
+import fs from "fs";
 import { createSessionStore, hashToken, AzureSessionStore, InMemorySessionStore, type SessionStore } from "./storage.js";
 import { createGitHubTools, GITHUB_TOOL_NAMES, githubFetch, githubWrite, buildIssueBody } from "./tools.js";
 import { InMemoryPlanningStore, AzurePlanningStore, createPlanningStore, type PlanningStore } from "./planning-store.js";
@@ -42,7 +43,15 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const app = express();
 app.use(express.json());
-app.use(express.static(path.join(__dirname, "public")));
+
+const frontendDistPath = path.join(__dirname, "frontend", "dist");
+if (!fs.existsSync(path.join(frontendDistPath, "index.html"))) {
+  console.warn(
+    "⚠️  frontend/dist/index.html not found. Run `npm run build:frontend` first.\n" +
+    "   The server will start, but the UI will not be available."
+  );
+}
+app.use(express.static(frontendDistPath));
 
 const PORT = parseInt(process.env.PORT || "3000", 10);
 
@@ -1601,6 +1610,14 @@ if (process.env.ENABLE_GOAL_SEED === "true") {
     res.status(201).json({ ok: true, requestId });
   });
 }
+
+// --- SPA Fallback ---
+// Serve index.html for all non-API routes (client-side routing support)
+app.get("/{*path}", (req: Request, res: Response) => {
+  // Skip API routes — let them 404 normally
+  if (req.path.startsWith("/api/")) return res.status(404).json({ error: "Not found" });
+  res.sendFile(path.join(__dirname, "frontend", "dist", "index.html"));
+});
 
 // --- Start Server ---
 

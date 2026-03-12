@@ -55,9 +55,9 @@ export default defineConfig({
   /* Start a local server when running 'local' project */
   webServer: process.env.BASE_URL?.includes("localhost") || process.argv.some((a) => a.includes("local"))
     ? {
-        command: "npx tsx server.ts",
+        command: "npm run build:frontend && npx tsx server.ts",
         port: 3000,
-        timeout: 30_000,
+        timeout: 120_000,
         reuseExistingServer: true,
       }
     : undefined,

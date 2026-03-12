@@ -1,14 +1,53 @@
 # Frontend Documentation
 
-The frontend is vanilla HTML, CSS, and JavaScript — no frameworks, no build step. Files are served as static assets by the Express server.
+The frontend is a **React 19 + TypeScript** single-page application built with **Vite**. It lives in the `frontend/` directory and is served as static files by the Express server from `frontend/dist/`.
 
-## Files
+## Project Structure
 
-| File | Purpose |
-|------|---------|
-| `public/index.html` | Chat UI — GitHub dark theme, model selector, session sidebar |
-| `public/app.js` | Frontend logic — token management, SSE parsing, session management |
-| `public/staticwebapp.config.json` | Azure Static Web Apps routing config |
+```
+frontend/
+├── index.html              # Entry HTML (Vite injects script/style tags)
+├── vite.config.ts          # Vite configuration with React plugin
+├── tsconfig.json           # TypeScript config (strict, JSX, bundler mode)
+├── package.json            # Frontend dependencies (React, Vite, TypeScript)
+├── public/
+│   └── staticwebapp.config.json  # Azure SWA routing config
+└── src/
+    ├── main.tsx            # React entry point (StrictMode, createRoot)
+    ├── App.tsx             # Root component — layout, view switching, state orchestration
+    ├── index.css           # All CSS (dark theme, dashboard styles, animations)
+    ├── types.ts            # Shared TypeScript types and constants
+    ├── utils/
+    │   ├── api.ts          # Auth headers, apiFetch, apiJson helpers
+    │   ├── sessions.ts     # LocalStorage session CRUD + formatting
+    │   └── escHtml.ts      # HTML escaping utility
+    ├── hooks/
+    │   ├── useAuth.ts      # Token state management
+    │   ├── useModels.ts    # Model list loading and selection
+    │   ├── useChat.ts      # SSE streaming, messages, tool events, abort
+    │   ├── useSessions.ts  # Session list with backend sync
+    │   └── useQuota.ts     # Premium request quota
+    └── components/
+        ├── Header.tsx       # Top bar: token, model selector, nav buttons
+        ├── StatusBar.tsx    # Bottom bar: connection, tools, usage, quota
+        ├── SessionSidebar.tsx # Session list sidebar
+        ├── ChatArea.tsx     # Messages, input, user-input cards
+        └── Dashboard/
+            ├── DashboardView.tsx   # Dashboard layout with nav
+            ├── GoalsPage.tsx       # Goals list and detail view
+            ├── ResearchPage.tsx    # Research items by category
+            ├── MilestonesPage.tsx  # Milestone timeline
+            ├── IssuesPage.tsx      # Issue drafts with expand/approve
+            └── PushModal.tsx       # Push to GitHub workflow modal
+```
+
+## Build Commands
+
+| Command | Description |
+|---------|-------------|
+| `npm run build:frontend` | Install deps + typecheck + Vite build → `frontend/dist/` |
+| `npm run dev:frontend` | Vite dev server with HMR (proxies `/api` to backend) |
+| `cd frontend && npx tsc --noEmit` | Typecheck frontend only |
 
 ## UI Layout
 
@@ -33,7 +72,7 @@ The frontend is vanilla HTML, CSS, and JavaScript — no frameworks, no build st
 └─────────────────────────────────────────────────────────┘
 ```
 
-**Theme:** GitHub dark mode (`#0d1117` background, `#e6edf3` text).
+**Theme:** GitHub dark mode (`#0d1117` background, `#e6edf3` text) using hex colors for CSS custom properties.
 
 ### Key UI Components
 
@@ -43,26 +82,37 @@ The frontend is vanilla HTML, CSS, and JavaScript — no frameworks, no build st
 | Save/Clear Token | `#save-token-btn` | Toggles between save and clear token |
 | Model selector | `#model-select` | Dropdown populated from `/api/models` |
 | Reasoning effort | `#reasoning-effort-select` | Conditional dropdown — visible only when selected model supports reasoning |
+| Dashboard toggle | `#view-toggle-btn` | Switch between chat and dashboard views |
 | New Chat | `#new-chat-btn` | Resets `sessionId`, clears messages, shows welcome screen |
-| Session sidebar | `#sessions-list` | List of previous conversations with timestamps |
+| Session sidebar | `#session-sidebar` | List of previous conversations with timestamps |
 | Message input | `#message-input` | Textarea for user messages |
 | Send button | `#send-btn` | Sends the message (also triggered by Enter key) |
 | Stop button | `#stop-btn` | Cancels streaming via `POST /api/chat/abort` |
-| Status indicator | `#status` | Shows connection status (green dot = connected) |
-| Tool activity | In-chat indicator | Shows when the agent is executing a tool |
-| Token usage | Status bar | Displays per-message token count |
-| Quota display | Status bar | Shows remaining premium requests |
+| Status indicator | `#status-dot` | Shows connection status (green dot = connected) |
 
-## Application State
+## React Architecture
 
-The frontend manages view and conversation state across several variables:
+### Custom Hooks
 
-| Variable | Type | Purpose |
-|----------|------|---------|
-| `sessionId` | `string \| null` | Current session ID for multi-turn conversations. Reset to `null` on "New Chat". |
-| `isStreaming` | `boolean` | Prevents double-sending while a response is being streamed. |
-| `currentView` | `string` | Active top-level view: `"chat"` or `"dashboard"`. Persisted in `localStorage["copilot_current_view"]`. |
-| `currentDashboardPage` | `string` | Active dashboard page: `"goals"`, `"research"`, `"milestones"`, or `"issues"`. Persisted in `localStorage["copilot_dashboard_page"]`. |
+| Hook | Purpose |
+|------|---------|
+| `useAuth` | Manages token in `localStorage` and React state |
+| `useModels` | Fetches model list from `/api/models`, tracks selection |
+| `useChat` | Core chat logic: SSE streaming, message state, tool/agent events, abort |
+| `useSessions` | Session list with localStorage cache + backend sync |
+| `useQuota` | Premium request quota from `/api/quota` |
+
+### State Management
+
+State is managed through React hooks (no external state library):
+
+| State | Location | Purpose |
+|-------|----------|---------|
+| Token | `useAuth` hook | GitHub PAT stored in localStorage, synced to React state |
+| Messages | `useChat` hook | Current conversation messages (user + assistant + error) |
+| Session ID | `useChat` hook | Current session ID, persisted in localStorage |
+| View | `App` component | `"chat"` or `"dashboard"`, persisted in localStorage |
+| Dashboard page | `DashboardView` | `"goals"`, `"research"`, `"milestones"`, or `"issues"` |
 
 ## Token Management
 
@@ -94,128 +144,79 @@ Sessions are persisted through a dual-layer caching strategy:
 1. Save to `localStorage` immediately (fast, synchronous)
 2. Fire-and-forget `PUT /api/sessions/:id/messages` to persist to backend
 
-This ensures the UI is always responsive while the backend provides cross-device persistence.
-
 ## SSE Stream Consumption
 
-The frontend reads the SSE stream using the Fetch API's `ReadableStream`:
+The `useChat` hook reads the SSE stream using the Fetch API's `ReadableStream`:
 
 1. `POST /api/chat` returns a streaming response
 2. Frontend reads chunks via `response.body.getReader()`
 3. Chunks are decoded and split into SSE lines (`data: {...}\n`)
-4. Each `delta` event appends content to the assistant's message bubble in real time
+4. Each `delta` event appends content to the assistant's message via React state
 5. The `done` event stores the `sessionId` for follow-up messages
-6. Typing indicator is removed when streaming completes
-
-Buffering handles partial lines that may arrive split across network chunks.
 
 ### SSE Event Handling
 
 | Event Type | Frontend Behavior |
 |------------|-------------------|
-| `delta` | Appends content to the assistant message bubble |
+| `delta` | Appends content to the assistant message |
 | `tool_start` | Shows tool activity indicator with tool name |
-| `tool_complete` | Removes tool activity indicator; for `save_goal` events renders a goal summary card in chat (or fetches the latest goal as fallback); for `generate_research_checklist` events renders a categorized research checklist card with status badges |
+| `tool_complete` | Hides tool activity indicator |
 | `title` | Updates session title in sidebar |
-| `usage` | Displays token count (inputTokens + outputTokens) in status bar |
-| `planning_start` | Shows "🗺️ Planning..." in agent status indicator |
-| `plan_ready` | Shows "✅ Plan ready" in agent status indicator |
-| `intent` | Shows current agent activity (e.g., "💡 Exploring codebase") in agent status indicator |
-| `subagent_start` | Shows sub-agent name and active count in agent status indicator |
-| `subagent_end` | Decrements active sub-agent counter; hides indicator when all complete |
-| `compaction` | Shows "🔄 Optimizing context..." when started; hides when complete |
-| `user_input_request` | Renders an inline question card for agent input requests (choices + optional freeform field) |
-| `done` | Stores `sessionId`, removes typing indicator, enables send button, clears agent status |
-| `error` | Displays error message to user |
-
-#### `user_input_request` Details
-
-When the agent needs clarification, a `user_input_request` SSE event blocks the stream until the user responds. The frontend renders a question card with:
-
-- The agent's question text
-- Selectable choice buttons (if `choices` is non-empty)
-- A freeform text input (if `allowFreeform` is true)
-
-On submission, the frontend calls `POST /api/chat/input` with `{ requestId, answer, wasFreeform }`. Requests time out after 2 minutes if unanswered. When the SSE connection closes, all pending input requests from that connection are automatically rejected.
-
-## Model Switching
-
-The model dropdown (`#model-select`) is populated on page load by fetching `GET /api/models`. When the user changes the selected model during an active session, the frontend automatically fires `POST /api/chat/model` to switch the model mid-conversation without creating a new session.
-
-## Reasoning Effort Control
-
-A reasoning effort dropdown (`#reasoning-effort-select`) appears conditionally next to the model selector when the currently selected model has `capabilities.supports.reasoningEffort === true` (e.g., `o4-mini`). Options are populated from the model's `supportedReasoningEfforts` array with the default pre-selected from `defaultReasoningEffort`. The selected effort level is sent as `reasoningEffort` in the `POST /api/chat` request body. Changing the model hides or shows the dropdown and resets the selection to the new model's default.
-
-## Quota Display
-
-Premium request quota is fetched via `GET /api/quota` and displayed in the status bar. This helps users monitor their remaining Copilot usage.
+| `usage` | Displays token count in status bar |
+| `planning_start` | Shows "🗺️ Planning..." in agent status |
+| `plan_ready` | Shows "✅ Plan ready" |
+| `intent` | Shows current agent activity |
+| `subagent_start/end` | Tracks active sub-agent count |
+| `compaction` | Shows "🔄 Optimizing context..." |
+| `user_input_request` | Renders inline question card |
+| `done` | Stores sessionId, finalizes message |
+| `error` | Displays error message |
 
 ## Planning Dashboard
 
-The dashboard is a second top-level view alongside the chat. It provides a read-only window into all planning data (goals, research, milestones, issue drafts) created by the planning tools during chat sessions.
-
-### Navigation
-
-| Function | Description |
-|----------|-------------|
-| `switchView(view)` | Toggle between `"chat"` and `"dashboard"` views. Persists the selection to `localStorage`. |
-| `navigateDashboard(page)` | Navigate between the four dashboard pages. Persists to `localStorage`. |
-
-A "Dashboard" button in the header switches to dashboard view. A nav bar at the top of the dashboard switches between pages. Both selections are restored on page load.
+The dashboard is a second top-level view alongside the chat, rendered by the `DashboardView` component with four sub-pages.
 
 ### Dashboard Pages
 
-#### Goals Page
-
-Loaded by `loadGoalsDashboard()`. Fetches goals from `GET /api/goals` and displays them sorted newest-first. Each goal card shows:
-
-- Goal statement, problem statement, business value
-- Counts of research items, milestones, and issue drafts (fetched via `fetchGoalCounts(goalId)`)
-- Click to drill into goal detail
-
-Clicking a goal navigates to a detail view (`showGoalDetail(goalId)`) that shows the full goal object and provides links to view its research items and milestones.
-
-#### Research Page
-
-Loaded by `loadResearchDashboard()`. Fetches all goals via `GET /api/goals`, then loads research items for the selected goal (defaulting to the first) via `GET /api/goals/:id/research`. A goal selector allows switching between goals. Each research item card shows:
-
-- Category badge (`domain`, `architecture`, `security`, `infrastructure`, `integration`, `data_model`, `operational`, `ux`)
-- Question text
-- Status badge (`open`, `researching`, `resolved`)
-- Findings and decision (when resolved), with source URL link
-
-#### Milestones Page
-
-Loaded by `loadMilestonesDashboard()`. Fetches all goals via `GET /api/goals`, then loads milestones for the selected goal (defaulting to the first) via `GET /api/goals/:id/milestones`. A goal selector allows switching between goals. Each milestone card shows:
-
-- Order number and milestone name
-- Status badge (`draft`, `ready`, `in-progress`, `complete`)
-- GitHub milestone link (when pushed to GitHub)
-- Acceptance criteria
-
-#### Issues Page
-
-Loaded by `loadIssuesDashboard()`. Uses two selectors with incremental fetching: loads goals via `GET /api/goals`, then milestones for the selected goal via `GET /api/goals/:id/milestones`, then issue drafts for the selected milestone (defaulting to first) via `GET /api/milestones/:id/issues`. Each issue draft card shows:
-
-- Title and order number
-- Status badge (`draft`, `ready`, `created`)
-- GitHub issue link (when pushed to GitHub)
-- Purpose and expected outcome
+| Page | Component | API Endpoints |
+|------|-----------|---------------|
+| Goals | `GoalsPage` | `GET /api/goals`, counts from research/milestones/issues |
+| Research | `ResearchPage` | `GET /api/goals/:id/research`, `PATCH` for inline editing |
+| Milestones | `MilestonesPage` | `GET /api/goals/:id/milestones`, issue counts per milestone |
+| Issues | `IssuesPage` | `GET /api/milestones/:id/issues`, expand/approve/batch approve |
 
 ### Push Approval Workflow
 
-When the planning agent creates milestones and issue drafts, a **Push to GitHub** action becomes available in the dashboard. The workflow:
+The `PushModal` component handles pushing milestones and issue drafts to GitHub:
 
-1. Agent creates or updates milestones and issue drafts; issue drafts that are candidates for pushing are marked `status: "ready"` via `update_issue_draft` (milestones appear in the push modal regardless of `status` and are queued when missing a `githubNumber`)
-2. User reviews the item in the Milestones or Issues dashboard page
-3. User triggers "Push to GitHub" → frontend calls `POST /api/milestones/:id/push-to-github` or `POST /api/milestones/:milestoneId/issues/:issueId/push-to-github`
-4. Server calls the `create_github_milestone` / `create_github_issue` tool (idempotent)
-5. On success:
-   - Milestones are updated with `githubNumber` / `githubUrl` (status is unchanged — milestones do not have a `"created"` status)
-   - Issue drafts are updated with `githubIssueNumber` and their status changes to `"created"`
-6. Dashboard card updates to show the GitHub link
+1. User clicks "Push to GitHub" button (visible when ready issues exist)
+2. Modal shows list of milestones and ready issues to push
+3. User enters owner/repo and confirms
+4. Frontend calls push endpoints sequentially with progress bar
+5. Results show success/failure for each item
 
-Both push endpoints are idempotent — re-triggering a push for an already-created item returns the existing GitHub data without creating duplicates.
+Both push endpoints are idempotent — re-triggering returns existing GitHub data.
+
+## Development
+
+### Dev Server with HMR
+
+```bash
+# Start backend server
+npx tsx server.ts
+
+# In another terminal, start Vite dev server
+cd frontend && npm run dev
+```
+
+The Vite dev server proxies `/api` requests to the backend on port 3000.
+
+### Production Build
+
+```bash
+npm run build:frontend  # Builds to frontend/dist/
+npx tsx server.ts       # Serves from frontend/dist/
+```
 
 ## Related Documentation
 
