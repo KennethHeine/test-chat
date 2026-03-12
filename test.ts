@@ -3981,6 +3981,303 @@ async function testIssueDraftsSeedAndRetrieve(): Promise<void> {
 }
 
 // ============================================================
+// 10. Push-to-GitHub endpoint tests (HTTP, no real GitHub calls)
+// ============================================================
+
+/**
+ * Helper: seeds a session, goal, milestone, and issue draft for push-to-github tests.
+ * The issue draft is seeded with the given status.
+ */
+async function seedPushScenario(status: "draft" | "ready" | "created" = "ready"): Promise<{
+  sessionId: string;
+  goalId: string;
+  milestoneId: string;
+  draftId: string;
+}> {
+  const ts = Date.now();
+  const sessionId = `push-session-${ts}`;
+  const saveRes = await fetch(`${BASE}/api/sessions/${sessionId}/messages`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ messages: [{ role: "user", text: "push test" }] }),
+  });
+  if (!saveRes.ok) throw new Error(`Failed to seed session: HTTP ${saveRes.status}`);
+
+  const goalId = `push-goal-${ts}`;
+  const goalSeedRes = await fetch(`${BASE}/api/test/seed-goal`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({
+      id: goalId,
+      sessionId,
+      intent: "Push test",
+      goal: "Test push endpoints",
+      problemStatement: "Need to test push",
+      businessValue: "Reliable push",
+      targetOutcome: "Push works",
+      successCriteria: [],
+      assumptions: [],
+      constraints: [],
+      risks: [],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    }),
+  });
+  if (!goalSeedRes.ok) throw new Error(`Failed to seed goal: HTTP ${goalSeedRes.status}`);
+
+  const milestoneId = `push-ms-${ts}`;
+  const msSeedRes = await fetch(`${BASE}/api/test/seed-milestone`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({
+      id: milestoneId,
+      goalId,
+      name: "Push Milestone",
+      goal: "Test milestone push",
+      scope: "Push tests",
+      order: 1,
+      dependencies: [],
+      acceptanceCriteria: ["Push works"],
+      exitCriteria: [],
+      status: "ready",
+    }),
+  });
+  if (!msSeedRes.ok) throw new Error(`Failed to seed milestone: HTTP ${msSeedRes.status}`);
+
+  const draftId = `push-draft-${ts}`;
+  const draftSeedRes = await fetch(`${BASE}/api/test/seed-issue-draft`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({
+      id: draftId,
+      milestoneId,
+      title: "Push Test Issue",
+      purpose: "Test the push endpoint",
+      problem: "No push endpoint tested",
+      expectedOutcome: "Issue created on GitHub",
+      scopeBoundaries: "Push only",
+      technicalContext: "Express endpoint",
+      dependencies: [],
+      acceptanceCriteria: ["Issue created"],
+      testingExpectations: "Integration test",
+      researchLinks: [],
+      order: 1,
+      status,
+      filesToModify: [],
+      filesToRead: [],
+      securityChecklist: [],
+      verificationCommands: [],
+    }),
+  });
+  if (!draftSeedRes.ok) throw new Error(`Failed to seed issue draft: HTTP ${draftSeedRes.status}`);
+
+  return { sessionId, goalId, milestoneId, draftId };
+}
+
+async function testPushMilestoneNoAuth(): Promise<void> {
+  const res = await fetch(`${BASE}/api/milestones/unknown-ms/push-to-github`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ owner: "octocat", repo: "hello-world" }),
+  });
+  if (res.status !== 401 && res.status !== 404) {
+    throw new Error(`Expected 401 or 404 (env-token fallback), got ${res.status}`);
+  }
+}
+
+async function testPushMilestoneInvalidOwner(): Promise<void> {
+  const { milestoneId } = await seedPushScenario();
+  const res = await fetch(`${BASE}/api/milestones/${milestoneId}/push-to-github`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ owner: "bad owner!", repo: "hello-world" }),
+  });
+  if (res.status !== 400) throw new Error(`Expected 400, got ${res.status}`);
+  const data = await res.json();
+  if (!data.error || !data.error.includes("owner")) throw new Error("Expected error about owner");
+  log("  ", "Invalid owner → 400 with error message about 'owner'");
+}
+
+async function testPushMilestoneInvalidRepo(): Promise<void> {
+  const { milestoneId } = await seedPushScenario();
+  const res = await fetch(`${BASE}/api/milestones/${milestoneId}/push-to-github`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ owner: "octocat", repo: "bad repo name!" }),
+  });
+  if (res.status !== 400) throw new Error(`Expected 400, got ${res.status}`);
+  const data = await res.json();
+  if (!data.error || !data.error.includes("repo")) throw new Error("Expected error about repo");
+  log("  ", "Invalid repo → 400 with error message about 'repo'");
+}
+
+async function testPushMilestoneNotFound(): Promise<void> {
+  const res = await fetch(`${BASE}/api/milestones/nonexistent-ms/push-to-github`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ owner: "octocat", repo: "hello-world" }),
+  });
+  if (res.status !== 401 && res.status !== 404) throw new Error(`Expected 401 or 404 (env-token fallback), got ${res.status}`);
+  log("  ", "Non-existent milestone → 401/404");
+}
+
+async function testPushMilestoneIdempotency(): Promise<void> {
+  // Seed a milestone that already has a githubNumber — the endpoint should return it without calling GitHub
+  const ts = Date.now();
+  const sessionId = `push-idem-session-${ts}`;
+  const saveRes = await fetch(`${BASE}/api/sessions/${sessionId}/messages`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ messages: [{ role: "user", text: "idem test" }] }),
+  });
+  if (!saveRes.ok) throw new Error(`Failed to seed session: HTTP ${saveRes.status}`);
+
+  const goalId = `push-idem-goal-${ts}`;
+  const goalSeedRes = await fetch(`${BASE}/api/test/seed-goal`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({
+      id: goalId,
+      sessionId,
+      intent: "Idempotency test",
+      goal: "Test idempotency",
+      problemStatement: "Test",
+      businessValue: "High",
+      targetOutcome: "Works",
+      successCriteria: [],
+      assumptions: [],
+      constraints: [],
+      risks: [],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    }),
+  });
+  if (!goalSeedRes.ok) throw new Error(`Failed to seed goal: HTTP ${goalSeedRes.status}`);
+
+  const milestoneId = `push-idem-ms-${ts}`;
+  const msSeedRes = await fetch(`${BASE}/api/test/seed-milestone`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({
+      id: milestoneId,
+      goalId,
+      name: "Idempotent Milestone",
+      goal: "Already created",
+      scope: "Idempotency",
+      order: 1,
+      dependencies: [],
+      acceptanceCriteria: [],
+      exitCriteria: [],
+      status: "ready",
+      githubNumber: 42,
+      githubUrl: "https://github.com/octocat/hello-world/milestone/42",
+    }),
+  });
+  if (!msSeedRes.ok) throw new Error(`Failed to seed milestone: HTTP ${msSeedRes.status}`);
+
+  const res = await fetch(`${BASE}/api/milestones/${milestoneId}/push-to-github`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ owner: "octocat", repo: "hello-world" }),
+  });
+  if (!res.ok) throw new Error(`Expected 200, got ${res.status}`);
+  const data = await res.json();
+  if (data.githubNumber !== 42) throw new Error(`Expected githubNumber 42, got ${data.githubNumber}`);
+  if (!data.alreadyExisted) throw new Error("Expected alreadyExisted: true");
+  log("  ", "Milestone already pushed → idempotent 200 with alreadyExisted: true");
+}
+
+async function testPushIssueNoAuth(): Promise<void> {
+  const res = await fetch(`${BASE}/api/milestones/ms/issues/i/push-to-github`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ owner: "octocat", repo: "hello-world" }),
+  });
+  if (res.status !== 401 && res.status !== 404) {
+    throw new Error(`Expected 401 or 404 (env-token fallback), got ${res.status}`);
+  }
+}
+
+async function testPushIssueInvalidOwner(): Promise<void> {
+  const { milestoneId, draftId } = await seedPushScenario();
+  const res = await fetch(`${BASE}/api/milestones/${milestoneId}/issues/${draftId}/push-to-github`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ owner: "-invalid-", repo: "hello-world" }),
+  });
+  if (res.status !== 400) throw new Error(`Expected 400, got ${res.status}`);
+  const data = await res.json();
+  if (!data.error || !data.error.includes("owner")) throw new Error("Expected error about owner");
+  log("  ", "Invalid owner → 400 with error message about 'owner'");
+}
+
+async function testPushIssueNotReadyStatus(): Promise<void> {
+  const { milestoneId, draftId } = await seedPushScenario("draft");
+  const res = await fetch(`${BASE}/api/milestones/${milestoneId}/issues/${draftId}/push-to-github`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ owner: "octocat", repo: "hello-world" }),
+  });
+  if (res.status !== 400) throw new Error(`Expected 400 for non-ready draft, got ${res.status}`);
+  const data = await res.json();
+  if (!data.error || !data.error.includes("status")) throw new Error("Expected error about status");
+  log("  ", "Non-ready draft → 400 with error message about 'status'");
+}
+
+async function testPushIssueNotFound(): Promise<void> {
+  const { milestoneId } = await seedPushScenario();
+  const res = await fetch(`${BASE}/api/milestones/${milestoneId}/issues/nonexistent-draft/push-to-github`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ owner: "octocat", repo: "hello-world" }),
+  });
+  if (res.status !== 401 && res.status !== 404) throw new Error(`Expected 401 or 404, got ${res.status}`);
+  log("  ", "Non-existent issue draft → 401/404");
+}
+
+async function testPushIssueMilestoneNotFound(): Promise<void> {
+  const { draftId } = await seedPushScenario();
+  const res = await fetch(`${BASE}/api/milestones/nonexistent-ms/issues/${draftId}/push-to-github`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ owner: "octocat", repo: "hello-world" }),
+  });
+  if (res.status !== 401 && res.status !== 404) throw new Error(`Expected 401 or 404, got ${res.status}`);
+  log("  ", "Non-existent milestone for issue push → 401/404");
+}
+
+async function testPushIssueIDORGuard(): Promise<void> {
+  // Create two separate milestones and verify that drafts can't be pushed via the wrong milestone
+  const scenario1 = await seedPushScenario("ready");
+  const scenario2 = await seedPushScenario("ready");
+
+  // Try to push draft from scenario1 via milestone from scenario2 (IDOR attempt)
+  const res = await fetch(
+    `${BASE}/api/milestones/${scenario2.milestoneId}/issues/${scenario1.draftId}/push-to-github`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+      body: JSON.stringify({ owner: "octocat", repo: "hello-world" }),
+    }
+  );
+  if (res.status !== 404) throw new Error(`Expected 404 for IDOR attempt, got ${res.status}`);
+  log("  ", "IDOR: draft from wrong milestone → 404");
+}
+
+async function testPushIssueInvalidLabels(): Promise<void> {
+  const { milestoneId, draftId } = await seedPushScenario();
+  const res = await fetch(`${BASE}/api/milestones/${milestoneId}/issues/${draftId}/push-to-github`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...testAuthHeaders() },
+    body: JSON.stringify({ owner: "octocat", repo: "hello-world", labels: "not-an-array" }),
+  });
+  if (res.status !== 400) throw new Error(`Expected 400 for invalid labels, got ${res.status}`);
+  const data = await res.json();
+  if (!data.error || !data.error.includes("labels")) throw new Error("Expected error about labels");
+  log("  ", "Invalid labels (not array) → 400 with error message about 'labels'");
+}
+
+// ============================================================
 // Main
 // ============================================================
 
@@ -4105,6 +4402,22 @@ async function main() {
   await run("GET /api/milestones/:id/issues returns 404 for unknown milestone", testIssueDraftsGetNotFound);
   await run("GET /api/milestones/:id/issues returns empty array for milestone with no drafts", testIssueDraftsGetEmptyForMilestoneWithNoIssues);
   await run("Issue draft seed → get round-trip (ordered)", testIssueDraftsSeedAndRetrieve);
+
+  // --- Push-to-GitHub API tests ---
+  console.log("\n── Push-to-GitHub API Tests ──\n");
+
+  await run("POST /api/milestones/:id/push-to-github — no auth returns 401 (or 404 with env token)", testPushMilestoneNoAuth);
+  await run("POST /api/milestones/:id/push-to-github — invalid owner returns 400", testPushMilestoneInvalidOwner);
+  await run("POST /api/milestones/:id/push-to-github — invalid repo returns 400", testPushMilestoneInvalidRepo);
+  await run("POST /api/milestones/:id/push-to-github — not found returns 401 or 404", testPushMilestoneNotFound);
+  await run("POST /api/milestones/:id/push-to-github — idempotent when githubNumber exists", testPushMilestoneIdempotency);
+  await run("POST /api/milestones/:milestoneId/issues/:issueId/push-to-github — no auth returns 401 (or 404 with env token)", testPushIssueNoAuth);
+  await run("POST /api/milestones/:milestoneId/issues/:issueId/push-to-github — invalid owner returns 400", testPushIssueInvalidOwner);
+  await run("POST /api/milestones/:milestoneId/issues/:issueId/push-to-github — draft status returns 400", testPushIssueNotReadyStatus);
+  await run("POST /api/milestones/:milestoneId/issues/:issueId/push-to-github — unknown draft returns 401 or 404", testPushIssueNotFound);
+  await run("POST /api/milestones/:milestoneId/issues/:issueId/push-to-github — unknown milestone returns 401 or 404", testPushIssueMilestoneNotFound);
+  await run("POST /api/milestones/:milestoneId/issues/:issueId/push-to-github — IDOR guard returns 404", testPushIssueIDORGuard);
+  await run("POST /api/milestones/:milestoneId/issues/:issueId/push-to-github — invalid labels returns 400", testPushIssueInvalidLabels);
 
   // Cleanup
   serverProcess.kill();

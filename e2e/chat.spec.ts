@@ -1932,3 +1932,214 @@ test("issue draft page: empty milestone shows correct empty state", async ({ pag
   await expect(page.locator("#issue-page-content .dashboard-empty")).toBeVisible({ timeout: 5_000 });
   await expect(page.locator("#issue-page-content .dashboard-empty")).toContainText("No issue drafts");
 });
+
+// ============================================================
+// Push Approval Workflow E2E Tests
+// ============================================================
+
+/** Stubs push-to-github API route with a successful response. */
+async function stubPushMilestoneRoute(page: Page, milestoneId: string) {
+  await page.route(`**/api/milestones/${milestoneId}/push-to-github`, (route) => {
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        milestoneId,
+        githubNumber: 7,
+        githubUrl: "https://github.com/octocat/hello-world/milestone/7",
+        alreadyExisted: false,
+      }),
+    });
+  });
+}
+
+/** Stubs push-to-github API route for an issue with a successful response. */
+async function stubPushIssueRoute(page: Page, milestoneId: string, issueId: string) {
+  await page.route(`**/api/milestones/${milestoneId}/issues/${issueId}/push-to-github`, (route) => {
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        draftId: issueId,
+        githubIssueNumber: 42,
+        githubIssueUrl: "https://github.com/octocat/hello-world/issues/42",
+        alreadyCreated: false,
+      }),
+    });
+  });
+}
+
+test("push approval: Push to GitHub button is visible after goals load", async ({ page }) => {
+  await stubIssueRoutes(page);
+  await page.goto("/");
+  await page.evaluate(() => localStorage.setItem("copilot_github_token", "fake-test-token"));
+
+  await page.locator("#view-toggle-btn").click();
+  await page.locator(".dashboard-nav-item[data-page='issues']").click();
+
+  // Wait for issue drafts to load
+  await expect(page.locator(".issue-draft-item").first()).toBeVisible({ timeout: 10_000 });
+
+  // Push button should be visible
+  await expect(page.locator("#push-to-github-btn")).toBeVisible();
+});
+
+test("push approval: push button hidden when no token", async ({ page }) => {
+  await page.route("**/api/health", (route) => {
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ status: "ok", storage: "memory" }) });
+  });
+  await page.goto("/");
+  // No token set — localStorage empty
+
+  await page.locator("#view-toggle-btn").click();
+  await page.locator(".dashboard-nav-item[data-page='issues']").click();
+
+  // Button should not be visible (no goals loaded)
+  await expect(page.locator("#push-to-github-btn")).not.toBeVisible();
+});
+
+test("push approval: modal opens and closes", async ({ page }) => {
+  await stubIssueRoutes(page);
+  await page.goto("/");
+  await page.evaluate(() => localStorage.setItem("copilot_github_token", "fake-test-token"));
+
+  await page.locator("#view-toggle-btn").click();
+  await page.locator(".dashboard-nav-item[data-page='issues']").click();
+  await expect(page.locator(".issue-draft-item").first()).toBeVisible({ timeout: 10_000 });
+
+  // Open modal
+  await page.locator("#push-to-github-btn").click();
+  await expect(page.locator("#push-modal")).toBeVisible({ timeout: 5_000 });
+
+  // Close modal with X button
+  await page.locator("#push-modal-close").click();
+  await expect(page.locator("#push-modal")).not.toBeVisible();
+});
+
+test("push approval: modal closes on Escape key", async ({ page }) => {
+  await stubIssueRoutes(page);
+  await page.goto("/");
+  await page.evaluate(() => localStorage.setItem("copilot_github_token", "fake-test-token"));
+
+  await page.locator("#view-toggle-btn").click();
+  await page.locator(".dashboard-nav-item[data-page='issues']").click();
+  await expect(page.locator(".issue-draft-item").first()).toBeVisible({ timeout: 10_000 });
+
+  await page.locator("#push-to-github-btn").click();
+  await expect(page.locator("#push-modal")).toBeVisible({ timeout: 5_000 });
+
+  await page.keyboard.press("Escape");
+  await expect(page.locator("#push-modal")).not.toBeVisible();
+});
+
+test("push approval: confirm button disabled without owner/repo inputs", async ({ page }) => {
+  await stubIssueRoutes(page);
+  await page.goto("/");
+  await page.evaluate(() => localStorage.setItem("copilot_github_token", "fake-test-token"));
+
+  await page.locator("#view-toggle-btn").click();
+  await page.locator(".dashboard-nav-item[data-page='issues']").click();
+  await expect(page.locator(".issue-draft-item").first()).toBeVisible({ timeout: 10_000 });
+
+  await page.locator("#push-to-github-btn").click();
+  await expect(page.locator("#push-modal")).toBeVisible({ timeout: 5_000 });
+
+  // Wait for mutations to load
+  await expect(page.locator("#push-mutation-list")).not.toContainText("Loading", { timeout: 5_000 });
+
+  // Confirm button should be disabled without owner/repo
+  await page.locator("#push-owner-input").fill("");
+  await page.locator("#push-repo-input").fill("");
+  await expect(page.locator("#push-confirm-btn")).toBeDisabled();
+});
+
+test("push approval: confirm button enabled when owner+repo are valid and mutations exist", async ({ page }) => {
+  await stubIssueRoutes(page);
+  await page.goto("/");
+  await page.evaluate(() => localStorage.setItem("copilot_github_token", "fake-test-token"));
+
+  await page.locator("#view-toggle-btn").click();
+  await page.locator(".dashboard-nav-item[data-page='issues']").click();
+  await expect(page.locator(".issue-draft-item").first()).toBeVisible({ timeout: 10_000 });
+
+  await page.locator("#push-to-github-btn").click();
+  await expect(page.locator("#push-modal")).toBeVisible({ timeout: 5_000 });
+
+  // Wait for mutations to load
+  await expect(page.locator("#push-mutation-list")).not.toContainText("Loading", { timeout: 5_000 });
+
+  // Fill in owner and repo
+  await page.locator("#push-owner-input").fill("octocat");
+  await page.locator("#push-repo-input").fill("hello-world");
+
+  // Confirm button should be enabled (there is a new issue "issue-2" in ready status)
+  await expect(page.locator("#push-confirm-btn")).not.toBeDisabled();
+});
+
+test("push approval: happy path — progress then results shown", async ({ page }) => {
+  await stubIssueRoutes(page);
+  await stubPushMilestoneRoute(page, STUB_MILESTONE_ID_A);
+  await stubPushIssueRoute(page, STUB_MILESTONE_ID_A, "issue-2");
+
+  await page.goto("/");
+  await page.evaluate(() => localStorage.setItem("copilot_github_token", "fake-test-token"));
+
+  await page.locator("#view-toggle-btn").click();
+  await page.locator(".dashboard-nav-item[data-page='issues']").click();
+  await expect(page.locator(".issue-draft-item").first()).toBeVisible({ timeout: 10_000 });
+
+  await page.locator("#push-to-github-btn").click();
+  await expect(page.locator("#push-modal")).toBeVisible({ timeout: 5_000 });
+
+  // Wait for mutation list to load
+  await expect(page.locator("#push-mutation-list")).not.toContainText("Loading", { timeout: 5_000 });
+
+  // Fill in owner/repo and confirm
+  await page.locator("#push-owner-input").fill("octocat");
+  await page.locator("#push-repo-input").fill("hello-world");
+  await page.locator("#push-confirm-btn").click();
+
+  // Progress step should appear
+  await expect(page.locator("#push-modal-progress")).toBeVisible({ timeout: 5_000 });
+
+  // Results step should appear after progress
+  await expect(page.locator("#push-modal-results")).toBeVisible({ timeout: 15_000 });
+  await expect(page.locator("#push-results-summary")).toBeVisible();
+
+  // Done button closes the modal
+  await page.locator("#push-done-btn").click();
+  await expect(page.locator("#push-modal")).not.toBeVisible();
+});
+
+test("push approval: partial failure shown in results", async ({ page }) => {
+  await stubIssueRoutes(page);
+  await stubPushMilestoneRoute(page, STUB_MILESTONE_ID_A);
+
+  // Stub issue push to return a 500 error
+  await page.route(`**/api/milestones/${STUB_MILESTONE_ID_A}/issues/issue-2/push-to-github`, (route) => {
+    route.fulfill({
+      status: 500,
+      contentType: "application/json",
+      body: JSON.stringify({ error: "GitHub API error: repository not found" }),
+    });
+  });
+
+  await page.goto("/");
+  await page.evaluate(() => localStorage.setItem("copilot_github_token", "fake-test-token"));
+
+  await page.locator("#view-toggle-btn").click();
+  await page.locator(".dashboard-nav-item[data-page='issues']").click();
+  await expect(page.locator(".issue-draft-item").first()).toBeVisible({ timeout: 10_000 });
+
+  await page.locator("#push-to-github-btn").click();
+  await expect(page.locator("#push-modal")).toBeVisible({ timeout: 5_000 });
+  await expect(page.locator("#push-mutation-list")).not.toContainText("Loading", { timeout: 5_000 });
+
+  await page.locator("#push-owner-input").fill("octocat");
+  await page.locator("#push-repo-input").fill("hello-world");
+  await page.locator("#push-confirm-btn").click();
+
+  // Results step should appear with partial failure summary
+  await expect(page.locator("#push-modal-results")).toBeVisible({ timeout: 15_000 });
+  await expect(page.locator("#push-results-summary")).toContainText("failed");
+});

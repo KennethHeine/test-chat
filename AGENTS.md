@@ -128,6 +128,8 @@
 | GET | `/api/goals/:id/milestones` | Bearer token | List milestones for a goal in order |
 | GET | `/api/milestones/:id/issues` | Bearer token | List issue drafts for a milestone in order |
 | PATCH | `/api/milestones/:milestoneId/issues/:issueId` | Bearer token | Update fields/status on an issue draft |
+| POST | `/api/milestones/:id/push-to-github` | Bearer token | Push a planning milestone to GitHub (idempotent) |
+| POST | `/api/milestones/:milestoneId/issues/:issueId/push-to-github` | Bearer token | Push a ready issue draft to GitHub as a real issue (idempotent) |
 
 ## SDK Quick Reference
 

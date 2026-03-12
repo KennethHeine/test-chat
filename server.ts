@@ -5,7 +5,7 @@ import { fileURLToPath } from "url";
 import { config } from "dotenv";
 import path from "path";
 import { createSessionStore, hashToken, AzureSessionStore, InMemorySessionStore, type SessionStore } from "./storage.js";
-import { createGitHubTools, GITHUB_TOOL_NAMES } from "./tools.js";
+import { createGitHubTools, GITHUB_TOOL_NAMES, githubFetch, githubWrite, buildIssueBody } from "./tools.js";
 import { InMemoryPlanningStore, AzurePlanningStore, createPlanningStore, type PlanningStore } from "./planning-store.js";
 import { createPlanningTools } from "./planning-tools.js";
 
@@ -1186,6 +1186,242 @@ app.patch("/api/milestones/:milestoneId/issues/:issueId", async (req: Request, r
     res.json(updated);
   } catch (err: any) {
     res.status(500).json({ error: err.message || "Failed to update issue draft" });
+  }
+});
+
+// Validation pattern for GitHub owner and repo names
+const GITHUB_OWNER_RE = /^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,37}[a-zA-Z0-9])?$/;
+const GITHUB_REPO_RE = /^[a-zA-Z0-9._-]{1,100}$/;
+
+// Push a single planning milestone to GitHub as a real GitHub Milestone.
+// Idempotent: if milestone already has a githubNumber, returns existing data.
+app.post("/api/milestones/:id/push-to-github", async (req: Request, res: Response) => {
+  const token = extractToken(req);
+  if (!token) {
+    res.status(401).json({ error: "Missing token. Provide Authorization: Bearer <token> header." });
+    return;
+  }
+
+  const milestoneId = req.params.id as string;
+  const body = req.body as Record<string, unknown>;
+
+  const owner = typeof body.owner === "string" ? body.owner.trim() : "";
+  const repo = typeof body.repo === "string" ? body.repo.trim() : "";
+
+  if (!owner || !GITHUB_OWNER_RE.test(owner)) {
+    res.status(400).json({ error: "owner must be a valid GitHub username or organization name" });
+    return;
+  }
+  if (!repo || !GITHUB_REPO_RE.test(repo)) {
+    res.status(400).json({ error: "repo must be a valid GitHub repository name" });
+    return;
+  }
+
+  try {
+    const milestone = await planningStore.getMilestone(milestoneId);
+    if (!milestone) {
+      res.status(404).json({ error: "Milestone not found" });
+      return;
+    }
+
+    const goal = await getOwnedGoal(token, milestone.goalId);
+    if (!goal) {
+      res.status(404).json({ error: "Milestone not found" });
+      return;
+    }
+
+    // Idempotency: if already pushed, return existing data
+    if (milestone.githubNumber !== undefined) {
+      res.json({
+        milestoneId,
+        githubNumber: milestone.githubNumber,
+        githubUrl: milestone.githubUrl,
+        alreadyExisted: true,
+      });
+      return;
+    }
+
+    const title = milestone.name;
+    const description = milestone.goal;
+
+    // Check for existing GitHub milestone with the same title (pagination)
+    let githubNumber: number | undefined;
+    let githubUrl: string | undefined;
+    let page = 1;
+    while (githubNumber === undefined) {
+      const existing = (await githubFetch(
+        token,
+        `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/milestones?state=all&per_page=100&page=${page}`
+      )) as any[];
+      const match = existing.find((m: any) => m.title === title);
+      if (match) {
+        githubNumber = match.number;
+        githubUrl = match.html_url;
+        break;
+      }
+      if (existing.length < 100) break;
+      page += 1;
+    }
+
+    if (githubNumber === undefined) {
+      const created = (await githubWrite(
+        token,
+        "POST",
+        `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/milestones`,
+        { title, description }
+      )) as any;
+      githubNumber = created.number;
+      githubUrl = created.html_url;
+    }
+
+    const updated = await planningStore.updateMilestone(milestoneId, { githubNumber, githubUrl });
+    if (!updated) {
+      res.status(404).json({ error: "Milestone not found after update" });
+      return;
+    }
+
+    res.json({ milestoneId, githubNumber, githubUrl, alreadyExisted: false });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Failed to push milestone to GitHub" });
+  }
+});
+
+// Push a single issue draft to GitHub as a real GitHub Issue.
+// Only "ready" drafts are accepted. Idempotent: if already "created", returns existing data.
+app.post("/api/milestones/:milestoneId/issues/:issueId/push-to-github", async (req: Request, res: Response) => {
+  const token = extractToken(req);
+  if (!token) {
+    res.status(401).json({ error: "Missing token. Provide Authorization: Bearer <token> header." });
+    return;
+  }
+
+  const milestoneId = req.params.milestoneId as string;
+  const issueId = req.params.issueId as string;
+  const body = req.body as Record<string, unknown>;
+
+  const owner = typeof body.owner === "string" ? body.owner.trim() : "";
+  const repo = typeof body.repo === "string" ? body.repo.trim() : "";
+
+  if (!owner || !GITHUB_OWNER_RE.test(owner)) {
+    res.status(400).json({ error: "owner must be a valid GitHub username or organization name" });
+    return;
+  }
+  if (!repo || !GITHUB_REPO_RE.test(repo)) {
+    res.status(400).json({ error: "repo must be a valid GitHub repository name" });
+    return;
+  }
+
+  // Validate optional labels array
+  let labels: string[] = [];
+  if (body.labels !== undefined) {
+    if (!Array.isArray(body.labels) || !body.labels.every((l) => typeof l === "string")) {
+      res.status(400).json({ error: "labels must be an array of strings" });
+      return;
+    }
+    labels = Array.from(
+      new Set(
+        (body.labels as string[])
+          .map((l) => l.trim())
+          .filter((l) => l.length > 0)
+      )
+    );
+  }
+
+  try {
+    const milestone = await planningStore.getMilestone(milestoneId);
+    if (!milestone) {
+      res.status(404).json({ error: "Milestone not found" });
+      return;
+    }
+
+    const goal = await getOwnedGoal(token, milestone.goalId);
+    if (!goal) {
+      res.status(404).json({ error: "Milestone not found" });
+      return;
+    }
+
+    // IDOR guard: verify the issue draft belongs to the stated milestone
+    const draft = await planningStore.getIssueDraft(issueId);
+    if (!draft || draft.milestoneId !== milestoneId) {
+      res.status(404).json({ error: "Issue draft not found" });
+      return;
+    }
+
+    // Idempotency: if already created, return existing data
+    if (draft.status === "created") {
+      if (draft.githubIssueNumber === undefined) {
+        res.status(500).json({ error: "Issue draft is in 'created' status but is missing githubIssueNumber" });
+        return;
+      }
+      res.json({
+        draftId: issueId,
+        githubIssueNumber: draft.githubIssueNumber,
+        // Use the persisted URL if available; fall back to constructing from the current request's owner/repo
+        githubIssueUrl: draft.githubIssueUrl ?? `https://github.com/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues/${draft.githubIssueNumber}`,
+        alreadyCreated: true,
+      });
+      return;
+    }
+
+    if (draft.status !== "ready") {
+      res.status(400).json({ error: `Issue draft has status '${draft.status}' — only 'ready' drafts can be pushed to GitHub` });
+      return;
+    }
+
+    // Fetch ResearchItems for the Research Context section concurrently
+    const researchItemResults = await Promise.all(
+      draft.researchLinks.map((researchId) => planningStore.getResearchItem(researchId))
+    );
+    const researchItems: import("./planning-types.js").ResearchItem[] = researchItemResults.filter(
+      (item): item is import("./planning-types.js").ResearchItem => item != null
+    );
+
+    const issueBody = buildIssueBody(draft, researchItems);
+
+    const requestBody: Record<string, unknown> = {
+      title: draft.title,
+      body: issueBody,
+    };
+
+    // Associate with GitHub Milestone if one has been created
+    if (milestone.githubNumber !== undefined) {
+      requestBody.milestone = milestone.githubNumber;
+    }
+
+    if (labels.length > 0) {
+      requestBody.labels = labels;
+    }
+
+    const created = (await githubWrite(
+      token,
+      "POST",
+      `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues`,
+      requestBody
+    )) as any;
+
+    if (!created.number || !Number.isFinite(created.number)) {
+      res.status(500).json({ error: "GitHub API response is missing a valid issue number" });
+      return;
+    }
+
+    const updatedDraft = await planningStore.updateIssueDraft(issueId, {
+      status: "created",
+      githubIssueNumber: created.number,
+      githubIssueUrl: created.html_url,
+    });
+    if (!updatedDraft) {
+      res.status(404).json({ error: "Issue draft not found after update" });
+      return;
+    }
+
+    res.json({
+      draftId: issueId,
+      githubIssueNumber: created.number,
+      githubIssueUrl: created.html_url,
+      alreadyCreated: false,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Failed to push issue to GitHub" });
   }
 });
 
