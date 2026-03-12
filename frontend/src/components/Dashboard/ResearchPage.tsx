@@ -12,7 +12,7 @@ interface ResearchPageProps {
   active: boolean;
 }
 
-export function ResearchPage({ token, active }: ResearchPageProps) {
+export function ResearchPage({ active }: ResearchPageProps) {
   const [goals, setGoals] = useState<Goal[]>([]);
   const [selectedGoalId, setSelectedGoalId] = useState<string>("");
   const [items, setItems] = useState<ResearchItem[]>([]);
@@ -23,7 +23,6 @@ export function ResearchPage({ token, active }: ResearchPageProps) {
   const [editStatus, setEditStatus] = useState("");
 
   const loadGoals = useCallback(async () => {
-    if (!token) return;
     try {
       const res = await apiFetch("/api/goals");
       if (!res.ok) return;
@@ -36,7 +35,7 @@ export function ResearchPage({ token, active }: ResearchPageProps) {
     } catch (err) {
       console.warn("Failed to load goals:", err);
     }
-  }, [token, selectedGoalId]);
+  }, [selectedGoalId]);
 
   const loadResearch = useCallback(
     async (goalId: string) => {
@@ -51,7 +50,7 @@ export function ResearchPage({ token, active }: ResearchPageProps) {
           return;
         }
         const data = await res.json();
-        setItems(data.items || []);
+        setItems(data.items || data.research || []);
       } catch (err) {
         console.warn("Failed to load research:", err);
         setItems([]);
@@ -75,6 +74,10 @@ export function ResearchPage({ token, active }: ResearchPageProps) {
     setEditFindings(item.findings || "");
     setEditDecision(item.decision || "");
     setEditStatus(item.status || "open");
+  }, []);
+
+  const cancelEditing = useCallback(() => {
+    setEditingItem(null);
   }, []);
 
   const saveEdit = useCallback(
@@ -116,6 +119,16 @@ export function ResearchPage({ token, active }: ResearchPageProps) {
     ),
   ];
 
+  // Summary counts
+  const total = items.length;
+  const resolved = items.filter((i) => i.status === "resolved").length;
+  const researching = items.filter((i) => i.status === "researching").length;
+  const open = total - resolved - researching;
+  const summaryParts: string[] = [];
+  if (open > 0) summaryParts.push(`Open: ${open}`);
+  if (researching > 0) summaryParts.push(`Researching: ${researching}`);
+  if (resolved > 0) summaryParts.push(`Resolved: ${resolved}`);
+
   return (
     <>
       <div className="dashboard-page-header">
@@ -154,113 +167,125 @@ export function ResearchPage({ token, active }: ResearchPageProps) {
             </p>
           </div>
         ) : (
-          orderedKeys.map((category) => (
-            <div key={category} className="research-category-group">
-              <div className="research-category-header">
-                {CATEGORY_LABELS[category] || "Other"}
-              </div>
-              {grouped.get(category)!.map((item) => (
-                <div
-                  key={item.id}
-                  className="research-tracker-item"
-                  data-item-id={item.id}
-                >
-                  <div className="research-tracker-header">
-                    <span
-                      className={`research-tracker-status status-${VALID_STATUSES.includes(item.status) ? item.status : "open"}`}
+          <>
+            {orderedKeys.map((category) => (
+              <div key={category} className="research-tracker-category">
+                <div className="research-category-header">
+                  {CATEGORY_LABELS[category] || "Other"}
+                </div>
+                {grouped.get(category)!.map((item) => {
+                  const isEditing = editingItem === item.id;
+                  const statusClass = VALID_STATUSES.includes(item.status)
+                    ? item.status
+                    : "open";
+                  return (
+                    <div
+                      key={item.id}
+                      className="research-tracker-item"
+                      data-item-id={item.id}
                     >
-                      {VALID_STATUSES.includes(item.status)
-                        ? item.status
-                        : "open"}
-                    </span>
-                    <span className="research-item-question">
-                      {item.question}
-                    </span>
-                    <button
-                      className="research-tracker-edit-btn"
-                      onClick={() => startEditing(item)}
-                    >
-                      ✏️
-                    </button>
-                  </div>
-                  {item.findings && editingItem !== item.id && (
-                    <div className="research-tracker-summary">
-                      <strong>Findings:</strong> {item.findings}
-                    </div>
-                  )}
-                  {item.decision && editingItem !== item.id && (
-                    <div className="research-tracker-summary">
-                      <strong>Decision:</strong> {item.decision}
-                    </div>
-                  )}
-                  {item.sourceUrl && editingItem !== item.id && (
-                    <div className="research-tracker-summary">
-                      <a
-                        href={item.sourceUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                      >
-                        Source
-                      </a>
-                    </div>
-                  )}
-                  {editingItem === item.id && (
-                    <div className="research-tracker-edit">
-                      <label>
-                        Status:
-                        <select
-                          value={editStatus}
-                          onChange={(e) =>
-                            setEditStatus(e.target.value)
-                          }
+                      <div className="research-tracker-header">
+                        <span
+                          className={`research-item-status status-${statusClass}`}
                         >
-                          {VALID_STATUSES.map((s) => (
-                            <option key={s} value={s}>
-                              {s}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                      <label>
-                        Findings:
-                        <textarea
-                          className="research-tracker-textarea"
-                          value={editFindings}
-                          onChange={(e) =>
-                            setEditFindings(e.target.value)
-                          }
-                        />
-                      </label>
-                      <label>
-                        Decision:
-                        <textarea
-                          className="research-tracker-textarea"
-                          value={editDecision}
-                          onChange={(e) =>
-                            setEditDecision(e.target.value)
-                          }
-                        />
-                      </label>
-                      <div className="research-tracker-edit-actions">
+                          {statusClass}
+                        </span>
+                        <span className="research-item-question">
+                          {item.question}
+                        </span>
                         <button
-                          className="btn"
-                          onClick={() => saveEdit(item)}
+                          className="research-tracker-edit-btn"
+                          style={{ display: isEditing ? "none" : undefined }}
+                          onClick={() => startEditing(item)}
                         >
-                          Save
-                        </button>
-                        <button
-                          className="btn"
-                          onClick={() => setEditingItem(null)}
-                        >
-                          Cancel
+                          ✏️
                         </button>
                       </div>
+                      {item.findings && !isEditing && (
+                        <div className="research-tracker-findings research-tracker-summary">
+                          <strong>Findings:</strong> {item.findings}
+                        </div>
+                      )}
+                      {item.decision && !isEditing && (
+                        <div className="research-tracker-summary">
+                          <strong>Decision:</strong> {item.decision}
+                        </div>
+                      )}
+                      {item.sourceUrl && !isEditing && (
+                        <div className="research-tracker-summary">
+                          <a
+                            href={item.sourceUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >
+                            Source
+                          </a>
+                        </div>
+                      )}
+                      {isEditing && (
+                        <div className="research-tracker-edit">
+                          <label>
+                            Status:
+                            <select
+                              value={editStatus}
+                              onChange={(e) =>
+                                setEditStatus(e.target.value)
+                              }
+                            >
+                              {VALID_STATUSES.map((s) => (
+                                <option key={s} value={s}>
+                                  {s}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          <label>
+                            Findings:
+                            <textarea
+                              className="research-tracker-textarea"
+                              value={editFindings}
+                              onChange={(e) =>
+                                setEditFindings(e.target.value)
+                              }
+                            />
+                          </label>
+                          <label>
+                            Decision:
+                            <textarea
+                              className="research-tracker-textarea"
+                              value={editDecision}
+                              onChange={(e) =>
+                                setEditDecision(e.target.value)
+                              }
+                            />
+                          </label>
+                          <div className="research-tracker-edit-actions">
+                            <button
+                              className="research-tracker-save-btn btn"
+                              onClick={() => saveEdit(item)}
+                            >
+                              Save
+                            </button>
+                            <button
+                              className="research-tracker-cancel-btn btn"
+                              onClick={cancelEditing}
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        </div>
+                      )}
                     </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          ))
+                  );
+                })}
+              </div>
+            ))}
+            {summaryParts.length > 0 && (
+              <div className="research-tracker-summary research-page-summary">
+                {summaryParts.join(" · ")}
+              </div>
+            )}
+          </>
         )}
       </div>
     </>

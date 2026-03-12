@@ -8,7 +8,7 @@ interface MilestonesPageProps {
   active: boolean;
 }
 
-export function MilestonesPage({ token, active }: MilestonesPageProps) {
+export function MilestonesPage({ active }: MilestonesPageProps) {
   const [goals, setGoals] = useState<Goal[]>([]);
   const [selectedGoalId, setSelectedGoalId] = useState<string>("");
   const [milestones, setMilestones] = useState<Milestone[]>([]);
@@ -16,7 +16,6 @@ export function MilestonesPage({ token, active }: MilestonesPageProps) {
   const [isLoading, setIsLoading] = useState(false);
 
   const loadGoals = useCallback(async () => {
-    if (!token) return;
     try {
       const res = await apiFetch("/api/goals");
       if (!res.ok) return;
@@ -29,7 +28,7 @@ export function MilestonesPage({ token, active }: MilestonesPageProps) {
     } catch (err) {
       console.warn("Failed to load goals:", err);
     }
-  }, [token, selectedGoalId]);
+  }, [selectedGoalId]);
 
   const loadMilestones = useCallback(async (goalId: string) => {
     if (!goalId) return;
@@ -57,7 +56,7 @@ export function MilestonesPage({ token, active }: MilestonesPageProps) {
             );
             if (r.ok) {
               const d = await r.json();
-              counts[m.id] = d.issues?.length || 0;
+              counts[m.id] = (d.issues || []).length;
             }
           } catch {
             counts[m.id] = 0;
@@ -86,6 +85,18 @@ export function MilestonesPage({ token, active }: MilestonesPageProps) {
   for (const ms of milestones) {
     if (ms.id) idToOrder.set(ms.id, ms.order);
   }
+
+  // Summary counts
+  const total = milestones.length;
+  const complete = milestones.filter((m) => m.status === "complete").length;
+  const inProgress = milestones.filter((m) => m.status === "in-progress").length;
+  const ready = milestones.filter((m) => m.status === "ready").length;
+  const draft = total - complete - inProgress - ready;
+  const summaryParts: string[] = [];
+  if (draft > 0) summaryParts.push(`Draft: ${draft}`);
+  if (ready > 0) summaryParts.push(`Ready: ${ready}`);
+  if (inProgress > 0) summaryParts.push(`In Progress: ${inProgress}`);
+  if (complete > 0) summaryParts.push(`Complete: ${complete}`);
 
   return (
     <>
@@ -124,75 +135,85 @@ export function MilestonesPage({ token, active }: MilestonesPageProps) {
             </p>
           </div>
         ) : (
-          milestones.map((ms) => {
-            const rawStatus = ms.status || DEFAULT_MILESTONE_STATUS;
-            const status = VALID_MILESTONE_STATUSES.includes(rawStatus)
-              ? rawStatus
-              : DEFAULT_MILESTONE_STATUS;
-            return (
-              <div
-                key={ms.id}
-                className="milestone-timeline-item"
-                data-milestone-id={ms.id}
-              >
-                <div className="milestone-timeline-header">
-                  <span className="milestone-order">#{ms.order}</span>
-                  <span className="milestone-timeline-name milestone-name">
-                    {ms.name}
-                  </span>
-                  <span
-                    className={`milestone-timeline-status milestone-status status-${status}`}
-                  >
-                    {status}
-                  </span>
-                </div>
-                {ms.goal && (
-                  <div className="milestone-timeline-summary">
-                    {ms.goal}
-                  </div>
-                )}
-                {ms.acceptanceCriteria &&
-                  ms.acceptanceCriteria.length > 0 && (
-                    <div className="milestone-acceptance">
-                      <strong>Acceptance:</strong>{" "}
-                      {ms.acceptanceCriteria.join("; ")}
-                    </div>
-                  )}
-                {Array.isArray(ms.dependencies) &&
-                  ms.dependencies.length > 0 && (
-                    <div className="milestone-deps">
-                      <span className="milestone-deps-label">
-                        Depends on:
-                      </span>{" "}
-                      {ms.dependencies
-                        .map((depId) => {
-                          const depOrder = idToOrder.get(depId);
-                          return depOrder !== undefined
-                            ? `#${depOrder}`
-                            : depId;
-                        })
-                        .join(", ")}
-                    </div>
-                  )}
-                {ms.githubUrl && (
-                  <div className="milestone-github-link">
-                    <a
-                      href={ms.githubUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
+          <>
+            {milestones.map((ms) => {
+              const rawStatus = ms.status || DEFAULT_MILESTONE_STATUS;
+              const status = VALID_MILESTONE_STATUSES.includes(rawStatus)
+                ? rawStatus
+                : DEFAULT_MILESTONE_STATUS;
+              const count = issueCounts[ms.id] ?? 0;
+              return (
+                <div
+                  key={ms.id}
+                  className="milestone-timeline-item"
+                  data-milestone-id={ms.id}
+                >
+                  <div className="milestone-timeline-header">
+                    <span className="milestone-timeline-order milestone-order">
+                      #{ms.order}
+                    </span>
+                    <span className="milestone-timeline-name milestone-name">
+                      {ms.name}
+                    </span>
+                    <span
+                      className={`milestone-timeline-status milestone-status status-${status}`}
                     >
-                      GitHub Milestone #{ms.githubNumber}
-                    </a>
+                      {status}
+                    </span>
                   </div>
-                )}
-                {issueCounts[ms.id] !== undefined && (
-                  <div className="milestone-issue-count">
-                    Issues: {issueCounts[ms.id]}
+                  {ms.goal && (
+                    <div className="milestone-timeline-goal milestone-timeline-summary">
+                      {ms.goal}
+                    </div>
+                  )}
+                  {ms.acceptanceCriteria &&
+                    ms.acceptanceCriteria.length > 0 && (
+                      <div className="milestone-acceptance">
+                        <strong>Acceptance:</strong>{" "}
+                        {ms.acceptanceCriteria.join("; ")}
+                      </div>
+                    )}
+                  {Array.isArray(ms.dependencies) &&
+                    ms.dependencies.length > 0 && (
+                      <div className="milestone-timeline-deps milestone-deps">
+                        <span className="milestone-deps-label">
+                          Depends on:
+                        </span>{" "}
+                        {ms.dependencies.map((depId, i) => {
+                          const depOrder = idToOrder.get(depId);
+                          const label =
+                            depOrder !== undefined ? `#${depOrder}` : depId;
+                          return (
+                            <span key={i} className="milestone-timeline-dep-tag">
+                              {label}
+                            </span>
+                          );
+                        })}
+                      </div>
+                    )}
+                  {ms.githubUrl && (
+                    <div className="milestone-github-link">
+                      <a
+                        href={ms.githubUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        GitHub Milestone #{ms.githubNumber}
+                      </a>
+                    </div>
+                  )}
+                  <div className="milestone-timeline-issue-count">
+                    {count} {count === 1 ? "issue" : "issues"}
                   </div>
-                )}
+                </div>
+              );
+            })}
+            {summaryParts.length > 0 && (
+              <div className="milestone-timeline-summary milestone-page-summary">
+                {summaryParts.join(" · ")}
               </div>
-            );
-          })
+            )}
+          </>
         )}
       </div>
     </>
