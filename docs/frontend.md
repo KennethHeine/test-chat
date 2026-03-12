@@ -1,14 +1,34 @@
 # Frontend Documentation
 
-The frontend is vanilla HTML, CSS, and JavaScript — no frameworks, no build step. Files are served as static assets by the Express server.
+The frontend is a React 19 + TypeScript application built with Vite. Source lives in `frontend/` and the production build outputs to `frontend/dist/`, which the Express server serves as static assets. The legacy `public/` directory is kept as a fallback.
 
 ## Files
 
-| File | Purpose |
+| File/Directory | Purpose |
 |------|---------|
-| `public/index.html` | Chat UI — GitHub dark theme, model selector, session sidebar |
-| `public/app.js` | Frontend logic — token management, SSE parsing, session management |
+| `frontend/src/App.tsx` | Root component — state management, global function exposure, SSE streaming |
+| `frontend/src/components/ChatArea.tsx` | Chat messages, goal/research/milestone cards, input area |
+| `frontend/src/components/Dashboard.tsx` | Dashboard view with Goals, Research, Milestones, Issues pages |
+| `frontend/src/components/Sidebar.tsx` | Session sidebar with switch/delete |
+| `frontend/src/components/StatusBar.tsx` | Connection status, tool activity, usage, quota |
+| `frontend/src/components/PushModal.tsx` | Multi-step push to GitHub workflow modal |
+| `frontend/src/components/GitHubIcon.tsx` | Shared GitHub SVG icon |
+| `frontend/src/utils/api.ts` | API fetch helper, HTML escape, date formatting |
+| `frontend/src/utils/types.ts` | Shared TypeScript types |
+| `frontend/src/index.css` | All CSS (extracted from original monolithic index.html) |
+| `frontend/src/main.tsx` | React entry point |
+| `frontend/index.html` | Vite HTML template |
+| `frontend/vite.config.ts` | Vite configuration |
 | `public/staticwebapp.config.json` | Azure Static Web Apps routing config |
+
+## Build & Dev Commands
+
+| Command | Description |
+|---------|-------------|
+| `cd frontend && npm ci` | Install frontend dependencies |
+| `cd frontend && npm run dev` | Start Vite dev server with HMR |
+| `cd frontend && npm run build` | TypeScript check + Vite production build → `frontend/dist/` |
+| `cd frontend && npx tsc -b` | TypeScript-only check (no build) |
 
 ## UI Layout
 
@@ -33,36 +53,53 @@ The frontend is vanilla HTML, CSS, and JavaScript — no frameworks, no build st
 └─────────────────────────────────────────────────────────┘
 ```
 
-**Theme:** GitHub dark mode (`#0d1117` background, `#e6edf3` text).
+**Theme:** GitHub dark mode (`#0d1117` background, `#e6edf3` text). CSS uses OKLCH color format via custom properties.
 
 ### Key UI Components
 
-| Component | Element ID | Description |
-|-----------|-----------|-------------|
-| Token input | `#token-input` | Text field for GitHub PAT entry |
-| Save/Clear Token | `#save-token-btn` | Toggles between save and clear token |
-| Model selector | `#model-select` | Dropdown populated from `/api/models` |
-| Reasoning effort | `#reasoning-effort-select` | Conditional dropdown — visible only when selected model supports reasoning |
-| New Chat | `#new-chat-btn` | Resets `sessionId`, clears messages, shows welcome screen |
-| Session sidebar | `#sessions-list` | List of previous conversations with timestamps |
-| Message input | `#message-input` | Textarea for user messages |
-| Send button | `#send-btn` | Sends the message (also triggered by Enter key) |
-| Stop button | `#stop-btn` | Cancels streaming via `POST /api/chat/abort` |
-| Status indicator | `#status` | Shows connection status (green dot = connected) |
-| Tool activity | In-chat indicator | Shows when the agent is executing a tool |
-| Token usage | Status bar | Displays per-message token count |
-| Quota display | Status bar | Shows remaining premium requests |
+| Component | Element ID | React Component |
+|-----------|-----------|-----------------|
+| Token input | `#token-input` | `App.tsx` |
+| Save Token | `#save-token-btn` | `App.tsx` |
+| Model selector | `#model-select` | `App.tsx` |
+| Reasoning effort | `#reasoning-effort-select` | `App.tsx` |
+| New Chat | `#new-chat-btn` | `App.tsx` |
+| Session sidebar | `#session-sidebar` | `Sidebar.tsx` |
+| Message input | `#message-input` | `ChatArea.tsx` |
+| Send button | `#send-btn` | `ChatArea.tsx` |
+| Stop button | `#stop-btn` | `ChatArea.tsx` |
+| Status indicator | `#status-dot` | `StatusBar.tsx` |
+| Dashboard view | `#dashboard-view` | `Dashboard.tsx` |
+| Push modal | `#push-modal` | `PushModal.tsx` |
 
 ## Application State
 
-The frontend manages view and conversation state across several variables:
+State is managed via React `useState` hooks in `App.tsx`. Key state variables:
 
-| Variable | Type | Purpose |
-|----------|------|---------|
-| `sessionId` | `string \| null` | Current session ID for multi-turn conversations. Reset to `null` on "New Chat". |
-| `isStreaming` | `boolean` | Prevents double-sending while a response is being streamed. |
-| `currentView` | `string` | Active top-level view: `"chat"` or `"dashboard"`. Persisted in `localStorage["copilot_current_view"]`. |
-| `currentDashboardPage` | `string` | Active dashboard page: `"goals"`, `"research"`, `"milestones"`, or `"issues"`. Persisted in `localStorage["copilot_dashboard_page"]`. |
+| State | Type | Purpose |
+|-------|------|---------|
+| `token` | `string` | GitHub PAT, initialized from `localStorage["copilot_github_token"]` |
+| `sessionId` | `string` | Current session ID for multi-turn conversations |
+| `chatItems` | `ChatItem[]` | Messages and cards (goals, research, milestones) in the chat |
+| `isStreaming` | `boolean` | Prevents double-sending while a response is being streamed |
+| `currentView` | `ViewMode` | Active view: `"chat"` or `"dashboard"`. Persisted in `localStorage["copilot_current_view"]` |
+| `currentDashboardPage` | `DashboardPage` | Active dashboard page. Persisted in `localStorage["copilot_dashboard_page"]` |
+| `models` | `ModelInfo[]` | Available models from `/api/models` |
+| `selectedModel` | `string` | Currently selected model ID |
+| `sessions` | `SessionData[]` | Session list for sidebar |
+| `sidebarOpen` | `boolean` | Sidebar visibility. Persisted in `localStorage["copilot_sidebar_collapsed"]` |
+
+### Global Function Exposure
+
+For E2E test compatibility, key functions are exposed on `window`:
+
+| Function | Purpose |
+|----------|---------|
+| `window.renderGoalCard(goal)` | Adds a goal card to the chat |
+| `window.handleToolComplete(event)` | Handles SSE tool_complete events |
+| `window.renderResearchChecklist(items)` | Adds a research checklist card to the chat |
+| `window.renderMilestoneTimeline(milestones)` | Adds a milestone timeline card to the chat |
+| `window.fetchAndRenderLatestGoal()` | Fetches and renders the latest goal |
 
 ## Token Management
 
