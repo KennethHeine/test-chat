@@ -1075,6 +1075,8 @@ app.patch("/api/milestones/:milestoneId/issues/:issueId", async (req: Request, r
   }
 
   // Validate string-array fields
+  const MAX_ARRAY_ITEMS = 50;
+  const MAX_ARRAY_ITEM_LENGTH = 500;
   const stringArrayFields = ["acceptanceCriteria", "securityChecklist", "verificationCommands", "researchLinks", "dependencies"];
   for (const key of stringArrayFields) {
     if (key in body) {
@@ -1082,7 +1084,18 @@ app.patch("/api/milestones/:milestoneId/issues/:issueId", async (req: Request, r
         res.status(400).json({ error: `${key} must be an array of strings` });
         return;
       }
-      (updates as Record<string, unknown>)[key] = (body[key] as string[]).map((s) => sanitizeResearchText(s.trim()));
+      const arr = body[key] as string[];
+      if (arr.length > MAX_ARRAY_ITEMS) {
+        res.status(400).json({ error: `${key} must have at most ${MAX_ARRAY_ITEMS} items` });
+        return;
+      }
+      for (const item of arr) {
+        if (item.trim().length > MAX_ARRAY_ITEM_LENGTH) {
+          res.status(400).json({ error: `${key} items must be at most ${MAX_ARRAY_ITEM_LENGTH} characters each` });
+          return;
+        }
+      }
+      (updates as Record<string, unknown>)[key] = arr.map((s) => sanitizeResearchText(s.trim()));
     }
   }
 
@@ -1108,6 +1121,14 @@ app.patch("/api/milestones/:milestoneId/issues/:issueId", async (req: Request, r
         }
         const trimmedPath = r.path.trim();
         const trimmedReason = r.reason.trim();
+        if (trimmedPath.length === 0) {
+          res.status(400).json({ error: `${key} path must not be empty` });
+          return;
+        }
+        if (trimmedReason.length === 0) {
+          res.status(400).json({ error: `${key} reason must not be empty` });
+          return;
+        }
         if (trimmedPath.length > MAX_ISSUE_FILE_PATH_LENGTH) {
           res.status(400).json({ error: `${key} path must be at most ${MAX_ISSUE_FILE_PATH_LENGTH} characters` });
           return;

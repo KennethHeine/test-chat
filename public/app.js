@@ -1538,32 +1538,35 @@ function renderIssueDraftItems(issues, milestoneId) {
       if (toApprove.length === 0) return;
       batchApproveBtn.disabled = true;
       batchApproveBtn.textContent = "Approving…";
-      let successCount = 0;
-      for (const draft of toApprove) {
-        try {
-          const r = await fetch(
+
+      const results = await Promise.allSettled(
+        toApprove.map((draft) =>
+          fetch(
             `/api/milestones/${encodeURIComponent(milestoneId)}/issues/${encodeURIComponent(draft.id)}`,
             {
               method: "PATCH",
               headers: { "Content-Type": "application/json", ...authHeaders() },
               body: JSON.stringify({ status: "ready" }),
             }
-          );
-          if (r.ok) {
+          ).then(async (r) => {
+            if (!r.ok) throw new Error(await r.json().then((e) => e.error || "Failed").catch(() => "Failed"));
             draft.status = "ready";
-            successCount++;
-          }
-        } catch {
-          // continue
-        }
-      }
+          })
+        )
+      );
+
+      const failCount = results.filter((r) => r.status === "rejected").length;
+      const successCount = results.filter((r) => r.status === "fulfilled").length;
+
       if (successCount > 0) {
         // Re-render with updated statuses
         renderIssueDraftItems(issues, milestoneId);
       } else {
         batchApproveBtn.disabled = false;
         batchApproveBtn.textContent = "Approve All";
-        alert("Failed to approve issue drafts. Please try again.");
+      }
+      if (failCount > 0) {
+        alert(`${failCount} issue draft${failCount !== 1 ? "s" : ""} could not be approved. Please try again.`);
       }
     });
   }
@@ -1587,10 +1590,10 @@ function renderIssueDraftItems(issues, milestoneId) {
 }
 
 /**
- * Generates a simple GitHub-style Markdown preview HTML from an issue draft.
- * Uses safe DOM operations to build the preview (no innerHTML from user data).
+ * Returns an HTML string intended for insertion via `element.innerHTML`, with all
+ * user-provided text content HTML-escaped to prevent XSS (no raw user text is inserted).
  * @param {Object} draft - IssueDraft object
- * @returns {string} - Safe HTML string for the preview
+ * @returns {string} - Escaped HTML string for the preview, safe for innerHTML
  */
 function buildIssueDraftMarkdownPreview(draft) {
   /** Escape text for safe insertion into HTML. */
@@ -1722,7 +1725,7 @@ function buildIssueDraftItem(draft, milestoneId, idToOrder) {
           const err = await res.json().catch(() => ({}));
           alert((err && err.error) ? err.error : "Failed to approve issue draft.");
           approveBtn.disabled = false;
-          approveBtn.textContent = rawStatus === "ready" ? "✓ Ready" : "Approve";
+          approveBtn.textContent = draft.status === "ready" ? "✓ Ready" : "Approve";
           return;
         }
         draft.status = "ready";
@@ -1734,7 +1737,7 @@ function buildIssueDraftItem(draft, milestoneId, idToOrder) {
         console.warn("Failed to approve issue draft:", err);
         alert("Failed to approve issue draft. Please try again.");
         approveBtn.disabled = false;
-        approveBtn.textContent = rawStatus === "ready" ? "✓ Ready" : "Approve";
+        approveBtn.textContent = draft.status === "ready" ? "✓ Ready" : "Approve";
       }
     });
     headerEl.appendChild(approveBtn);
@@ -1862,7 +1865,10 @@ function buildIssueDraftItem(draft, milestoneId, idToOrder) {
     return fieldEl;
   }
 
-  // Helper to render a read-only list field (array of strings)
+  // Helper to render a view-only list field (array of strings).
+  // Complex array fields (acceptanceCriteria, securityChecklist, verificationCommands,
+  // researchLinks, dependencies) are displayed as read-only; inline editing of these
+  // fields is out of scope for the initial issue draft manager.
   function buildListField(label, items) {
     const fieldEl = document.createElement("div");
     fieldEl.className = "issue-draft-field";
@@ -1894,7 +1900,8 @@ function buildIssueDraftItem(draft, milestoneId, idToOrder) {
     return fieldEl;
   }
 
-  // Helper to render a read-only FileRef list
+  // Helper to render a view-only FileRef list (filesToModify, filesToRead).
+  // FileRef array editing is out of scope for the initial issue draft manager.
   function buildFileRefField(label, refs) {
     const fieldEl = document.createElement("div");
     fieldEl.className = "issue-draft-field";
