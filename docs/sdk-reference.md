@@ -1340,7 +1340,6 @@ The SDK uses "Infinite Sessions" (enabled by default) to manage context windows:
 
 **This project's usage:** Infinite sessions are enabled by default (we don't override the setting), so compaction runs automatically. However, we don't:
 - Configure custom compaction thresholds
-- Listen to compaction events
 - Use the workspace path
 - Resume sessions after restart
 
@@ -1352,7 +1351,7 @@ The SDK uses "Infinite Sessions" (enabled by default) to manage context windows:
 | **No context replay** | When a new SDK session is created for an existing conversation, old messages are not replayed into it. | Model starts fresh even though messages are displayed. | Replay persisted messages into new sessions via `session.send()` calls, or use `resumeSession()` |
 | **Frontend-backend message divergence** | localStorage and sessionStore can hold different messages if the fire-and-forget `PUT` fails. | Messages visible in one browser tab may not appear in another. | Add retry logic or confirmation for message persistence |
 | **SDK context ≠ displayed messages** | The SDK's internal context (via `getMessages()`) returns `SessionEvent[]` which includes tool calls, reasoning, etc. Our storage only saves `ChatMessage[]` (role + text). | Tool call details and reasoning are lost in persistence. | Store full SDK events instead of simplified messages |
-| **No compaction visibility** | The SDK compacts context silently. Users don't know when older context is being summarized. | Long conversations may have subtly degraded recall of earlier topics. | Listen to `session.compaction_start/complete` events and show UI indicators |
+| **Compaction visibility** | The SDK compacts context silently. Users receive a `compaction` SSE event when compaction starts or completes, but no UI indicator is shown yet. | Long conversations may have subtly degraded recall of earlier topics with no visual feedback. | Show a "Optimizing context..." badge in the UI on `compaction` SSE events |
 | **No cross-device context** | SDK sessions are per-server-instance. A user on device A has a different SDK context than on device B, even for the same session ID. | Inconsistent model behavior across devices. | Would require a shared CLI server or session replay from storage |
 
 ---
@@ -1365,7 +1364,7 @@ This section catalogs every SDK feature that this project does **not** currently
 
 | Feature | SDK Method | What It Does | Used? |
 |---------|-----------|--------------|-------|
-| Resume sessions | `client.resumeSession(id, config)` | Reconnects to an existing CLI-side session, preserving full conversation context | ❌ |
+| Resume sessions | `client.resumeSession(id, config)` | Would reconnect to an existing CLI-side session, preserving full conversation context after restart | ❌ |
 | List SDK sessions | `client.listSessions(filter?)` | Lists sessions managed by the CLI (not our storage layer) | ❌ |
 | Delete SDK sessions | `client.deleteSession(id)` | Deletes a session and its data from the CLI's disk storage | ❌ |
 | Ping | `client.ping(message?)` | Health check — verifies RPC connection is alive | ❌ |
@@ -1381,9 +1380,9 @@ This section catalogs every SDK feature that this project does **not** currently
 | Feature | SDK Method | What It Does | Used? |
 |---------|-----------|--------------|-------|
 | Send and wait | `session.sendAndWait(options, timeout?)` | Sends a message and blocks until session is idle (returns complete response) | ❌ |
-| Abort | `session.abort()` | Cancels the currently processing message | ❌ |
+| Abort | `session.abort()` | Cancels the currently processing message | ✅ |
 | Get messages | `session.getMessages()` | Returns full conversation history from the CLI's internal state | ❌ |
-| Set model | `session.setModel(model)` | Changes the model for subsequent messages (without creating a new session) | ❌ |
+| Set model | `session.setModel(model)` | Changes the model for subsequent messages (without creating a new session) | ✅ |
 | Disconnect | `session.disconnect()` | Properly releases session resources while preserving data for resumption | ❌ |
 | Register tools | `session.registerTools(tools)` | Dynamically adds custom tools after session creation | ❌ |
 | Register permission handler | `session.registerPermissionHandler(handler)` | Dynamically changes the permission handler | ❌ |
@@ -1426,7 +1425,7 @@ const session = await client.createSession({
 - `overridesBuiltInTool: true` allows replacing built-in tools (e.g., `edit_file`)
 - Tools can return strings, objects, or full `ToolResultObject` with metadata
 
-**Currently used?** ❌ No custom tools are defined. The agent uses only built-in Copilot tools.
+**Currently used?** ✅ Custom tools are defined in `tools.ts` (GitHub API tools) and `planning-tools.ts` (planning tools). Both factories are invoked in `buildSessionConfig()` and passed to `createSession()`.
 
 ### 8.4 System Message Customization
 
@@ -1451,7 +1450,7 @@ const session = await client.createSession({
 });
 ```
 
-**Currently used?** ❌ The default Copilot persona is used without modification.
+**Currently used?** ✅ `ORCHESTRATOR_SYSTEM_MESSAGE` is configured in append mode (default) via `buildSessionConfig()`.
 
 ### 8.5 Infinite Sessions and Context Compaction
 
@@ -1474,10 +1473,10 @@ console.log(session.workspacePath);
 ```
 
 **Events:**
-- `session.compaction_start` — Compaction begins
-- `session.compaction_complete` — Compaction done (includes token savings)
+- `session.compaction_start` — Compaction begins (forwarded as SSE `compaction` event)
+- `session.compaction_complete` — Compaction done (includes token savings; forwarded as SSE `compaction` event)
 
-**Currently used?** ❌ (Not explicitly configured — but infinite sessions are enabled by default in the SDK, so they are technically active with default thresholds.)
+**Currently used?** ❌ The explicit `infiniteSessions` configuration is not set (using SDK defaults). The `session.compaction_start` and `session.compaction_complete` events are listened to and forwarded to the browser via SSE as `compaction` events.
 
 ### 8.6 Session Hooks
 
@@ -1515,7 +1514,7 @@ const session = await client.createSession({
 });
 ```
 
-**Currently used?** ❌ No hooks are configured.
+**Currently used?** ✅ All five hook types are configured in `buildSessionConfig()`: `onPreToolUse`, `onPostToolUse`, `onSessionStart`, `onSessionEnd`, and `onErrorOccurred`.
 
 ### 8.7 User Input Requests
 
@@ -1537,7 +1536,7 @@ const session = await client.createSession({
 });
 ```
 
-**Currently used?** ❌ The agent cannot ask the user questions.
+**Currently used?** ✅ `onUserInputRequest` is configured in `resolveSession()`. A `POST /api/chat/input` endpoint resolves pending input requests, and the agent's questions are forwarded to the browser via SSE as `user_input_request` events.
 
 ### 8.8 BYOK (Bring Your Own Key)
 
@@ -1651,7 +1650,7 @@ const session = await client.createSession({
 });
 ```
 
-**Currently used?** ❌ Reasoning effort is not configurable in the UI or backend.
+**Currently used?** ❌ The backend accepts `reasoningEffort` in `buildSessionConfig()` but no UI element currently exposes it. Requires a conditional dropdown in the frontend for models that support reasoning (e.g., `o4-mini`).
 
 ### 8.13 Additional Unused Events
 
@@ -1662,16 +1661,10 @@ These session events are not currently listened to:
 | `assistant.message` | Final complete message | Could verify/log complete responses |
 | `assistant.reasoning` | Model's reasoning chain | Could display "thinking" in UI |
 | `assistant.reasoning_delta` | Streaming reasoning | Could show thinking in real-time |
-| `assistant.usage` | Token metrics | Could display cost/usage to users |
-| `tool.execution_start` | Tool invoked | Could show "searching..." indicators |
-| `tool.execution_complete` | Tool done | Could show tool results in UI |
 | `tool.execution_progress` | Tool progress | Could show progress bars |
-| `session.title_changed` | Auto-generated title | Could update session title in sidebar |
-| `session.compaction_start` | Compaction begins | Could show "optimizing context..." |
-| `session.compaction_complete` | Compaction done | Could log token savings |
 | `permission.requested` | Permission needed | Could show permission prompts |
-| `planning.started` / `planning.end` | Planning phase | Could show "planning..." indicator |
-| `subagent.started` / `completed` / `failed` | Sub-agent activity | Could show sub-agent status |
+
+> **Note on removed entries:** Earlier versions of this table listed many events that are now handled. The following events have been removed from this table because they are actively listened to and forwarded via SSE: `assistant.usage` → SSE `usage`, `tool.execution_start/complete` → SSE `tool_start`/`tool_complete`, `session.title_changed` → SSE `title`, `session.compaction_start/complete` → SSE `compaction`, `subagent.started/completed/failed` → SSE `subagent_start`/`subagent_end`, `session.mode_changed` → SSE `planning_start`/`plan_ready`, and `assistant.intent` → SSE `intent`. Additionally, `planning.started` and `planning.end` were removed because they **do not exist** in the SDK — the real planning events are `session.mode_changed` and `exit_plan_mode.requested`.
 
 ### 8.14 RPC Methods
 
@@ -1691,7 +1684,7 @@ These low-level RPC methods are accessible via `session.rpc` and `client.rpc`:
 | `agent.getCurrent()` | Get active agent | ❌ |
 | `agent.select(name)` | Switch to specific agent | ❌ |
 | `compaction.compact()` | Trigger manual compaction | ❌ |
-| `account.getQuota()` | Check premium request quota | ❌ |
+| `account.getQuota()` | Check premium request quota | ✅ |
 | `tools.list(model?)` | List available tools for a model | ❌ |
 
 ---
@@ -1702,31 +1695,23 @@ These low-level RPC methods are accessible via `session.rpc` and `client.rpc`:
 
 | Feature | Why | Effort |
 |---------|-----|--------|
-| **`session.abort()`** | Let users cancel long-running responses. Currently there's no way to stop a response mid-stream — the user must wait or reload the page. Wire a "Stop" button in the UI to call an abort endpoint. | Low |
-| **`session.title_changed` event** | The SDK auto-generates conversation titles. Currently we use the first 50 chars of the first message. Listening to this event would give better, AI-generated titles. | Low |
-| **`assistant.usage` event** | Show users their token consumption and premium request usage per message. Helps users understand cost implications of different models. | Low |
 | **`client.ping()` / `client.getState()`** | Better health monitoring. The current health endpoint only checks if the CLI binary exists on PATH, not whether the RPC connection is actually alive. | Low |
-| **Reasoning effort control** | Expose the `reasoningEffort` option in the UI for models that support it (like o4-mini). Users could choose between faster/cheaper responses and more thorough reasoning. | Low |
+| **Reasoning effort UI** | The `reasoningEffort` option is accepted by `buildSessionConfig()` but not yet exposed in the UI. Add a conditional dropdown for models that support it (like o4-mini). | Low |
 | **`session.disconnect()`** | Properly release session resources when a user's session is no longer active. Currently sessions live forever in the Map until server restart, which wastes CLI memory for abandoned conversations. | Medium |
 
 ### 🟡 Medium Value — Consider Implementing
 
 | Feature | Why | Effort |
 |---------|-----|--------|
-| **`client.resumeSession()`** | After a server restart, sessions currently lose their SDK conversation context (the user starts fresh even though messages are persisted). Resume would preserve full context. Requires storing the SDK session ID alongside our session metadata. | Medium |
-| **System message customization** | Let admins configure a custom system prompt (e.g., "Always respond in a professional tone" or "You are a code review assistant"). Could be an env var or admin setting. | Medium |
-| **Custom tools** | Expose project-specific capabilities to the agent. For example, a tool that queries an internal database, fetches from a private API, or performs a domain-specific calculation. | Medium–High |
-| **`tool.execution_start/complete` events** | Show users when the agent is using tools (e.g., "Searching the web...", "Reading file..."). Improves UX transparency during long responses. | Medium |
-| **`session.setModel()`** | Allow users to change the model mid-conversation without creating a new session. Currently, switching models requires starting a new chat. | Low |
-| **`account.getQuota()`** | Display the user's remaining premium requests in the UI. Helps users manage their quota. | Low |
+| **`client.resumeSession()`** | After a server restart or container recycle, sessions lose their SDK conversation context. Storing the SDK session ID (already in `sessionStore`) and calling `resumeSession()` on reconnect would preserve full conversation history. | Medium |
+| **Message replay fallback** | When `resumeSession` fails (e.g., after a container restart that wipes CLI state), new sessions have no conversation history. Replaying persisted messages into the fresh session would rebuild context. | Medium |
+| **`session.disconnect()` idle timeout** | Add a 30-minute idle timeout that calls `session.disconnect()` and removes the session from the in-memory Map while preserving `sdkSessionId` for future resumption. | Medium |
 
 ### 🟠 Lower Value — Nice to Have
 
 | Feature | Why | Effort |
 |---------|-----|--------|
-| **`assistant.reasoning` events** | Show the model's chain-of-thought "thinking" for reasoning models (o4-mini, etc.). Interesting for transparency but adds UI complexity. | Medium |
-| **Session hooks** | Useful for logging, audit trails, or implementing security policies (e.g., blocking certain tool calls). More relevant for enterprise deployments. | Medium |
-| **User input requests** | Let the agent ask clarifying questions. Would require a bidirectional communication channel (WebSocket or long-polling). Current SSE is one-way. | High |
+| **`assistant.reasoning` events UI** | Show the model's chain-of-thought "thinking" for reasoning models (o4-mini, etc.). Interesting for transparency but adds UI complexity. | Medium |
 | **File/image attachments** | Allow users to upload files or paste images for the agent to analyze. Requires file upload UI and backend handling. | High |
 | **BYOK (Bring Your Own Key)** | Let users bring their own API keys for OpenAI, Azure, or Anthropic. Useful for users who want to use models not available through Copilot, or who don't have a Copilot subscription. | Medium |
 | **MCP servers** | Extend the agent with external tool servers. Powerful but complex — more suitable for enterprise or developer-focused deployments. | High |
