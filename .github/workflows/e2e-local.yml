@@ -58,7 +58,7 @@ jobs:
       pull-requests: write
     steps:
       - name: Remove run-e2e label
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             try {
