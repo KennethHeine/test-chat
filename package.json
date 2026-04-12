@@ -17,7 +17,7 @@
     "@azure/data-tables": "^13.3.2",
     "@azure/identity": "^4.13.0",
     "@azure/storage-blob": "^12.31.0",
-    "@github/copilot-sdk": "^0.1.31",
+    "@github/copilot-sdk": "^0.2.2",
     "dotenv": "^17.3.1",
     "express": "^5.2.1"
   },
